@@ -1,0 +1,20 @@
+I need clarity - It looks like we have the following types of invoices.
+
+1. Contractor invoices that the contractor raised to SDP or the business. This section is fine. However I noticed that Create invoice from timesheet doesn’t work.
+2. SDP Invoices (let us rename to Invoices). Here we have SDP Invoices, Customer Billing and B2C. 
+
+2.1. SDP Invoices - Invoices raised by SDP entity to the client. Scenarios where this will apply are below
+2.1.1  A new contract is created by a business (or SDP user creates this contract creation "creating contract on behalf of the business") - worker who works directly with a Business in Singapore. As such SDP Singapore can raise invoice to that business.
+
+2.1.2 A new contract is created by a business (or SDP user creates this contract creation "creating contract on behalf of the business") - worker who works for the Business's Host client (Customer work) in Singapore. In the billing they select "Invoice Through Platform". As you know if this option is selected, SDP Global entity in the country acts as the billing entity to the Host client of the Business. As such SDP Singapore can raise invoice to the Host client business. In effect the contract is between SDP entity and the host client (in practical sense).
+
+2.1.3 (Read 2.2 before reading this) - A new contract is created by a business (or SDP user creates this contract creation "creating contract on behalf of the business") - worker who works for the Business's Host client (Customer work) in Singapore. In the billing they select "Auto Invoice upon timesheet approval”). If this is selected SDP entity can invoice the Business so that we have funds to pay the worker. The Business will collect money from their client.
+2.2 Customer Billing - The Business can raise an automatically invoice based on approved timesheets to its host client. How does the application know when to do this - That isn’t clear here - we seem to be offering this for any timesheets approved. However, that has to be allowed based on what gets selected in the contract’s wizard. If in the contract’s wizard (Billing setup), we select "Invoice Separately" then allow the auto Customer invoicing based on timesheet - The description of Invoice Separately (Your business handles customer invoicing outside the platform) is misleading. My suggestion, we create a third option called "Auto Invoice upon timesheet approval" . This will be clear. The invoice outside platform indicates nothing needs to be done by the app. As mentioned in 2.2 – SDP can create an invoice to the user. 
+2.3. Other Invoices – You have One called it B2C – The business could perhaps upload the invoice they may have generated outside the system, or a recipient created tax invoice they may have received here. So for this portion, allow users to upload a file and link to a worker or a contract or timesheet – what do you suggest? Call this as some other name instead of “B2C”.  
+This should be consistent across all logins.
+
+Please provide a table that includes, types of invoices, auto or manual, what triggers and by whom. This will then help to automate others one if required. I need clarity first.
+
+We also need timesheet and approval details attached to the invoice. 
+ How do we integrate Stripe here?
+Does the email go with attachments or go with a secured link to view the invoice and timesheets like how accounting systems do (Xero, QuickBooks etc)?

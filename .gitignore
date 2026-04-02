@@ -1,0 +1,31 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+
+# Environment variables (contains secrets)
+.env
+.env.*
+!.env.example
+
+# Local state & Replit internals
+.local/
+.config/
+.agents/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+
+# Misc
+server/public
+vite.config.ts.*
+*.tar.gz

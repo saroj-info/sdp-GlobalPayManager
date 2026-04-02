@@ -1,0 +1,48 @@
+Background
+
+
+SDP Global pay is a global employer or agent of record provider operating in multiple counties.
+
+The platform allows a business and recruitment / staffing / labour hire agencies to use local and global workers to work for them or to work for a host client of theirs. They can engage a worker from the list of countries SDP Global Pay operates. In each of those countries, SDP Global Pay has its own entity. As such SDP Global pay takes care of all the compliance, employment and taxes. The business or agency can access global workforce without needing to set up a company overseas. The platform also allows business and agencies to engage workers in the same country where they are based. In such instance, they are using SDP Global pay to be an employer or agent of record. This allows companies to mitigate employment, compliance risk plus takes the burden of managing payroll etc.
+
+
+Users
+1.	SDP Super admin (top user who has access to replit)
+2.	SDP admin – 
+3.	SDP Business users
+4.	Business users (Includes Business, Host Clients and Agencies) though some of the information displayed for each of them may vary
+5.	Worker
+
+
+Technology:
+All developed on Replit. This includes application as well as well as public website. Domain is sdpglobalpay.com. The hosting is also managed by Replit.
+
+
+
+
+Busines and Agency users self sign up to portal – IF SDP wants to create them, they can do the same process on behalf of the business.
+
+For host client the user can be set up with or withour acess to platform. 
+Use cases
+
+1. A user goes to SDP Global Pay, Sign up as Business user, gets access to platform, creates a worker who is an employee. Creates a contract
+
+Sign up – Login – Create Worker (Employee) – Create contract - Australia – Casual worker – Internal work – Business Analyst – 01/Jan/2026 to 31 Match 2026 – Casual employment contract template - Hourly – Single rate – No Po – Timesheet yes – Create and send
+
+SDP user I notified – Logs in – Goes to contract – Completes billing and remuneration lines.
+
+Workers gets access to system – reviews contract – accept contract – Completes all details – Submits timesheet – Approver gets email to approve – Once approved System generates invoice.
+
+SDP user – Sees timesheet – Sees invoices.
+
+
+2. A user goes to SDP Global Pay, sign up as Agency user, gets access to platform, creates a worker who is an employee. Creates a contract
+
+Sign up – Login – Create Worker (Contractor) – Creates contract - Australia – Contractor – Host client work – Auto Billing - Creates Host client – Rate in line with pay rates - Business Analyst – 01/Jan/2026 to 31 Match 2026 – Global Contractor template - Hourly – Single rate – No Po – Timesheet yes – Create and send
+
+SDP user I notified – Logs in – Goes to contract – Completes billing lines.
+
+Workers gets access to system – reviews contract – accept contract – Completes all details – Submits timesheet – Approver gets email to approve – Once approved System generates invoice – Both 
+
+SDP user – Sees timesheet – Sees invoices.
+

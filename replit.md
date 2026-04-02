@@ -1,0 +1,59 @@
+# Overview
+
+SDP Global Pay is a comprehensive workforce management platform designed to streamline international hiring processes. It enables businesses to manage employees and contractors across 10 countries with automated contract generation, compliance features, and a robust invoicing system. The platform aims to simplify global contracting and employment, offering solutions for contractors, recruiters, enterprises, and Managed Service Providers (MSPs). It provides transparent pricing, a people-first approach, and leverages SDP Solutions' extensive experience in global payments and contracts.
+
+# User Preferences
+
+Preferred communication style: Simple, everyday language.
+
+# System Architecture
+
+## UI/UX Decisions
+The application features a modern, clean design aesthetic with a professional blue and orange color scheme consistent with SDP Solutions branding. The UI is built using shadcn/ui components with Radix UI primitives and styled with Tailwind CSS, ensuring a consistent and responsive user experience. Key design elements include an enhanced landing page, a "Who We Help" section, and a dashboard reflecting SDP Global Pay branding. View toggles for List/Card views are available on Workforce, Contracts, and Invoices pages, offering sortable tables or responsive grid layouts while maintaining consistent filtering and sorting behavior.
+
+## Technical Implementations
+The platform is a full-stack web application. The frontend uses React 18, TypeScript, Vite, Wouter for routing, and TanStack Query for state management. The backend is built with Express.js and TypeScript, following a RESTful API design with a layered architecture. Performance optimizations include comprehensive database indexing and TanStack Query caching. A unified layout architecture utilizes an `AuthenticatedLayout` component to wrap protected routes, providing a consistent Sidebar and Header, efficient data fetching for countries, and dynamic page title/description settings. Session management includes a centralized logout function that clears cache, destroys sessions, and redirects to login, preventing stale data.
+
+## Feature Specifications
+**Dashboard Analytics**: Displays real-time data including total approved hours and payments due, computed from live database queries, showing contract status by country, business user counts, approved timesheet details, and payment processing queues.
+**Workforce Management**: Supports employee and contractor management across 10 countries, with automated contract generation and a multi-step worker onboarding system. Includes features for editing worker details, resending invitations, and view toggles with sorting and filtering.
+**Contracts Management**: Comprehensive contract tracking with List/Card view toggles, sorting, and a contract wizard that includes worker filtering, enhanced display, alphabetical country sorting, comprehensive rate type fields, and refined timesheet requirements. Timesheet period calculation uses the contract start date for accuracy across various frequencies. Contract validation allows ongoing contracts for contractors and third-party workers.
+**Employment Types**: Supports various employment types including Contractor, Permanent, Fixed Term, Casual Employee, 3rd Party Business Worker, Zero-Hours Contract, At-Will Employment, Gig Worker, On-Call Employee, Seasonal Worker, and Part-Time Employee, with country-specific variations.
+**Country Management**: Admin-only interface for managing country entities with alphabetical sorting and accurate country count display.
+**User Management**: SDP admin interface for managing internal team members with an invitation system, including status tracking and resend functionality. Role-based access control is implemented. Both SDP and business user invitations enforce security-focused flows with mandatory TOTP-based 2FA and backup recovery codes.
+**Pay Rate and Billing Redesign**: Complete overhaul of pay rate and billing architecture.
+- **Contract schema additions**: `rateStructure` (single/multiple), `totalPackageValue` (salary CTC), `clientBillingType` (rate_based/fixed_price), `fixedBillingAmount`, `fixedBillingFrequency` on contracts; `paymentTrigger` on remuneration_lines; `daysWorked`, `projectRateLineId` on timesheet_entries; new `contract_billing_lines` table.
+- **SDP-only billing lines**: `contract_billing_lines` stores what SDP charges the business (management fee, employer contributions, etc). Completely hidden from business users (403 on all billing line API endpoints). SDP admins manage these via a collapsible "SDP Billing Lines" panel in the contract detail modal.
+- **Remuneration line gating**: Business users see empty remuneration lines on salary contracts in `pending_sdp_review` status. Once SDP confirms, lines become visible. Frontend shows "Pay breakdown pending SDP confirmation" message.
+- **Contract wizard redesign**: Step 4 has Pay Mode selector (Hourly/Daily/Fixed Salary). Fixed Salary shows CTC field; SDP allocates breakdown. Single/Multiple rate structure toggle for hourly/daily contracts. Step 3 has Rate-Based vs Fixed Price client billing toggle.
+- **SDP salary notification email**: When a business user creates a salary (annual) contract, `emailService.sendSalaryContractNotification()` fires to `SDP_NOTIFY_EMAIL` (default `onboard@sdpglobalpay.com`) with worker details and action items.
+- **Timesheet approval calculation fix**: Correctly branches on `rateType` (hourly/daily/annual), `rateStructure` (single/multiple), and `clientBillingType` (rate_based/fixed_price). Salary contracts skip auto-invoice. SDP→Business invoice total includes active billing line contributions. All three invoice types (sdp_services, customer_billing, business_to_client) use correct rates.
+**Timesheet Management**: Comprehensive system allowing workers and administrators to create timesheets. Features include automatic period calculation, file attachment support, worker/contract selection, validation, and authorization checks. Contract selection dropdown displays clear, descriptive information for easy distinction. Context-aware entry form via `TimesheetEntryTable` component: daily contracts show "Days Worked" selector (full/half day); hourly shows start/end/break fields; annual (salary) shows attendance checkbox only. Multiple rate structure contracts show "Applicable Rate" dropdown per entry row, storing `projectRateLineId` for calculation. **New features**: (1) Full-period table with multiple entries per day via "+ Add Entry" button, supporting different rate lines per entry; (2) List/Grid view toggle with status filter tabs (All/Draft/Submitted/Approved/Rejected with counts); (3) Suggested periods filtered to exclude already-submitted periods; (4) Reimbursable expenses — `timesheet_expenses` table with CRUD API and inline UI for adding expenses (date/category/description/amount/currency), expenses shown read-only in timesheet detail cards and to approvers; (5) Search and filter toolbar — worker name text search, Country dropdown, Host Client dropdown (when applicable), Business dropdown (SDP users only) — filter options auto-populated from loaded timesheet data, active filters shown as removable pills, `countryName`/`customerBusinessName` added to backend timesheet queries via joins.
+**Invoice Management**: Comprehensive system for managing invoices, including manual creation, automatic generation from timesheets, role-based operations, and an approval/rejection workflow, with List/Card view toggles and sorting options. Supports two distinct invoicing models: "Invoice Through Platform" (SDP bills customer directly) and "Invoice Separately" (business handles customer invoicing externally). Introduces `billingMode` for explicit invoice routing and "Host Client" invoices. Secure view links and Stripe Payment Links are supported for unregistered clients. All three SDP roles (`sdp_super_admin`, `sdp_admin`, `sdp_agent`) can perform all invoice operations. Features: Resend Invoice (`POST /api/sdp-invoices/:id/resend`) for re-sending emails to sent/overdue invoices; Revise Invoice (`POST /api/sdp-invoices/:id/revise`) to reset a sent invoice back to draft for re-editing; PDF Download via jsPDF client-side generation (`client/src/lib/generateInvoicePdf.ts`) available on all invoice cards and the public invoice view page; Auto-VAT by country — the `gstRate` column on the `countries` table drives automatic GST/VAT rate population in create/edit invoice modals when a country is selected (rates seeded: AU 10%, NZ 15%, UK 20%, CA 5%, SG 9%, IN 18%, DE 19%, IE 23%, JP 10%, MY 6%).
+**Document Management**: Secure object storage for documents like payslips with proper ACL policies.
+**Email Services**: Integration with Resend API for automated notifications using Outlook-compatible templates.
+**Cost of Employment Calculator**: A public-facing tool supporting 17 countries with jurisdiction-specific rates, employee/contractor toggling, CSV export, and detailed employment guides.
+**Two-Factor Authentication (2FA)**: Custom TOTP-based 2FA system with AES-256 encryption, two-phase authentication, rate limiting, audit logging, backup recovery codes, and device trust functionality.
+**Password Reset**: Secure password reset system for SDP users with time-limited token-based email verification, enforcing strong password requirements and preventing email enumeration.
+
+## System Design Choices
+PostgreSQL is the primary database, accessed via Drizzle ORM. Authentication is integrated with Replit's OpenID Connect, supplemented by a custom test authentication system, and utilizes Passport.js for session management with PostgreSQL session storage. The system includes robust error handling, logging, and secure session configuration with httpOnly and secure cookies. Production readiness includes dedicated seed scripts, environment secret management for the super admin password, and production domain defaults for email links. JWT authentication is used for stateless, secure API access. A special super admin authentication logic validates against an environment secret.
+
+**Business Entities vs User Access**: The platform separates business entities (company records) from business users (login credentials). A business entity can exist without associated user accounts, particularly for customer businesses in the "Invoice Through Platform" workflow.
+**Host Client System**: Businesses can create "Host Clients" – unregistered business entities used for billing purposes. These are stored in the `businesses` table with `isRegistered=false` and linked to the creating business.
+**Three-Workstream Update**:
+- **3rd Party Vendor in Contracts**: `thirdPartyBusinessId` FK added to `contracts` table, with UI integration in the contract wizard and contract displays.
+- **Host Client Worker/Timesheet/Leave Separation**: Backend endpoints for provided workers, separate "Workers Provided to You" section on Timesheets page, and a host-client summary card on the Dashboard. Leave approval remains with the employing business.
+- **Business-to-Host-Client Invoices**: Three visible invoice types: Worker→Business, SDP→Business, and Business→Host-Client. Business users see a "Client Invoices" tab with auto-generated and manual invoices. Manual invoice creation forms are pre-filled from contract data.
+
+# External Dependencies
+
+- **Neon Database**: Serverless PostgreSQL database hosting.
+- **Replit Authentication**: OpenID Connect identity provider for user authentication.
+- **shadcn/ui**: Pre-built UI component library.
+- **Tailwind CSS**: Utility-first CSS framework.
+- **Drizzle ORM**: Type-safe database ORM for PostgreSQL.
+- **TanStack Query**: Server state management and caching library.
+- **Express.js**: Backend web application framework.
+- **Passport.js**: Authentication middleware.
+- **Resend**: Email API service for automated notifications.

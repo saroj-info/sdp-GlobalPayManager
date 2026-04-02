@@ -1,0 +1,730 @@
+import React, { useMemo, useState, useEffect } from "react";
+
+// =============================================================
+//  Global Total Cost of Employment (TCOE) — SDP
+//  Now with: Employment type toggle, jurisdiction selectors (AU/US),
+//  state-specific overlays, and improved calculation types.
+//  Assumptions are editable and persist in the browser.
+// =============================================================
+
+// ---------- Utility helpers ----------
+const CURRENCIES = {
+  Australia: { code: "AUD", symbol: "A$" },
+  USA: { code: "USD", symbol: "$" },
+  "New Zealand": { code: "NZD", symbol: "NZ$" },
+  Ireland: { code: "EUR", symbol: "€" },
+  Philippines: { code: "PHP", symbol: "₱" },
+  Japan: { code: "JPY", symbol: "¥" },
+  Canada: { code: "CAD", symbol: "C$" },
+  UK: { code: "GBP", symbol: "£" },
+  Romania: { code: "RON", symbol: "lei" },
+  Singapore: { code: "SGD", symbol: "S$" },
+  Malaysia: { code: "MYR", symbol: "RM" },
+  Vietnam: { code: "VND", symbol: "₫" },
+  India: { code: "INR", symbol: "₹" },
+  Brazil: { code: "BRL", symbol: "R$" },
+};
+
+function fmtCurrency(value, currencyCode) {
+  if (Number.isNaN(value)) return "-";
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currencyCode || "USD",
+      maximumFractionDigits: currencyCode === "VND" ? 0 : 2,
+    }).format(value || 0);
+  } catch (e) {
+    return `${value?.toFixed?.(2) ?? value}`;
+  }
+}
+
+// ---------- Calculation engine ----------
+function calcLine(item, base) {
+  const pct = (b, percent) => (b * (percent || 0)) / 100;
+  switch (item.type) {
+    case "percent_with_cap": {
+      const appliedBase = Math.min(base, item.capAmount || base);
+      return pct(appliedBase, item.value);
+    }
+    case "percent_above_threshold": {
+      const taxable = Math.max(0, base - (item.thresholdAmount || 0));
+      return pct(taxable, item.value);
+    }
+    case "percent":
+      return pct(base, item.value);
+    case "flat":
+      return item.value || 0;
+    default:
+      return 0;
+  }
+}
+
+function sum(arr) {
+  return arr.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
+}
+
+function usePersistent(key, fallback) {
+  const [val, setVal] = useState(() => {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : fallback;
+  });
+  useEffect(() => {
+    localStorage.setItem(key, JSON.stringify(val));
+  }, [key, val]);
+  return [val, setVal];
+}
+
+// ---------- Country-level default assumptions ----------
+// IMPORTANT: These are illustrative defaults for planning only. Statutory rates change and may vary by state/province, industry, seniority, age, wage caps etc.
+// Always validate against current rules. You can edit all values in the UI.
+const DEFAULT_EMPLOYEE = {
+  Australia: [
+    { id: "super", name: "Superannuation", type: "percent", value: 11.5, note: "Adjust for current FY" },
+    { id: "payroll_tax", name: "Payroll tax (base)", type: "percent", value: 0, note: "Overridden by state thresholds/rates" },
+    { id: "workers_comp", name: "Workers' compensation", type: "percent", value: 1.2, note: "Industry rating varies" },
+    { id: "admin_ins", name: "Insurance & admin buffer", type: "percent", value: 1, note: "General overheads" },
+  ],
+  USA: [
+    { id: "fica", name: "FICA (SS+Medicare)", type: "percent", value: 7.65, note: "SS cap not modelled; edit if needed" },
+    { id: "futa", name: "FUTA", type: "percent_with_cap", value: 0.6, capAmount: 7000, note: "On first $7,000 wages" },
+    { id: "suta", name: "SUTA (state overlay)", type: "percent_with_cap", value: 0, capAmount: 0, note: "Overridden by state" },
+    { id: "workers_comp", name: "Workers' comp (avg)", type: "percent", value: 1.5, note: "Industry dependent" },
+    { id: "health", name: "Health benefits (typical)", type: "percent", value: 10, note: "Plan-dependent; set to 0 if not provided" },
+  ],
+  "New Zealand": [
+    { id: "kiwisaver", name: "KiwiSaver (if enrolled)", type: "percent", value: 3 },
+    { id: "acc", name: "ACC employer levy (avg)", type: "percent", value: 1.4 },
+  ],
+  Ireland: [
+    { id: "prsi", name: "Employer PRSI (std)", type: "percent", value: 11.05 },
+    { id: "training", name: "Training/levies buffer", type: "percent", value: 1 },
+  ],
+  Philippines: [
+    { id: "sss", name: "SSS (employer share)", type: "percent", value: 9.5 },
+    { id: "philhealth", name: "PhilHealth (employer)", type: "percent", value: 3 },
+    { id: "pagibig", name: "Pag-IBIG", type: "percent", value: 2 },
+  ],
+  Japan: [
+    { id: "social", name: "Social insurance (avg)", type: "percent", value: 15 },
+    { id: "unemployment", name: "Unemployment insurance", type: "percent", value: 0.6 },
+  ],
+  Canada: [
+    { id: "cpp_ei", name: "CPP/QPP + EI (avg)", type: "percent", value: 7.5 },
+    { id: "workers_comp", name: "Workers' comp (avg)", type: "percent", value: 1.5 },
+  ],
+  UK: [
+    { id: "eni", name: "Employer NI", type: "percent", value: 13.8 },
+    { id: "apprenticeship", name: "Apprenticeship Levy", type: "percent", value: 0.5 },
+  ],
+  Romania: [
+    { id: "work_ins", name: "Work insurance contribution", type: "percent", value: 2.25 },
+  ],
+  Singapore: [
+    { id: "cpf", name: "CPF (employer) ≤55y", type: "percent", value: 17 },
+    { id: "sdl", name: "Skills Development Levy", type: "percent", value: 0.25 },
+  ],
+  Malaysia: [
+    { id: "epf", name: "EPF (employer)", type: "percent", value: 12 },
+    { id: "socso", name: "SOCSO", type: "percent", value: 1.75 },
+    { id: "eis", name: "EIS", type: "percent", value: 0.2 },
+    { id: "hrdf", name: "HRD levy (eligible)", type: "percent", value: 1 },
+  ],
+  Vietnam: [
+    { id: "si", name: "Social Insurance", type: "percent", value: 17.5 },
+    { id: "hi", name: "Health Insurance", type: "percent", value: 3 },
+    { id: "ui", name: "Unemployment Insurance", type: "percent", value: 1 },
+    { id: "union", name: "Trade Union (typical)", type: "percent", value: 2 },
+  ],
+  India: [
+    { id: "pf", name: "Provident Fund (employer)", type: "percent", value: 12 },
+    { id: "esi", name: "ESI (employer)", type: "percent", value: 3.25 },
+    { id: "gratuity", name: "Gratuity accrual (typical)", type: "percent", value: 4.81 },
+    { id: "edli", name: "EDLI + admin (approx)", type: "percent", value: 1 },
+  ],
+  Brazil: [
+    { id: "inss", name: "INSS employer", type: "percent", value: 20 },
+    { id: "fgts", name: "FGTS", type: "percent", value: 8 },
+    { id: "13th", name: "13th month salary", type: "percent", value: 8.33 },
+    { id: "vacation", name: "Vacation bonus (1/3)", type: "percent", value: 8.33 },
+    { id: "others", name: "RAT/third parties (avg)", type: "percent", value: 6 },
+  ],
+};
+
+// Contractor baseline (generic, editable). Local law may treat some "contractors" as employees — use COR/EOR guidance.
+const DEFAULT_CONTRACTOR = {
+  Australia: [
+    { id: "platform", name: "Admin & platform", type: "percent", value: 1 },
+    { id: "pli", name: "Public liability/insurances", type: "percent", value: 1 },
+    { id: "allowances", name: "Leave/allowance buffer", type: "percent", value: 8 },
+  ],
+  USA: [
+    { id: "platform", name: "Admin & platform", type: "percent", value: 1 },
+    { id: "pli", name: "Insurance buffer", type: "percent", value: 1 },
+  ],
+};
+
+const COUNTRIES = [
+  "Australia",
+  "USA",
+  "New Zealand",
+  "Ireland",
+  "Philippines",
+  "Japan",
+  "Canada",
+  "UK",
+  "Romania",
+  "Singapore",
+  "Malaysia",
+  "Vietnam",
+  "India",
+  "Brazil",
+];
+
+// ---------- Jurisdiction overlays (examples + editable) ----------
+// These override/augment the country defaults when selected.
+const DEFAULT_JURISDICTIONS = {
+  Australia: {
+    "New South Wales": [
+      { id: "nsw_payroll_tax", name: "Payroll tax (NSW)", type: "percent_above_threshold", value: 5.45, thresholdAmount: 1000000, note: "Example: 5.45% above A$1m — edit to current" },
+    ],
+    Victoria: [
+      { id: "vic_payroll_tax", name: "Payroll tax (VIC)", type: "percent_above_threshold", value: 4.85, thresholdAmount: 700000, note: "Example — edit to current" },
+    ],
+    Queensland: [
+      { id: "qld_payroll_tax", name: "Payroll tax (QLD)", type: "percent_above_threshold", value: 4.75, thresholdAmount: 1300000, note: "Example — edit to current" },
+    ],
+    "South Australia": [
+      { id: "sa_payroll_tax", name: "Payroll tax (SA)", type: "percent_above_threshold", value: 4.95, thresholdAmount: 1200000, note: "Example — edit to current" },
+    ],
+    "Western Australia": [
+      { id: "wa_payroll_tax", name: "Payroll tax (WA)", type: "percent_above_threshold", value: 5.5, thresholdAmount: 1000000, note: "Example — edit to current" },
+    ],
+    Tasmania: [
+      { id: "tas_payroll_tax", name: "Payroll tax (TAS)", type: "percent_above_threshold", value: 4, thresholdAmount: 1250000, note: "Example — edit to current" },
+    ],
+    "Australian Capital Territory": [
+      { id: "act_payroll_tax", name: "Payroll tax (ACT)", type: "percent_above_threshold", value: 6.85, thresholdAmount: 2200000, note: "Example — edit to current" },
+    ],
+    "Northern Territory": [
+      { id: "nt_payroll_tax", name: "Payroll tax (NT)", type: "percent_above_threshold", value: 5.5, thresholdAmount: 1500000, note: "Example — edit to current" },
+    ],
+  },
+  USA: {
+    "California": [
+      { id: "ca_suta", name: "CA UI (SUTA)", type: "percent_with_cap", value: 3.4, capAmount: 7000, note: "New employers; experience-rated thereafter" },
+      { id: "ca_edi", name: "CA ETT/SDI (employer portion)", type: "flat", value: 0, note: "Typically employee-paid; leave at 0 or add flat" },
+    ],
+    "New York": [
+      { id: "ny_suta", name: "NY UI (SUTA)", type: "percent_with_cap", value: 4.1, capAmount: 12000, note: "Illustrative; edit for actual rate" },
+    ],
+    Texas: [
+      { id: "tx_suta", name: "TX UI (SUTA)", type: "percent_with_cap", value: 2.7, capAmount: 9000, note: "Illustrative; edit for actual rate" },
+    ],
+    Florida: [
+      { id: "fl_suta", name: "FL UI (SUTA)", type: "percent_with_cap", value: 2.7, capAmount: 7000, note: "Illustrative; edit for actual rate" },
+    ],
+    "Washington": [
+      { id: "wa_suta", name: "WA UI (SUTA)", type: "percent_with_cap", value: 1.2, capAmount: 68000, note: "Wage base much higher; illustrative" },
+    ],
+  },
+};
+
+// ---------- Country narratives ----------
+const COUNTRY_NOTES = {
+  Australia:
+    `Employment is governed by the Fair Work framework and state laws. Most roles are under an Award or enterprise agreement with minimums for pay, leave and notice.
+• Pension (Superannuation) is employer‑funded; payroll tax and workers’ comp vary by state and industry.
+• Typical leave includes 20 days annual leave, 10 days personal/carer’s leave, plus public holidays.
+• Probation is usually 3–6 months. Termination requires notice and, if applicable, consultation process.
+• Common pitfalls: award classification, overtime/penalty rates, and state payroll tax thresholds.
+• Pay cycles: fortnightly or monthly; single touch payroll reporting is mandatory.`,
+  USA:
+    `At‑will employment is common, but offer letters, handbooks and state laws matter.
+• Statutory employer costs include FICA, FUTA, SUTA and workers’ compensation; health benefits are often a large additional cost.
+• Pay cadence varies by state; overtime rules under FLSA apply to non‑exempt roles.
+• Benefits packages (medical, dental, vision, 401(k)) are a key competitiveness factor.
+• Compliance is state‑specific (wage/hour, paid sick leave, pay transparency).`,
+  "New Zealand":
+    `Employment is contract‑based under the Employment Relations Act with good‑faith obligations.
+• Minimum leave: 4 weeks annual leave, 11 public holidays; sick leave entitlements apply after 6 months.
+• KiwiSaver (employee‑opt‑in) often triggers the employer 3% contribution; ACC levies apply to employers.
+• Probation/trial periods only for certain employer sizes and must be explicit.
+• Payroll is usually monthly or fortnightly; PAYE withheld by the employer.`,
+  Ireland:
+    `Contracts must include core terms. Working Time and Payment of Wages Acts set key baselines.
+• Employer PRSI is a material on‑cost; auto‑enrolment pensions are being phased in.
+• Leave: 4 weeks’ annual leave (pro‑rata), public holidays and statutory sick pay.
+• Collective agreements exist in some sectors; pay transparency and record‑keeping are important.
+• Payroll: monthly is common; operate PAYE/USC/PRSI via Revenue.`,
+  Philippines:
+    `Employment is under the Labor Code. Regularization typically after 6 months unless fixed‑term/project.
+• 13th‑month pay is mandatory; employer shares for SSS, PhilHealth and Pag‑IBIG.
+• Typical leave: service incentive leave; other leaves depend on company policy/law.
+• Night differential/OT rules apply; holiday pay has special rates.
+• Payroll is commonly twice‑monthly (15th and end‑month).`,
+  Japan:
+    `Employment practices emphasize written rules of employment and social insurance participation.
+• Employer bears significant social insurance costs (health, pension, unemployment, etc.).
+• Working hours/overtime tightly regulated; premium rates for OT and late night work.
+• Bonuses are customary (summer/winter) though not strictly mandatory unless contractual.
+• Payroll is monthly with year‑end adjustments; many benefits determined by insurer rates.`,
+  Canada:
+    `Employment standards and payroll are provincial/territorial.
+• Employer contributions include CPP/QPP, EI and workers’ compensation levies.
+• Paid leave, public holidays and termination notice are province‑specific.
+• Benefits plans (health/dental) are common to supplement public healthcare.
+• Payroll frequencies: bi‑weekly or semi‑monthly are common; ROEs for separations.`,
+  UK:
+    `Written statements of particulars required. Working Time Regulations govern hours/holidays.
+• Employer NI is the main statutory on‑cost; apprenticeship levy may apply.
+• Holiday minimum 5.6 weeks (incl. public holidays) for full‑time staff.
+• Auto‑enrolment pensions require employer contributions above thresholds.
+• Payroll is monthly; operate PAYE and RTI submissions to HMRC.`,
+  Romania:
+    `Most social contributions are employee‑borne since 2018, with a small employer work insurance contribution.
+• Individual Employment Contracts must be registered in REVISAL.
+• Annual leave minimum is typically 20 working days; meal vouchers common as a perk.
+• Payroll: monthly; watch sector‑specific tax facilities (e.g., IT, construction).`,
+  Singapore:
+    `Flexible, pro‑business regime. Employment Act covers many (not all) employees.
+• CPF employer contributions apply to Citizens/PRs (age‑tiered). No CPF for most foreign EP holders.
+• Skills Development Levy applies to most employees.
+• Leave: at least 7 days rising with service (many employers offer ~14–18), plus public holidays.
+• Payroll: monthly; itemized payslips and KETs required.`,
+  Malaysia:
+    `Employment Act sets baselines; some provisions apply by wage thresholds.
+• Employer costs include EPF, SOCSO, EIS and possible HRD levy (eligible sectors).
+• Annual leave and public holiday entitlements apply; OT rules by category/wage.
+• Payroll: monthly; PCB (income tax) deductions and statutory filings required.`,
+  Vietnam:
+    `Labor Code requires written contracts. Social, health and unemployment insurances are employer on‑costs, subject to caps.
+• Minimum wages vary by region; trade union fee may apply.
+• Leave: at least 12 days annually (more by seniority) plus public holidays.
+• Payroll: monthly; net‑to‑gross planning important for expats.`,
+  India:
+    `Complex but well‑structured regime with central and state laws.
+• Employer on‑costs often include Provident Fund, ESI (below thresholds), gratuity provisioning and insurance.
+• Shops & Establishments and standing orders apply by state/size.
+• Leave policies vary by state/company; festival/public holidays add complexity.
+• Payroll: monthly with TDS and statutory filings; salary structure (basic/allowances) matters for PF/ESI.`,
+  Brazil:
+    `Protective labor regime under the CLT. Common on‑costs: INSS employer share, FGTS, 13th salary and vacation bonus.
+• 13th salary equals one extra month, usually in two installments; vacation bonus adds 1/3 monthly pay.
+• Union/sector charges and risk insurance (RAT) may apply.
+• Payroll: monthly with eSocial filings; careful planning of total cost is essential.`,
+};
+
+export default function EmploymentCostCalculator() {
+  const [employmentType, setEmploymentType] = usePersistent("tcoe_employment_type", "Employee");
+  const [country, setCountry] = usePersistent("tcoe_country", "Australia");
+  const [salary, setSalary] = usePersistent("tcoe_salary", 120000);
+  const [assumptionsEmployee, setAssumptionsEmployee] = usePersistent("tcoe_emp_defaults_v2", DEFAULT_EMPLOYEE);
+  const [assumptionsContractor, setAssumptionsContractor] = usePersistent("tcoe_con_defaults_v1", DEFAULT_CONTRACTOR);
+  const [jurisdictions, setJurisdictions] = usePersistent("tcoe_juris_v1", DEFAULT_JURISDICTIONS);
+  const [jurisdictionKey, setJurisdictionKey] = usePersistent("tcoe_selected_juris", { Australia: "New South Wales", USA: "California" });
+  const [showEditor, setShowEditor] = useState(false);
+  const [editScope, setEditScope] = useState({ level: "country" }); // { level: 'country' | 'jurisdiction', name?: string }
+
+  const currency = CURRENCIES[country]?.code || "USD";
+
+  const baseLines = employmentType === "Employee" ? (assumptionsEmployee[country] || []) : (assumptionsContractor[country] || []);
+  const jurisOptions = jurisdictions[country] ? Object.keys(jurisdictions[country]) : [];
+  const activeJurisName = jurisOptions.includes(jurisdictionKey[country]) ? jurisdictionKey[country] : undefined;
+  const jurisLines = activeJurisName ? (jurisdictions[country]?.[activeJurisName] || []) : [];
+
+  // merge: country base + jurisdiction overlay
+  const mergedLines = useMemo(() => {
+    // If IDs collide, jurisdiction overrides base by replacing same id, else appended.
+    const map = new Map();
+    baseLines.forEach((l) => map.set(l.id, { ...l }));
+    jurisLines.forEach((l) => map.set(l.id, { ...l }));
+    return Array.from(map.values());
+  }, [baseLines, jurisLines]);
+
+  const { oncostTotal, totalCost, oncostPct, breakdown } = useMemo(() => {
+    const items = mergedLines.map((it) => ({
+      ...it,
+      amount: calcLine(it, Number(salary) || 0),
+    }));
+    const oncost = sum(items.map((i) => i.amount));
+    const total = (Number(salary) || 0) + oncost;
+    const pct = (oncost / (Number(salary) || 1)) * 100;
+    return { oncostTotal: oncost, totalCost: total, oncostPct: pct, breakdown: items };
+  }, [mergedLines, salary]);
+
+  function updateLine(scope, id, patch) {
+    if (scope === "country") {
+      if (employmentType === "Employee") {
+        setAssumptionsEmployee((prev) => ({
+          ...prev,
+          [country]: (prev[country] || []).map((l) => (l.id === id ? { ...l, ...patch } : l)),
+        }));
+      } else {
+        setAssumptionsContractor((prev) => ({
+          ...prev,
+          [country]: (prev[country] || []).map((l) => (l.id === id ? { ...l, ...patch } : l)),
+        }));
+      }
+    } else if (scope === "jurisdiction" && activeJurisName) {
+      setJurisdictions((prev) => ({
+        ...prev,
+        [country]: {
+          ...(prev[country] || {}),
+          [activeJurisName]: (prev[country]?.[activeJurisName] || []).map((l) => (l.id === id ? { ...l, ...patch } : l)),
+        },
+      }));
+    }
+  }
+
+  function addLine(scope) {
+    const id = "custom_" + Math.random().toString(36).slice(2, 8);
+    const newLine = { id, name: "Custom item", type: "percent", value: 1, note: "Editable" };
+    if (scope === "country") {
+      if (employmentType === "Employee") {
+        setAssumptionsEmployee((prev) => ({ ...prev, [country]: [...(prev[country] || []), newLine] }));
+      } else {
+        setAssumptionsContractor((prev) => ({ ...prev, [country]: [...(prev[country] || []), newLine] }));
+      }
+    } else if (scope === "jurisdiction" && activeJurisName) {
+      setJurisdictions((prev) => ({
+        ...prev,
+        [country]: {
+          ...(prev[country] || {}),
+          [activeJurisName]: [...(prev[country]?.[activeJurisName] || []), newLine],
+        },
+      }));
+    }
+  }
+
+  function removeLine(scope, id) {
+    if (scope === "country") {
+      if (employmentType === "Employee") {
+        setAssumptionsEmployee((prev) => ({
+          ...prev,
+          [country]: (prev[country] || []).filter((l) => l.id !== id),
+        }));
+      } else {
+        setAssumptionsContractor((prev) => ({
+          ...prev,
+          [country]: (prev[country] || []).filter((l) => l.id !== id),
+        }));
+      }
+    } else if (scope === "jurisdiction" && activeJurisName) {
+      setJurisdictions((prev) => ({
+        ...prev,
+        [country]: {
+          ...(prev[country] || {}),
+          [activeJurisName]: (prev[country]?.[activeJurisName] || []).filter((l) => l.id !== id),
+        },
+      }));
+    }
+  }
+
+  function resetDefaults(scope) {
+    if (scope === "country") {
+      if (employmentType === "Employee") {
+        setAssumptionsEmployee((prev) => ({ ...prev, [country]: DEFAULT_EMPLOYEE[country] }));
+      } else {
+        setAssumptionsContractor((prev) => ({ ...prev, [country]: DEFAULT_CONTRACTOR[country] || [] }));
+      }
+    } else if (scope === "jurisdiction" && activeJurisName) {
+      setJurisdictions((prev) => ({
+        ...prev,
+        [country]: {
+          ...(prev[country] || {}),
+          [activeJurisName]: DEFAULT_JURISDICTIONS[country]?.[activeJurisName] || [],
+        },
+      }));
+    }
+  }
+
+  function exportCSV() {
+    const rows = [
+      ["Employment type", employmentType],
+      ["Country", country],
+      ["Jurisdiction", activeJurisName || "(none)"],
+      ["Currency", currency],
+      ["Base Salary", (Number(salary) || 0).toString()],
+      [],
+      ["Item", "Scope", "Type", "Rate/Value", "Cap", "Threshold", "Amount"],
+      ...breakdown.map((b) => [
+        b.name,
+        jurisLines.find((j) => j.id === b.id) ? "Jurisdiction" : "Country",
+        b.type,
+        b.type === "flat" ? b.value : `${b.value}%`,
+        b.capAmount ? fmtCurrency(b.capAmount, currency) : "",
+        b.thresholdAmount ? fmtCurrency(b.thresholdAmount, currency) : "",
+        fmtCurrency(b.amount, currency),
+      ]),
+      [],
+      ["On‑cost total", "", "", "", "", "", fmtCurrency(oncostTotal, currency)],
+      ["Total employer cost", "", "", "", "", "", fmtCurrency(totalCost, currency)],
+      ["On‑cost % of salary", "", "", "", "", "", oncostPct.toFixed(2) + "%"],
+    ];
+    const csv = rows.map((r) => r.map((c) => `"${String(c ?? "").replaceAll('"', '""')}"`).join(",")).join("
+");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `TCOE_${employmentType}_${country}_${activeJurisName || "NA"}_${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 p-6">
+      <div className="max-w-6xl mx-auto">
+        <header className="mb-6">
+          <h1 className="text-3xl font-bold tracking-tight">Total Cost of Employment (TCOE) Calculator</h1>
+          <p className="text-slate-600 mt-2">Select employment type, country (and jurisdiction if available), then enter the annual base salary to estimate employer on‑costs. Assumptions are editable and persist locally.</p>
+          <p className="text-xs text-slate-500 mt-2">Disclaimer: Planning tool only. Laws change; state/province rates, thresholds and wage caps vary. Validate before making decisions.</p>
+        </header>
+
+        {/* Controls */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <div>
+            <label className="block text-sm font-medium mb-1">Employment type</label>
+            <div className="flex gap-2">
+              {(["Employee", "Contractor"]).map((t) => (
+                <button
+                  key={t}
+                  className={`flex-1 rounded-2xl p-3 border font-medium shadow transition ${employmentType===t?"bg-indigo-600 text-white border-indigo-600":"bg-white text-slate-800 border-slate-300 hover:bg-slate-100"}`}
+                  onClick={() => setEmploymentType(t)}
+                >{t}</button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Country</label>
+            <select
+              className="w-full rounded-2xl border border-slate-300 bg-white p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+            >
+              {COUNTRIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Jurisdiction (if applicable)</label>
+            <select
+              className="w-full rounded-2xl border border-slate-300 bg-white p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              value={activeJurisName || ""}
+              onChange={(e) => setJurisdictionKey({ ...jurisdictionKey, [country]: e.target.value })}
+              disabled={!jurisOptions.length}
+            >
+              {jurisOptions.length ? (
+                jurisOptions.map((j) => <option key={j} value={j}>{j}</option>)
+              ) : (
+                <option value="">(none)</option>
+              )}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Annual base salary ({CURRENCIES[country]?.symbol}{CURRENCIES[country]?.code})</label>
+            <input
+              type="number"
+              min={0}
+              className="w-full rounded-2xl border border-slate-300 bg-white p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              value={salary}
+              onChange={(e) => setSalary(Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-3 mt-4">
+          <button
+            className="rounded-2xl bg-indigo-600 text-white px-4 py-2 font-medium shadow hover:bg-indigo-700"
+            onClick={() => { setEditScope({ level: "country" }); setShowEditor(true); }}
+          >
+            Edit country assumptions
+          </button>
+          <button
+            className="rounded-2xl bg-white border border-slate-300 px-4 py-2 font-medium shadow hover:bg-slate-100"
+            onClick={() => { setEditScope({ level: "jurisdiction" }); setShowEditor(true); }}
+            disabled={!activeJurisName}
+            title={activeJurisName?"":"Select a jurisdiction first"}
+          >
+            Edit jurisdiction overlay
+          </button>
+          <button
+            className="rounded-2xl bg-white border border-slate-300 px-4 py-2 font-medium shadow hover:bg-slate-100"
+            onClick={exportCSV}
+          >
+            Export CSV
+          </button>
+        </div>
+
+        {/* Results Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+          <div className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200">
+            <div className="text-sm text-slate-500">Base salary</div>
+            <div className="text-2xl font-semibold">{fmtCurrency(Number(salary) || 0, currency)}</div>
+          </div>
+          <div className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200">
+            <div className="text-sm text-slate-500">On‑cost total</div>
+            <div className="text-2xl font-semibold">{fmtCurrency(oncostTotal, currency)}</div>
+          </div>
+          <div className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200">
+            <div className="text-sm text-slate-500">Total employer cost</div>
+            <div className="text-2xl font-semibold">{fmtCurrency(totalCost, currency)}</div>
+            <div className="text-xs text-slate-500 mt-1">On‑costs = {oncostPct.toFixed(1)}% of salary</div>
+          </div>
+        </div>
+
+        {/* Breakdown table */}
+        <div className="mt-6 rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-100 text-slate-700">
+              <tr>
+                <th className="text-left p-3">Item</th>
+                <th className="text-left p-3">Scope</th>
+                <th className="text-left p-3">Type</th>
+                <th className="text-right p-3">Rate/Value</th>
+                <th className="text-right p-3">Cap</th>
+                <th className="text-right p-3">Threshold</th>
+                <th className="text-right p-3">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {breakdown.map((b) => (
+                <tr key={b.id} className="border-t border-slate-100">
+                  <td className="p-3">
+                    <div className="font-medium">{b.name}</div>
+                    {b.note && <div className="text-xs text-slate-500">{b.note}</div>}
+                  </td>
+                  <td className="p-3 text-slate-600">{jurisLines.find((j) => j.id === b.id) ? "Jurisdiction" : "Country"}</td>
+                  <td className="p-3 text-slate-600">{b.type.replaceAll("_", " ")}</td>
+                  <td className="p-3 text-right">{b.type === "flat" ? fmtCurrency(b.value, currency) : `${b.value}%`}</td>
+                  <td className="p-3 text-right">{b.capAmount ? fmtCurrency(b.capAmount, currency) : "—"}</td>
+                  <td className="p-3 text-right">{b.thresholdAmount ? fmtCurrency(b.thresholdAmount, currency) : "—"}</td>
+                  <td className="p-3 text-right font-medium">{fmtCurrency(b.amount, currency)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-slate-50 border-t border-slate-200">
+                <td className="p-3 font-semibold" colSpan={6}>On‑cost total</td>
+                <td className="p-3 text-right font-semibold">{fmtCurrency(oncostTotal, currency)}</td>
+              </tr>
+              <tr className="bg-slate-100 border-t border-slate-200">
+                <td className="p-3 font-semibold" colSpan={6}>Total employer cost</td>
+                <td className="p-3 text-right font-semibold">{fmtCurrency(totalCost, currency)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        {/* Narrative / country info */}
+        <section className="mt-8">
+          <h2 className="text-xl font-semibold mb-2">Country info & employment notes — {country}</h2>
+          <div className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200 whitespace-pre-line text-slate-700">
+            {COUNTRY_NOTES[country]}
+          </div>
+        </section>
+
+        {/* Editor Modal */}
+        {showEditor && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={() => setShowEditor(false)} />
+            <div className="relative max-w-3xl w-full mx-4 rounded-3xl bg-white shadow-xl border border-slate-200 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">
+                  {editScope.level === "country" ? (
+                    <>Edit {employmentType.toLowerCase()} assumptions — {country}</>
+                  ) : (
+                    <>Edit jurisdiction overlay — {country}{activeJurisName?` / ${activeJurisName}`:""}</>
+                  )}
+                </h3>
+                <button className="text-slate-600 hover:text-slate-900" onClick={() => setShowEditor(false)}>✕</button>
+              </div>
+
+              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+                {(editScope.level === "country" ? baseLines : jurisLines).map((l) => (
+                  <div key={l.id} className="grid grid-cols-12 gap-3 items-end border border-slate-200 rounded-2xl p-3">
+                    <div className="col-span-5">
+                      <label className="block text-xs font-medium mb-1">Name</label>
+                      <input
+                        className="w-full rounded-xl border border-slate-300 p-2"
+                        value={l.name}
+                        onChange={(e) => updateLine(editScope.level, l.id, { name: e.target.value })}
+                      />
+                    </div>
+                    <div className="col-span-3">
+                      <label className="block text-xs font-medium mb-1">Type</label>
+                      <select
+                        className="w-full rounded-xl border border-slate-300 p-2"
+                        value={l.type}
+                        onChange={(e) => updateLine(editScope.level, l.id, { type: e.target.value })}
+                      >
+                        <option value="percent">percent</option>
+                        <option value="percent_with_cap">percent_with_cap</option>
+                        <option value="percent_above_threshold">percent_above_threshold</option>
+                        <option value="flat">flat</option>
+                      </select>
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium mb-1">Rate / Value</label>
+                      <input
+                        type="number"
+                        className="w-full rounded-xl border border-slate-300 p-2 text-right"
+                        value={l.value}
+                        onChange={(e) => updateLine(editScope.level, l.id, { value: Number(e.target.value) })}
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium mb-1">Cap (annual)</label>
+                      <input
+                        type="number"
+                        className="w-full rounded-xl border border-slate-300 p-2 text-right"
+                        value={l.capAmount || ""}
+                        onChange={(e) => updateLine(editScope.level, l.id, { capAmount: e.target.value ? Number(e.target.value) : undefined })}
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium mb-1">Threshold (annual)</label>
+                      <input
+                        type="number"
+                        className="w-full rounded-xl border border-slate-300 p-2 text-right"
+                        value={l.thresholdAmount || ""}
+                        onChange={(e) => updateLine(editScope.level, l.id, { thresholdAmount: e.target.value ? Number(e.target.value) : undefined })}
+                      />
+                    </div>
+                    <div className="col-span-12">
+                      <label className="block text-xs font-medium mb-1">Note</label>
+                      <input
+                        className="w-full rounded-xl border border-slate-300 p-2"
+                        value={l.note || ""}
+                        onChange={(e) => updateLine(editScope.level, l.id, { note: e.target.value })}
+                      />
+                    </div>
+                    <div className="col-span-12 flex items-center justify-between">
+                      <div className="text-xs text-slate-500">Amount at current salary: <span className="font-medium">{fmtCurrency(calcLine(l, Number(salary) || 0), currency)}</span></div>
+                      <button className="text-sm text-rose-600 hover:text-rose-700" onClick={() => removeLine(editScope.level, l.id)}>Remove</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 flex items-center justify-between">
+                <div className="flex gap-3">
+                  <button className="rounded-2xl bg-slate-100 px-4 py-2 border border-slate-300 hover:bg-slate-200" onClick={() => addLine(editScope.level)}>+ Add item</button>
+                  <button className="rounded-2xl bg-white px-4 py-2 border border-slate-300 hover:bg-slate-100" onClick={() => resetDefaults(editScope.level)}>Reset to defaults</button>
+                </div>
+                <button className="rounded-2xl bg-indigo-600 text-white px-4 py-2 font-medium shadow hover:bg-indigo-700" onClick={() => setShowEditor(false)}>Done</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

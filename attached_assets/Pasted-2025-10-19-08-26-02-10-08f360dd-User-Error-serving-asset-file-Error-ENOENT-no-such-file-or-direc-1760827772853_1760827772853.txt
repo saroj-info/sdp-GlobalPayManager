@@ -1,0 +1,128 @@
+2025-10-19 08:26:02.10
+08f360dd
+User
+Error serving asset file: [Error: ENOENT: no such file or directory, stat '/home/runner/workspace/attached_assets/images'] {
+2025-10-19 08:26:02.10
+08f360dd
+User
+errno: -2,
+2025-10-19 08:26:02.10
+08f360dd
+User
+code: 'ENOENT',
+2025-10-19 08:26:02.10
+08f360dd
+User
+syscall: 'stat',
+2025-10-19 08:26:02.10
+08f360dd
+User
+path: '/home/runner/workspace/attached_assets/images',
+2025-10-19 08:26:02.10
+08f360dd
+User
+expose: false,
+2025-10-19 08:26:02.10
+08f360dd
+User
+statusCode: 404,
+2025-10-19 08:26:02.10
+08f360dd
+User
+status: 404
+2025-10-19 08:26:02.10
+08f360dd
+User
+}
+2025-10-19 08:39:16.99
+08f360dd
+User
+Error serving asset file: [Error: ENOENT: no such file or directory, stat '/home/runner/workspace/attached_assets/index-DGfpc5Sq.js'] {
+2025-10-19 08:39:16.99
+08f360dd
+User
+errno: -2,
+2025-10-19 08:39:16.99
+08f360dd
+User
+code: 'ENOENT',
+2025-10-19 08:39:16.99
+08f360dd
+User
+syscall: 'stat',
+2025-10-19 08:39:16.99
+08f360dd
+User
+path: '/home/runner/workspace/attached_assets/index-DGfpc5Sq.js',
+2025-10-19 08:39:16.99
+08f360dd
+User
+expose: false,
+2025-10-19 08:39:16.99
+08f360dd
+User
+statusCode: 404,
+2025-10-19 08:39:16.99
+08f360dd
+User
+status: 404
+2025-10-19 08:39:16.99
+08f360dd
+User
+}
+2025-10-19 09:45:52.84
+08f360dd
+User
+Error serving asset file: [Error: ENOENT: no such file or directory, stat '/home/runner/workspace/attached_assets/index-BUn4Dytz.css'] {
+2025-10-19 09:45:52.84
+08f360dd
+User
+errno: -2,
+2025-10-19 09:45:52.84
+08f360dd
+User
+code: 'ENOENT',
+2025-10-19 09:45:52.84
+08f360dd
+User
+syscall: 'stat',
+2025-10-19 09:45:52.84
+08f360dd
+User
+path: '/home/runner/workspace/attached_assets/index-BUn4Dytz.css',
+2025-10-19 09:45:52.84
+08f360dd
+User
+expose: false,
+2025-10-19 09:45:52.84
+08f360dd
+User
+statusCode: 404,
+2025-10-19 09:45:52.84
+08f360dd
+User
+status: 404
+2025-10-19 09:45:52.84
+08f360dd
+User
+}
+2025-10-19 09:45:52.86
+08f360dd
+User
+Error serving asset file: [Error: ENOENT: no such file or directory, stat '/home/runner/workspace/attached_assets/index-DGfpc5Sq.js'] {
+2025-10-19 09:45:52.86
+08f360dd
+User
+errno: -2,
+2025-10-19 09:45:52.86
+08f360dd
+User
+code: 'ENOENT',
+2025-10-19 09:45:52.86
+08f360dd
+User
+syscall: 'stat',
+2025-10-19 09:45:52.86
+08f360dd
+User
+path: '/home/runner/workspace/attached_assets/index-DGfpc5Sq.js',
