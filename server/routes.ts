@@ -5415,22 +5415,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...auditFields,
       };
       
-      // Validate customer billing fields if contract is for client work and invoicing through platform
-      if (finalContractData.isForClient && finalContractData.invoiceCustomer) {
+      // Validate customer billing fields for all client-work billing modes
+      const billingMode = (finalContractData as any).billingMode;
+      const requiresClientBilling = finalContractData.isForClient &&
+        (billingMode === 'invoice_through_platform' || billingMode === 'invoice_separately' || billingMode === 'auto_invoice' || finalContractData.invoiceCustomer);
+
+      if (requiresClientBilling) {
         if (!finalContractData.customerBusinessId) {
-          return res.status(400).json({ message: "Customer business is required when invoicing customers through the platform" });
+          return res.status(400).json({ message: "Host client (customer business) is required for client work contracts" });
         }
-        if (!finalContractData.customerBillingRate) {
-          return res.status(400).json({ message: "Customer billing rate is required when invoicing customers" });
+        const clientBillingType = (finalContractData as any).clientBillingType || 'rate_based';
+        if (clientBillingType !== 'fixed_price' && !finalContractData.customerBillingRate) {
+          return res.status(400).json({ message: "Customer billing rate is required for rate-based client billing" });
         }
         if (!finalContractData.customerCurrency) {
-          return res.status(400).json({ message: "Customer currency is required when invoicing customers" });
+          return res.status(400).json({ message: "Customer currency is required for client work contracts" });
         }
         if (!finalContractData.invoicingFrequency) {
-          return res.status(400).json({ message: "Invoicing frequency is required when invoicing customers" });
+          return res.status(400).json({ message: "Invoicing frequency is required for client work contracts" });
         }
         if (!finalContractData.paymentTerms) {
-          return res.status(400).json({ message: "Payment terms are required when invoicing customers" });
+          return res.status(400).json({ message: "Payment terms are required for client work contracts" });
         }
       }
       

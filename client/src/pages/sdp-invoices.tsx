@@ -784,7 +784,7 @@ export default function SdpInvoices() {
                         {invoice.invoiceCategory === 'business_to_client' && (
                           <div className="flex justify-between text-sm">
                             <span className="text-secondary-600">Raised By:</span>
-                            <span className="text-indigo-700 font-medium">{invoice.toBusiness?.name || 'Business'}</span>
+                            <span className="text-indigo-700 font-medium">{invoice.fromBusiness?.name || 'Business'}</span>
                           </div>
                         )}
                         {invoice.invoiceCategory === 'customer_billing' && invoice.fromBusiness && (
