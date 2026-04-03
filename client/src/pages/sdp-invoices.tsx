@@ -795,6 +795,20 @@ export default function SdpInvoices() {
                         )}
 
                         <div className="flex justify-between text-sm">
+                          <span className="text-secondary-600 font-medium">Payable by:</span>
+                          <span className="text-orange-700 font-semibold">
+                            {invoice.toBusiness?.name || '—'}
+                          </span>
+                        </div>
+
+                        {invoice.workerName && (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-secondary-600">Worker:</span>
+                            <span>{invoice.workerName}</span>
+                          </div>
+                        )}
+
+                        <div className="flex justify-between text-sm">
                           <span className="text-secondary-600">Service:</span>
                           <span data-testid={`text-service-type-${invoice.id}`}>
                             {invoice.serviceType.replace('_', ' ')}

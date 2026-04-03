@@ -6564,6 +6564,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 );
                 if (existing) { console.log(`B2C invoice already exists for timesheet ${id}, skipping`); return; }
                 const invNum = await storage.generateSdpInvoiceNumber(contract.countryId);
+                // Look up business and host client names for clear descriptions
+                const fromBiz = await storage.getBusinessById(contract.businessId);
+                const toHostClient = await storage.getBusinessById(contract.customerBusinessId!);
+                const fromBizName = fromBiz?.name || 'Business';
+                const toHostName = toHostClient?.name || 'Host Client';
                 const inv = await storage.createSdpInvoice({
                   invoiceNumber: invNum,
                   invoiceDate,
@@ -6573,7 +6578,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   fromBusinessId: contract.businessId,
                   toBusinessId: contract.customerBusinessId,
                   serviceType: `Business Billing - ${contract.employmentType}`,
-                  description: `Invoice to host client for ${timesheet.periodStart} to ${timesheet.periodEnd}`,
+                  description: `Invoice from ${fromBizName} to ${toHostName}. Payable by: ${toHostName}. Period: ${timesheet.periodStart} to ${timesheet.periodEnd}`,
                   subtotal: customerBillingAmount.toFixed(2),
                   currency,
                   totalAmount: customerBillingAmount.toFixed(2),
@@ -6599,6 +6604,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 );
                 if (existing) { console.log(`Customer billing invoice already exists for timesheet ${id}, skipping`); return; }
                 const invNum = await storage.generateSdpInvoiceNumber(contract.countryId);
+                // Look up host client name for clear description
+                const custBizTo = await storage.getBusinessById(contract.customerBusinessId!);
+                const custHostName = custBizTo?.name || 'Host Client';
+                // Look up SDP country entity name
+                const sdpCountry = await storage.getCountryById(contract.countryId);
+                const sdpEntityName = sdpCountry?.companyName || `SDP ${sdpCountry?.name || 'Entity'}`;
                 const inv = await storage.createSdpInvoice({
                   invoiceNumber: invNum,
                   invoiceDate,
@@ -6608,7 +6619,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   toBusinessId: contract.customerBusinessId,
                   fromBusinessId: contract.businessId,
                   serviceType: `Customer Billing - ${contract.employmentType}`,
-                  description: `Customer billing for ${timesheet.periodStart} to ${timesheet.periodEnd}`,
+                  description: `Invoice from ${sdpEntityName} to ${custHostName}. Payable by: ${custHostName}. SDP acts as billing agent. Period: ${timesheet.periodStart} to ${timesheet.periodEnd}`,
                   subtotal: customerBillingAmount.toFixed(2),
                   currency,
                   totalAmount: customerBillingAmount.toFixed(2),
@@ -6637,6 +6648,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Find an open PO for this contract to auto-link
                 const contractPOs = await storage.getPurchaseOrdersByContract(contract.id);
                 const openPO = contractPOs.find((p: any) => p.status === 'open');
+                // Look up business and SDP entity names for clear description
+                const sdpBizTo = await storage.getBusinessById(contract.businessId);
+                const sdpBizName = sdpBizTo?.name || 'Business';
+                const sdpCountryEntity = await storage.getCountryById(contract.countryId);
+                const sdpName = sdpCountryEntity?.companyName || `SDP ${sdpCountryEntity?.name || 'Entity'}`;
                 const inv = await storage.createSdpInvoice({
                   invoiceNumber: invNum,
                   invoiceDate,
@@ -6645,7 +6661,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   fromCountryId: contract.countryId,
                   toBusinessId: contract.businessId,
                   serviceType: `Employment Services - ${contract.employmentType}`,
-                  description: `Worker cost invoice for ${timesheet.periodStart} to ${timesheet.periodEnd}`,
+                  description: `Invoice from ${sdpName} to ${sdpBizName}. Payable by: ${sdpBizName}. Worker cost + SDP fees. Period: ${timesheet.periodStart} to ${timesheet.periodEnd}`,
                   subtotal: sdpInvoiceTotal.toFixed(2),
                   currency: contract.currency,
                   totalAmount: sdpInvoiceTotal.toFixed(2),
