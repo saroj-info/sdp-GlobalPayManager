@@ -7329,9 +7329,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const invoice = await storage.createInvoice(data);
       res.json(invoice);
-    } catch (error) {
-      console.error('Error creating invoice:', error);
-      res.status(400).json({ message: 'Failed to create invoice' });
+    } catch (error: any) {
+      console.error('Error creating invoice:', error?.message || String(error));
+      res.status(400).json({ message: error?.message || 'Failed to create invoice' });
     }
   });
 

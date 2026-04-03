@@ -897,6 +897,21 @@ export default function ContractsPage() {
                     </div>
                   )}
 
+                  {((user as any)?.userType === 'sdp_internal' || (user as any)?.userType === 'sdp_super_admin') && (
+                    <div className={`flex items-center text-xs font-medium rounded px-2 py-1 border ${
+                      (contract as any).billingLines?.length > 0
+                        ? 'text-blue-700 bg-blue-50 border-blue-200'
+                        : 'text-gray-500 bg-gray-50 border-gray-200'
+                    }`}>
+                      <DollarSign className={`mr-1.5 h-3 w-3 flex-shrink-0 ${
+                        (contract as any).billingLines?.length > 0 ? 'text-blue-600' : 'text-gray-400'
+                      }`} />
+                      {(contract as any).billingLines?.length > 0
+                        ? `${(contract as any).billingLines.length} Billing Line${(contract as any).billingLines.length > 1 ? 's' : ''}`
+                        : 'No Billing Lines'}
+                    </div>
+                  )}
+
                   <div className="pt-3 mt-3 border-t border-secondary-200">
                     <Button 
                       variant="outline" 

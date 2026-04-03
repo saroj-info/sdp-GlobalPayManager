@@ -82,9 +82,21 @@ export default function WorkerInvoicesPage() {
 
   const createInvoiceMutation = useMutation({
     mutationFn: async (data: InvoiceData) => {
-      return await apiRequest('/api/invoices', {
-        method: 'POST',
-        body: JSON.stringify(data),
+      const subtotal = data.amount.toString();
+      const taxAmount = (data.gstAmount || 0).toString();
+      const totalAmount = (data.amount + (data.gstAmount || 0)).toString();
+      return await apiRequest('POST', '/api/invoices', {
+        invoiceNumber: data.invoiceNumber,
+        invoiceDate: data.issueDate instanceof Date ? data.issueDate.toISOString() : data.issueDate,
+        dueDate: data.dueDate instanceof Date ? data.dueDate.toISOString() : data.dueDate,
+        periodStart: data.issueDate instanceof Date ? data.issueDate.toISOString() : data.issueDate,
+        periodEnd: data.dueDate instanceof Date ? data.dueDate.toISOString() : data.dueDate,
+        description: data.description,
+        subtotal,
+        taxAmount,
+        totalAmount,
+        currency: data.currency,
+        businessId: (workerProfile as any)?.businessId,
       });
     },
     onSuccess: () => {
@@ -442,14 +454,14 @@ export default function WorkerInvoicesPage() {
                             </span>
                           </div>
                           <div className="text-sm text-gray-600">
-                            <strong>Issue Date:</strong> {format(new Date(invoice.issueDate), "PPP")} | 
+                            <strong>Issue Date:</strong> {format(new Date(invoice.invoiceDate), "PPP")} |
                             <strong> Due Date:</strong> {format(new Date(invoice.dueDate), "PPP")}
                           </div>
                           <div className="text-lg font-semibold text-green-600">
-                            {invoice.currency} ${invoice.totalAmount.toFixed(2)}
-                            {invoice.gstAmount > 0 && (
+                            {invoice.currency} ${parseFloat(invoice.totalAmount || '0').toFixed(2)}
+                            {parseFloat(invoice.taxAmount || '0') > 0 && (
                               <span className="text-sm text-gray-600 ml-2">
-                                (incl. ${invoice.gstAmount.toFixed(2)} GST)
+                                (incl. ${parseFloat(invoice.taxAmount || '0').toFixed(2)} GST)
                               </span>
                             )}
                           </div>
