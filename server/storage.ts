@@ -3261,6 +3261,50 @@ ${lines.map(line => `    <tr>
       subtotal = totalHours * rate;
     }
 
+    // Fetch SDP billing lines (commission/fees) for this contract
+    const contractBillingLines = await this.getContractBillingLines(contract.id);
+    const activeBillingLines = contractBillingLines.filter((bl: any) => bl.isActive);
+
+    // Add billing line amounts to subtotal
+    let billingLinesTotal = 0;
+    const lineItems: { description: string; quantity: string; unitPrice: string; amount: string; sortOrder: number }[] = [];
+
+    // Worker cost as first line item
+    const unit = rateType === 'daily' ? 'day' : 'hr';
+    const qty = rateType === 'daily'
+      ? entries.reduce((sum, e) => { const d = parseFloat(e.daysWorked || '0'); return sum + (isNaN(d) ? 0 : d); }, 0)
+      : entries.reduce((sum, e) => { const h = parseFloat(e.hoursWorked || '0'); return sum + (isNaN(h) ? 0 : h); }, 0);
+    lineItems.push({
+      description: `Worker cost — ${qty}${unit} @ ${contract.currency} ${rate}/${unit}`,
+      quantity: qty.toString(),
+      unitPrice: rate.toFixed(2),
+      amount: subtotal.toFixed(2),
+      sortOrder: 0,
+    });
+
+    // Add each active billing line
+    let sortIdx = 1;
+    for (const bl of activeBillingLines) {
+      let blAmount = 0;
+      if (bl.lineType === 'percentage_of_pay') {
+        blAmount = subtotal * (parseFloat(bl.rate || '0') / 100);
+      } else if (bl.lineType === 'fixed_percentage') {
+        blAmount = subtotal * (parseFloat(bl.rate || '0') / 100);
+      } else {
+        blAmount = parseFloat(bl.amount || bl.rate || '0');
+      }
+      billingLinesTotal += blAmount;
+      lineItems.push({
+        description: bl.description,
+        quantity: '1',
+        unitPrice: blAmount.toFixed(2),
+        amount: blAmount.toFixed(2),
+        sortOrder: sortIdx++,
+      });
+    }
+
+    const invoiceSubtotal = subtotal + billingLinesTotal;
+
     // Determine SDP entity (country) - use worker's country as default
     const fromCountryId = worker.countryId || contract.countryId;
     if (!fromCountryId) {
@@ -3274,16 +3318,16 @@ ${lines.map(line => `    <tr>
     const businessCountry = business.accessibleCountries?.[0]; // Use first accessible country as business location
     const isCrossBorder = businessCountry && businessCountry !== fromCountryId;
 
-    // Calculate GST/VAT if applicable (simplified - real implementation would need country-specific rates)
+    // Calculate GST/VAT if applicable
     let gstVatAmount = 0;
     let gstVatRate = 0;
     if (!isCrossBorder) {
-      // Same country billing - apply local GST/VAT (simplified 10% rate)
-      gstVatRate = 10;
-      gstVatAmount = subtotal * 0.1;
+      const countryGstRates: Record<string, number> = { 'au': 10, 'nz': 15, 'gb': 20, 'sg': 8, 'ie': 23, 'ca': 5 };
+      gstVatRate = countryGstRates[fromCountryId.toLowerCase()] || 10;
+      gstVatAmount = invoiceSubtotal * (gstVatRate / 100);
     }
 
-    const totalAmount = subtotal + gstVatAmount;
+    const totalAmount = invoiceSubtotal + gstVatAmount;
 
     const invoice: InsertSdpInvoiceType = {
       // Allow caller to override non-financial fields (e.g. invoiceDate, dueDate, purchaseOrderId)
@@ -3294,7 +3338,7 @@ ${lines.map(line => `    <tr>
       dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
       fromCountryId,
       toBusinessId: business.id,
-      subtotal: subtotal.toString(),
+      subtotal: invoiceSubtotal.toString(),
       gstVatAmount: gstVatAmount.toString(),
       gstVatRate: gstVatRate.toString(),
       totalAmount: totalAmount.toString(),
@@ -3312,7 +3356,14 @@ ${lines.map(line => `    <tr>
       createdBy: invoiceData.createdBy!,
     };
 
-    return await this.createSdpInvoice(invoice);
+    const created = await this.createSdpInvoice(invoice);
+
+    // Save line items (worker cost + billing lines)
+    if (lineItems.length > 0) {
+      await this.createSdpInvoiceLineItems(created.id, lineItems);
+    }
+
+    return created;
   }
 
   // New SDP Invoice methods for editing, sending, and payment tracking

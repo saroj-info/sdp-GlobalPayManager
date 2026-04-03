@@ -241,7 +241,7 @@ function SdpBillingLinesPanel({ contractId }: { contractId: string }) {
                           {line.lineType === 'percentage_of_pay' ? '% of Pay' : line.lineType === 'fixed_amount' ? 'Fixed Amount' : 'Fixed %'}
                         </span>
                         <span className="text-xs font-medium text-blue-700">
-                          {line.lineType === 'fixed_amount' ? `${line.currency} ${parseFloat(line.rate || line.amount || '0').toFixed(2)}` : `${(parseFloat(line.rate || '0') * 100).toFixed(1)}%`}
+                          {line.lineType === 'fixed_amount' ? `${line.currency} ${parseFloat(line.rate || line.amount || '0').toFixed(2)}` : `${parseFloat(line.rate || '0').toFixed(1)}%`}
                         </span>
                         <span className="text-xs text-muted-foreground">
                           {line.frequency === 'per_timesheet_period' ? 'Per Period' : line.frequency === 'monthly' ? 'Monthly' : 'Annual'}

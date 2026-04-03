@@ -6484,7 +6484,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               for (const bl of activeBillingLines) {
                 let blAmount = 0;
                 if (bl.lineType === 'percentage_of_pay') {
-                  blAmount = workerCost * parseFloat(bl.rate || '0');
+                  blAmount = workerCost * (parseFloat(bl.rate || '0') / 100);
                 } else if (bl.lineType === 'fixed_percentage') {
                   blAmount = workerCost * (parseFloat(bl.rate || '0') / 100);
                 } else {
