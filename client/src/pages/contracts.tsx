@@ -1080,9 +1080,11 @@ export default function ContractsPage() {
                 <h3 className="text-xl font-semibold">
                   {selectedContract.customRoleTitle || selectedContract.roleTitle?.title || 'Contract Role'}
                 </h3>
-                <p className="text-lg text-muted-foreground">
-                  {selectedContract.worker?.firstName} {selectedContract.worker?.lastName}
-                </p>
+                {selectedContract.worker && (
+                  <p className="text-lg text-muted-foreground">
+                    {selectedContract.worker.firstName} {selectedContract.worker.lastName}
+                  </p>
+                )}
                 <ContractStatusBadge contract={selectedContract} />
               </div>
 
@@ -1110,6 +1112,18 @@ export default function ContractsPage() {
                     {new Date(selectedContract.startDate).toLocaleDateString()} - {selectedContract.endDate ? new Date(selectedContract.endDate).toLocaleDateString() : 'Ongoing'}
                   </p>
                 </div>
+                {selectedContract.business?.name && (
+                  <div className="text-center">
+                    <p className="text-sm text-muted-foreground">Business</p>
+                    <p className="font-semibold">{selectedContract.business.name}</p>
+                  </div>
+                )}
+                {selectedContract.isForClient && (selectedContract as any).customerBusinessName && (
+                  <div className="text-center">
+                    <p className="text-sm text-muted-foreground">Host Client</p>
+                    <p className="font-semibold">{(selectedContract as any).customerBusinessName}</p>
+                  </div>
+                )}
               </div>
 
               {/* Remuneration Lines — Gating for business users viewing pending salary contracts */}

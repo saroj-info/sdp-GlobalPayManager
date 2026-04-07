@@ -2912,7 +2912,44 @@ ${lines.map(line => `    <tr>
     };
 
     // Generate final contract content
-    const content = await this.generateContractContent(template, variables);
+    let content = await this.generateContractContent(template, variables);
+
+    // If template has no placeholders, key details won't appear in the document.
+    // Append a structured contract details section so the information is always present.
+    const hasPlaceholders = template.template.includes('{{');
+    if (!hasPlaceholders) {
+      const detailsSection = `
+
+---
+
+## CONTRACT DETAILS
+
+**Date of Agreement:** ${variables.agreementDate}
+
+**Business:** ${variables.businessName}
+
+**Contractor:** ${variables.contractorName}
+${variables.contractorEmail ? `**Email:** ${variables.contractorEmail}` : ''}
+${variables.contractorAddress ? `**Address:** ${variables.contractorAddress}` : ''}
+
+**Service Description:** ${variables.serviceDescription || 'As agreed between parties'}
+
+**Commencement Date:** ${variables.startDate}
+${variables.endDate ? `**End Date:** ${variables.endDate}` : '**Duration:** Ongoing until terminated'}
+
+**Rate:** ${variables.rateCurrency} ${variables.rateAmount} per ${variables.rateType}
+
+${variables.noticePeriod ? `**Notice Period:** ${variables.noticePeriod}` : ''}
+
+**SDP Entity:** ${variables.sdpEntityName}
+${variables.sdpAddress ? `**SDP Address:** ${variables.sdpAddress}` : ''}
+${variables.sdpCountry ? `**Jurisdiction:** ${variables.sdpCountry}` : ''}
+
+${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remunerationLines}` : ''}
+
+`;
+      content += detailsSection;
+    }
 
     return { content, variables };
   }

@@ -90,6 +90,7 @@ import { type ContractInstance, type Contract, type Worker, type Country, type R
 import { getDerivedContractStatus } from "@shared/contractHelpers";
 import { registerEmailTestRoutes } from "./routes/emailTestRoute";
 import { getBusinessInvitationTemplate, getWorkerApprovalRequestTemplate, getEmailBaseUrl } from "./emailService";
+
 // Using test authentication system
 
 // Helper function to generate signing tokens
@@ -5587,12 +5588,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
+      // Extract contractDocument before schema parsing (it's omitted from insertContractSchema)
+      const { contractDocument, ...bodyWithoutDoc } = req.body;
+
+
+      // If only contractDocument is being updated, skip full schema validation
+      if (contractDocument !== undefined && Object.keys(bodyWithoutDoc).length === 0) {
+        const updatedContract = await storage.updateContract(id, { contractDocument } as any);
+        return res.json(updatedContract);
+      }
+
       const data = insertContractSchema.parse({
-        ...req.body,
+        ...bodyWithoutDoc,
         businessId: existingContract.businessId, // Keep original business ID
       });
-      
-      const updatedContract = await storage.updateContract(id, data);
+
+      // If contractDocument is provided alongside other fields, include it in the update
+      const updateData = contractDocument !== undefined
+        ? { ...data, contractDocument }
+        : data;
+
+      const updatedContract = await storage.updateContract(id, updateData as any);
 
       // Handle remuneration lines if provided
       const remunerationLines = req.body.remunerationLines;
@@ -5612,9 +5628,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(updatedContract);
-    } catch (error) {
-      console.error("Error updating contract:", error);
-      
+    } catch (error: any) {
+      console.error("Error updating contract:", error?.message || String(error));
+
       if (error instanceof z.ZodError) {
         const errorMessages = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
         return res.status(400).json({ 

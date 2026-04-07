@@ -409,6 +409,43 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
           await apiRequest('POST', '/api/purchase-orders', { ...po, contractId });
         }
       }
+      console.log('Contract data from frontend:', data);
+      // Generate contract document from template and save it to the contract
+      if (contractId && (data.templateId || formData.templateId) && (data.workerId || formData.workerId)) {
+        try {
+          const wId = data.workerId || formData.workerId;
+          const tId = data.templateId || formData.templateId;
+          const selectedWorker = workers.find((w: any) => w.id === wId);
+          const businessId = data.selectedBusinessId || data.businessId || selectedWorker?.businessId;
+          if (businessId) {
+            const genResp = await apiRequest('POST', '/api/contracts/universal/preview', {
+              templateId: tId,
+              businessId,
+              workerId: wId,
+              contractData: {
+                contractId,
+                agreementDate: new Date().toLocaleDateString(),
+                serviceDescription: data.roleDescription || data.jobDescription || formData.roleDescription || '',
+                startDate: data.startDate || formData.startDate || '',
+                endDate: data.endDate || formData.endDate || '',
+                rateAmount: data.rate || formData.rate || '',
+                rateCurrency: data.currency || formData.currency || 'USD',
+                rateType: data.rateType || formData.rateType || 'hourly',
+                noticePeriodDays: data.noticePeriodDays || formData.noticePeriodDays || '30',
+              },
+            });
+            const genResult = await genResp.json();
+            if (genResult.content) {
+              await apiRequest('PUT', `/api/contracts/${contractId}`, {
+                contractDocument: genResult.content,
+              });
+            }
+          }
+        } catch (docError) {
+          console.error('Failed to generate contract document:', docError);
+          // Don't fail contract creation if document generation fails
+        }
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/contracts'] });
