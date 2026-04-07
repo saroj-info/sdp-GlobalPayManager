@@ -1,10 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
-import { Building2, Users, ExternalLink, ArrowLeft } from "lucide-react";
+import { Building2, Users, ExternalLink, ArrowLeft, Mail, CheckCircle2, XCircle, Eye, Send } from "lucide-react";
 import { useLocation } from "wouter";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 interface BusinessUser {
   id: string;
@@ -13,6 +17,10 @@ interface BusinessUser {
   lastName: string;
   userType: string;
   isActive: boolean;
+  emailVerified?: boolean;
+  phoneNumber?: string | null;
+  createdAt?: string;
+  lastLoginAt?: string | null;
   business?: {
     id: string;
     name: string;
@@ -39,8 +47,28 @@ interface BusinessUsersByCountry {
 
 export default function BusinessUsersPage() {
   const [, setLocation] = useLocation();
-  
+  const { toast } = useToast();
+  const [selectedUser, setSelectedUser] = useState<BusinessUser | null>(null);
+
   usePageHeader("Business Users Overview", "Business users, contractors, and agencies by country");
+
+  const resendVerificationMutation = useMutation({
+    mutationFn: async (email: string) =>
+      apiRequest('POST', '/api/resend-verification', { email }),
+    onSuccess: () => {
+      toast({
+        title: "Verification email sent",
+        description: "If the account is unverified, a new verification email has been sent.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to resend",
+        description: error?.message || "Could not resend verification email.",
+        variant: "destructive",
+      });
+    },
+  });
 
   const { data: currentUser } = useQuery({
     queryKey: ["/api/auth/user"],
@@ -208,34 +236,55 @@ export default function BusinessUsersPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
-                          <Badge 
+                          <Badge
                             variant={user.isActive ? "default" : "secondary"}
                             data-testid={`badge-status-${user.id}`}
                           >
                             {user.isActive ? "Active" : "Inactive"}
                           </Badge>
-                          <Badge 
+                          {user.emailVerified ? (
+                            <Badge variant="outline" className="text-green-700 border-green-300 bg-green-50">
+                              <CheckCircle2 className="w-3 h-3 mr-1" /> Verified
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-orange-700 border-orange-300 bg-orange-50">
+                              <XCircle className="w-3 h-3 mr-1" /> Unverified
+                            </Badge>
+                          )}
+                          <Badge
                             variant="outline"
                             data-testid={`badge-type-${user.id}`}
                           >
-                            {user.userType === 'business_user' ? 'Business User' : 
-                             user.userType === 'worker' ? 'Worker' : 
+                            {user.userType === 'business_user' ? 'Business User' :
+                             user.userType === 'worker' ? 'Worker' :
                              user.userType === 'third_party_business' ? 'Third Party' : user.userType}
                           </Badge>
-                          <Button 
-                            variant="ghost" 
+                          {!user.emailVerified && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => resendVerificationMutation.mutate(user.email)}
+                              disabled={resendVerificationMutation.isPending}
+                              data-testid={`button-resend-verification-${user.id}`}
+                            >
+                              <Send className="w-4 h-4 mr-1" />
+                              {resendVerificationMutation.isPending ? "Sending..." : "Resend"}
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
                             size="sm"
-                            onClick={() => setLocation(`/user-management?country=${countryData.country?.id || 'unknown'}`)}
+                            onClick={() => setSelectedUser(user)}
                             data-testid={`button-view-details-${user.id}`}
                           >
-                            <ExternalLink className="w-4 h-4" />
+                            <Eye className="w-4 h-4 mr-1" /> View Details
                           </Button>
                         </div>
                       </div>
                     ))
                   ) : (
                     <div className="text-center py-8 text-gray-500">
-                      No business users found in {countryData.country.name}
+                      No business users found in {countryData.country?.name || 'this country'}
                     </div>
                   )}
                 </div>
@@ -254,6 +303,99 @@ export default function BusinessUsersPage() {
           </Card>
         )}
       </div>
+
+      <Dialog open={!!selectedUser} onOpenChange={(open) => !open && setSelectedUser(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Business User Details</DialogTitle>
+            <DialogDescription>Full details about this business user.</DialogDescription>
+          </DialogHeader>
+          {selectedUser && (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-3 gap-2">
+                <span className="text-gray-500">Name</span>
+                <span className="col-span-2 font-medium">{selectedUser.firstName} {selectedUser.lastName}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <span className="text-gray-500">Email</span>
+                <span className="col-span-2 font-medium break-all">{selectedUser.email}</span>
+              </div>
+              {selectedUser.phoneNumber && (
+                <div className="grid grid-cols-3 gap-2">
+                  <span className="text-gray-500">Phone</span>
+                  <span className="col-span-2 font-medium">{selectedUser.phoneNumber}</span>
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-2">
+                <span className="text-gray-500">User Type</span>
+                <span className="col-span-2 font-medium">
+                  {selectedUser.userType === 'business_user' ? 'Business User' :
+                   selectedUser.userType === 'worker' ? 'Worker' :
+                   selectedUser.userType === 'third_party_business' ? 'Third Party' : selectedUser.userType}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <span className="text-gray-500">Status</span>
+                <span className="col-span-2">
+                  <Badge variant={selectedUser.isActive ? "default" : "secondary"}>
+                    {selectedUser.isActive ? "Active" : "Inactive"}
+                  </Badge>
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <span className="text-gray-500">Email Verified</span>
+                <span className="col-span-2">
+                  {selectedUser.emailVerified ? (
+                    <Badge variant="outline" className="text-green-700 border-green-300 bg-green-50">
+                      <CheckCircle2 className="w-3 h-3 mr-1" /> Verified
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-orange-700 border-orange-300 bg-orange-50">
+                      <XCircle className="w-3 h-3 mr-1" /> Unverified
+                    </Badge>
+                  )}
+                </span>
+              </div>
+              {selectedUser.business && (
+                <div className="grid grid-cols-3 gap-2">
+                  <span className="text-gray-500">Business</span>
+                  <span className="col-span-2 font-medium">{selectedUser.business.name}</span>
+                </div>
+              )}
+              {selectedUser.country && (
+                <div className="grid grid-cols-3 gap-2">
+                  <span className="text-gray-500">Country</span>
+                  <span className="col-span-2 font-medium">{selectedUser.country.name} ({selectedUser.country.code})</span>
+                </div>
+              )}
+              {selectedUser.createdAt && (
+                <div className="grid grid-cols-3 gap-2">
+                  <span className="text-gray-500">Joined</span>
+                  <span className="col-span-2 font-medium">{new Date(selectedUser.createdAt).toLocaleString()}</span>
+                </div>
+              )}
+              {selectedUser.lastLoginAt && (
+                <div className="grid grid-cols-3 gap-2">
+                  <span className="text-gray-500">Last Login</span>
+                  <span className="col-span-2 font-medium">{new Date(selectedUser.lastLoginAt).toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            {selectedUser && !selectedUser.emailVerified && (
+              <Button
+                onClick={() => resendVerificationMutation.mutate(selectedUser.email)}
+                disabled={resendVerificationMutation.isPending}
+              >
+                <Mail className="w-4 h-4 mr-2" />
+                {resendVerificationMutation.isPending ? "Sending..." : "Resend Verification Email"}
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setSelectedUser(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

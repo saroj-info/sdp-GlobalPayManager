@@ -93,11 +93,23 @@ export default function Login() {
         }
       } else {
         const error = await response.json();
-        toast({
-          title: "Login Failed",
-          description: error.message || "Invalid credentials",
-          variant: "destructive",
-        });
+        if (response.status === 403 && error.requiresEmailVerification) {
+          toast({
+            title: "Account unverified",
+            description: "Please verify your email address before logging in. Check your inbox for the verification link.",
+            variant: "destructive",
+          });
+          setVerificationMessage({
+            type: 'error',
+            text: 'Account unverified. Please check your inbox for the verification email, or request a new one.'
+          });
+        } else {
+          toast({
+            title: "Login Failed",
+            description: error.message || "Invalid credentials",
+            variant: "destructive",
+          });
+        }
       }
     } catch (error) {
       toast({

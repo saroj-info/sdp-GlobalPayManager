@@ -13,9 +13,20 @@ import { useQuery } from "@tanstack/react-query";
 export default function Signup() {
   const [, setLocation] = useLocation();
   
-  const { data: countries = [] } = useQuery<any[]>({
+  const { data: rawCountries = [] } = useQuery<any[]>({
     queryKey: ["/api/countries"],
   });
+
+  // Deduplicate countries by code (case-insensitive) to avoid showing the same country twice
+  const countries = (() => {
+    const seen = new Set<string>();
+    return rawCountries.filter((c: any) => {
+      const key = (c?.code || c?.name || '').toString().toUpperCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  })();
 
   const countryCount = countries.length || 10; // fallback to 10
   
@@ -633,9 +644,9 @@ export default function Signup() {
                             />
                             <Label htmlFor="terms" className="text-sm text-secondary-600 leading-relaxed">
                               I agree to the{" "}
-                              <a href="#" className="text-primary-600 hover:underline">Terms of Service</a>
+                              <a href="/terms-of-service" target="_blank" className="text-primary-600 hover:underline">Terms of Service</a>
                               {" "}and{" "}
-                              <a href="#" className="text-primary-600 hover:underline">Privacy Policy</a>
+                              <a href="/privacy-policy" target="_blank" className="text-primary-600 hover:underline">Privacy Policy</a>
                             </Label>
                           </div>
 
@@ -715,9 +726,9 @@ export default function Signup() {
                           />
                           <Label htmlFor="terms" className="text-sm text-secondary-600 leading-relaxed">
                             I agree to the{" "}
-                            <a href="#" className="text-primary-600 hover:underline">Terms of Service</a>
+                            <a href="/terms-of-service" target="_blank" className="text-primary-600 hover:underline">Terms of Service</a>
                             {" "}and{" "}
-                            <a href="#" className="text-primary-600 hover:underline">Privacy Policy</a>
+                            <a href="/privacy-policy" target="_blank" className="text-primary-600 hover:underline">Privacy Policy</a>
                           </Label>
                         </div>
 

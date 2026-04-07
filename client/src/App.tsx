@@ -46,6 +46,8 @@ import NewClientInvoice from "@/pages/new-client-invoice";
 import InvoiceView from "@/pages/invoice-view";
 import PurchaseOrders from "@/pages/purchase-orders";
 import NotFound from "@/pages/not-found";
+import TermsOfService from "@/pages/terms-of-service";
+import PrivacyPolicy from "@/pages/privacy-policy";
 
 // Loading skeleton component
 function AuthLoadingSkeleton() {
@@ -98,6 +100,8 @@ function Router() {
       <Route path="/invite/business/:token" component={AcceptBusinessInvitation} />
       <Route path="/invite/:token" component={AcceptSdpInvite} />
       <Route path="/invoice/view/:token" component={InvoiceView} />
+      <Route path="/terms-of-service" component={TermsOfService} />
+      <Route path="/privacy-policy" component={PrivacyPolicy} />
       
       {/* Protected routes - require auth to be ready */}
       <Route path="/" component={() => {
