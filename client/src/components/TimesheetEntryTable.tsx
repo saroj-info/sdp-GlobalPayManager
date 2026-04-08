@@ -286,7 +286,7 @@ function HourlyEntryRow({
 
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-[1fr_80px_60px_80px_auto] gap-2 items-end">
+      <div className="grid grid-cols-[1.4fr_70px_1.4fr_80px_auto] gap-2 items-end">
         {/* Start time */}
         <div className="space-y-1">
           {idx === 0 && <p className="text-xs text-muted-foreground">Start</p>}

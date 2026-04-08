@@ -139,6 +139,7 @@ export function VariableHelper({ onVariableSelect, compact = false }: VariableHe
                 group.variables.map(variable => (
                   <Button
                     key={variable.name}
+                    type="button"
                     variant="ghost"
                     size="sm"
                     className="justify-start h-auto p-1 text-xs"
@@ -181,51 +182,57 @@ export function VariableHelper({ onVariableSelect, compact = false }: VariableHe
                 onOpenChange={() => toggleGroup(group.category)}
               >
                 <CollapsibleTrigger asChild>
-                  <Button 
-                    variant="ghost" 
-                    className="w-full justify-between p-3 h-auto"
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="w-full justify-between p-3 h-auto whitespace-normal text-left"
                     data-testid={`group-${group.category.toLowerCase().replace(/\s+/g, '-')}`}
                   >
-                    <div className="flex items-center gap-3">
-                      <Icon className="h-4 w-4" />
-                      <div className="text-left">
-                        <div className="font-medium">{group.category}</div>
-                        <div className="text-xs text-muted-foreground">{group.description}</div>
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <Icon className="h-4 w-4 flex-shrink-0" />
+                      <div className="text-left min-w-0 flex-1">
+                        <div className="font-medium break-words">{group.category}</div>
+                        <div className="text-xs text-muted-foreground break-words whitespace-normal">{group.description}</div>
                       </div>
                     </div>
                     {isOpen ? (
-                      <ChevronDown className="h-4 w-4" />
+                      <ChevronDown className="h-4 w-4 flex-shrink-0 ml-2" />
                     ) : (
-                      <ChevronRight className="h-4 w-4" />
+                      <ChevronRight className="h-4 w-4 flex-shrink-0 ml-2" />
                     )}
                   </Button>
                 </CollapsibleTrigger>
                 
-                <CollapsibleContent className="pl-7 pt-2">
+                <CollapsibleContent className="pl-2 pt-2">
                   <div className="grid gap-2">
                     {group.variables.map((variable) => (
                       <div
                         key={variable.name}
-                        className="flex items-center justify-between p-2 rounded-md hover:bg-muted/50 cursor-pointer group"
-                        onClick={() => selectVariable(variable.name)}
+                        className="flex items-center justify-between gap-2 p-2 rounded-md hover:bg-muted/50 cursor-pointer group"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          selectVariable(variable.name);
+                        }}
                         data-testid={`variable-${variable.name}`}
                       >
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="font-mono text-xs">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge variant="outline" className="font-mono text-xs break-all">
                               {`{{${variable.name}}}`}
                             </Badge>
-                            <span className="text-sm font-medium">{variable.description}</span>
+                            <span className="text-sm font-medium break-words">{variable.description}</span>
                           </div>
-                          <div className="text-xs text-muted-foreground mt-1">
+                          <div className="text-xs text-muted-foreground mt-1 break-words">
                             Example: {variable.example}
                           </div>
                         </div>
                         <Button
+                          type="button"
                           variant="ghost"
                           size="sm"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 h-7 w-7 p-0"
                           onClick={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
                             copyVariable(variable.name);
                           }}

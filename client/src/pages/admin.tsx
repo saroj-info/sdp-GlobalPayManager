@@ -763,13 +763,13 @@ export default function AdminPage() {
                   Add Template
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
+              <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                <DialogHeader className="pr-8">
                   <DialogTitle>
                     {editingTemplate ? "Edit Contract Template" : "Create New Contract Template"}
                   </DialogTitle>
                   <DialogDescription>
-                    {editingTemplate 
+                    {editingTemplate
                       ? "Update the contract template details and content."
                       : "Create a new contract template that can be assigned to countries and employment types."
                     }
@@ -778,7 +778,7 @@ export default function AdminPage() {
 
                 <Form {...form}>
                   <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
                       {/* Left Column: Form Fields */}
                       <div className="lg:col-span-2 space-y-4">
                     <div className="grid grid-cols-2 gap-4">

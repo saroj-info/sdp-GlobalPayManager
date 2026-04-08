@@ -2860,25 +2860,49 @@ ${lines.map(line => `    <tr>
       }
     }
 
+    // Pre-compute reusable strings
+    const contractorFullName = `${worker.firstName} ${worker.lastName}`;
+    const contractorAddressStr = `${worker.streetAddress || ''}, ${worker.suburb || ''}, ${worker.state || ''} ${worker.postcode || ''}`.trim().replace(/^,\s*|,\s*$/g, '');
+    const sdpAddressStr = `${(country as any).streetAddress || ''}, ${(country as any).city || ''}, ${(country as any).stateProvince || ''} ${(country as any).postalCode || ''}`.trim().replace(/^,\s*|,\s*$/g, '');
+    const dob = (worker as any).dateOfBirth ? new Date((worker as any).dateOfBirth).toLocaleDateString() : '';
+
     // Merge all template variables
     const variables: Record<string, string> = {
       // Agreement details
       agreementDate: contractData.agreementDate || new Date().toLocaleDateString(),
-      
+
       // Business information
       businessName: business.name,
       businessAddress: contractData.businessAddress || '',
       businessRegistrationNumber: contractData.businessRegistrationNumber || '',
       businessTaxId: contractData.businessTaxId || '',
-      businessContactEmail: contractData.businessContactEmail || '',
+      businessAbn: contractData.businessAbn || contractData.businessRegistrationNumber || '',
+      businessContactEmail: contractData.businessContactEmail || (business as any).contactEmail || '',
       businessContactPhone: contractData.businessContactPhone || '',
-      
-      // Contractor information
-      contractorName: `${worker.firstName} ${worker.lastName}`,
-      contractorAddress: `${worker.streetAddress || ''}, ${worker.suburb || ''}, ${worker.state || ''} ${worker.postcode || ''}`.trim(),
+      businessEmail: contractData.businessContactEmail || (business as any).contactEmail || '',
+      businessPhone: contractData.businessContactPhone || '',
+      businessContactPerson: contractData.businessContactPerson || (business as any).contactName || '',
+      businessContactTitle: contractData.businessContactTitle || '',
+
+      // Contractor information (canonical)
+      contractorName: contractorFullName,
+      contractorAddress: contractorAddressStr,
       contractorEmail: worker.email,
       contractorBusinessName: worker.businessName || '',
-      
+
+      // Worker aliases (match Variable Helper UI labels)
+      workerName: contractorFullName,
+      workerFirstName: worker.firstName,
+      workerLastName: worker.lastName,
+      workerEmail: worker.email,
+      workerPhone: (worker as any).phoneNumber || '',
+      workerAddress: contractorAddressStr,
+      workerDateOfBirth: dob,
+      workerTaxFileNumber: (worker as any).taxFileNumber || (worker as any).ssn || (worker as any).niNumber || (worker as any).irdNumber || (worker as any).sin || '',
+      workerBankName: (worker as any).bankName || '',
+      workerBankAccount: (worker as any).accountNumber || '',
+      workerBsb: (worker as any).bsb || '',
+
       // Service details
       serviceDescription: contractData.serviceDescription || '',
       startDate: contractData.startDate || '',
@@ -2886,11 +2910,22 @@ ${lines.map(line => `    <tr>
       rateAmount: contractData.rateAmount || '',
       rateCurrency: contractData.rateCurrency || country.currency,
       rateType: contractData.rateType || 'hour',
-      
+
+      // Contract aliases (match Variable Helper UI labels)
+      contractTitle: contractData.contractTitle || contractData.serviceDescription || '',
+      contractType: contractData.contractType || contractData.employmentType || '',
+      salaryAmount: contractData.rateAmount || '',
+      currency: contractData.rateCurrency || country.currency,
+      workLocation: contractData.workLocation || '',
+      reportingManager: contractData.reportingManager || '',
+      department: contractData.department || '',
+      probationPeriod: contractData.probationPeriod || '',
+      holidayEntitlement: contractData.holidayEntitlement || '',
+
       // Notice period
       noticePeriod: noticePeriod,
       noticePeriodDays: noticePeriodDays,
-      
+
       // Remuneration details
       remunerationLines: remunerationLines,
       remunerationLinesTable: remunerationLinesTable,
@@ -2898,14 +2933,24 @@ ${lines.map(line => `    <tr>
       bonus: bonus,
       commission: commission,
       allowance: allowance,
-      
-      // SDP Entity details (from country where business operates)
+
+      // SDP Entity details (from country where business operates) - canonical
       sdpEntityName: country.companyName,
       sdpRegistrationNumber: country.companyRegistrationNumber || '',
-      sdpAddress: `${country.streetAddress || ''}, ${country.city || ''}, ${country.stateProvince || ''} ${country.postalCode || ''}`.trim(),
-      sdpTaxId: country.taxIdentificationNumber || '',
+      sdpAddress: sdpAddressStr,
+      sdpTaxId: (country as any).taxIdentificationNumber || '',
       sdpCountry: country.name,
-      
+
+      // SDP Entity aliases (match Variable Helper UI labels)
+      sdpEntityAddress: sdpAddressStr,
+      sdpEntityTaxId: (country as any).taxIdentificationNumber || '',
+      sdpEntityVatNumber: (country as any).vatGstRegistrationNumber || '',
+      sdpEntityPhone: (country as any).phoneNumber || '',
+      sdpEntityEmail: (country as any).email || '',
+      sdpEntityBankName: (country as any).bankName || '',
+      sdpEntityBankAccount: (country as any).bankAccountNumber || '',
+      sdpEntitySwiftCode: (country as any).swiftBicCode || '',
+
       // Legal jurisdiction (default to business country, can be overridden)
       governingLaw: contractData.governingLaw || `the laws of ${country.name}`,
       disputeVenue: contractData.disputeVenue || country.name,
