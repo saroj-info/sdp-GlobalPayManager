@@ -237,9 +237,16 @@ export default function Workforce() {
                           <span className="text-sm font-medium">{worker.country.name}</span>
                         </div>
                         <div className="flex items-center">
-                          <i className={`fas ${worker.invitationSent ? 'fa-check-circle text-green-500' : 'fa-clock text-yellow-500'} mr-2`}></i>
+                          <i className={`fas ${
+                            worker.onboardingCompleted ? 'fa-user-check text-green-600' :
+                            worker.userId ? 'fa-user-clock text-blue-500' :
+                            worker.invitationSent ? 'fa-envelope text-yellow-500' :
+                            'fa-clock text-gray-400'
+                          } mr-2`}></i>
                           <span className="text-sm">
-                            {worker.invitationSent ? 'Invited' : 'Pending'}
+                            {worker.onboardingCompleted ? 'Active' :
+                             worker.userId ? 'Accepted' :
+                             worker.invitationSent ? 'Invited' : 'Pending'}
                           </span>
                         </div>
                       </div>
@@ -338,9 +345,16 @@ export default function Workforce() {
                         )}
                         <TableCell>
                           <div className="flex items-center">
-                            <i className={`fas ${worker.invitationSent ? 'fa-check-circle text-green-500' : 'fa-clock text-yellow-500'} mr-2`}></i>
+                            <i className={`fas ${
+                              worker.onboardingCompleted ? 'fa-user-check text-green-600' :
+                              worker.userId ? 'fa-user-clock text-blue-500' :
+                              worker.invitationSent ? 'fa-envelope text-yellow-500' :
+                              'fa-clock text-gray-400'
+                            } mr-2`}></i>
                             <span className="text-sm">
-                              {worker.invitationSent ? 'Invited' : 'Pending'}
+                              {worker.onboardingCompleted ? 'Active' :
+                               worker.userId ? 'Accepted' :
+                               worker.invitationSent ? 'Invited' : 'Pending'}
                             </span>
                           </div>
                         </TableCell>

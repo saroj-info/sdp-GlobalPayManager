@@ -1441,6 +1441,11 @@ export class DatabaseStorage implements IStorage {
     return worker;
   }
 
+  async getWorkerByEmail(email: string): Promise<Worker | undefined> {
+    const [worker] = await db.select().from(workers).where(eq(workers.email, email));
+    return worker;
+  }
+
   async updateWorkerProfile(workerId: string, updates: Partial<Worker>): Promise<Worker> {
     const [updated] = await db
       .update(workers)

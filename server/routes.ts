@@ -4835,8 +4835,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         targetBusinessId = business.id;
       }
       
+      // Check if a worker with this email already exists
+      const workerEmail = workerData.email?.trim()?.toLowerCase();
+      if (workerEmail) {
+        const existingWorker = await storage.getWorkerByEmail(workerEmail);
+        if (existingWorker) {
+          return res.status(400).json({ message: "A worker with this email already exists" });
+        }
+      }
+
       let thirdPartyBusinessId = null;
-      
+
       // Handle third-party worker creation
       if (workerType === 'third_party_worker') {
         const {
