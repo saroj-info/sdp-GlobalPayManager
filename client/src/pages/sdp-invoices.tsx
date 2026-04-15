@@ -74,6 +74,25 @@ interface SdpInvoice {
     firstName: string;
     lastName: string;
   };
+  contract?: {
+    id: string;
+    jobTitle: string;
+    rateType: string;
+    rate: string;
+    currency: string;
+    status: string;
+    startDate?: string;
+    endDate?: string;
+  } | null;
+  timesheet?: {
+    id: string;
+    periodStart: string;
+    periodEnd: string;
+    totalHours: string;
+    totalDays?: string;
+    status: string;
+    workerName?: string;
+  } | null;
 }
 
 const statusColors = {
@@ -660,6 +679,8 @@ export default function SdpInvoices() {
                     <TableHead>Invoice #</TableHead>
                     <TableHead>Business</TableHead>
                     <TableHead>Worker</TableHead>
+                    <TableHead>Contract</TableHead>
+                    <TableHead>Timesheet</TableHead>
                     <TableHead>SDP Entity</TableHead>
                     <TableHead>Amount</TableHead>
                     <TableHead>Due Date</TableHead>
@@ -680,6 +701,27 @@ export default function SdpInvoices() {
                         </TableCell>
                         <TableCell className="text-sm">{invoice.toBusiness?.name || '—'}</TableCell>
                         <TableCell className="text-sm">{(invoice as any).workerName || '—'}</TableCell>
+                        <TableCell className="text-sm">
+                          {invoice.contract ? (
+                            <div>
+                              <div className="font-medium">{invoice.contract.jobTitle || '—'}</div>
+                              {invoice.contract.rate && (
+                                <div className="text-xs text-gray-500">{invoice.contract.currency} {invoice.contract.rate}/{invoice.contract.rateType}</div>
+                              )}
+                            </div>
+                          ) : '—'}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {invoice.timesheet ? (
+                            <div>
+                              <div>{new Date(invoice.timesheet.periodStart).toLocaleDateString()} - {new Date(invoice.timesheet.periodEnd).toLocaleDateString()}</div>
+                              <div className="text-xs text-gray-500">
+                                {invoice.timesheet.totalHours ? `${parseFloat(invoice.timesheet.totalHours).toFixed(1)}h` : ''}
+                                {invoice.timesheet.totalDays ? ` / ${parseFloat(invoice.timesheet.totalDays).toFixed(1)}d` : ''}
+                              </div>
+                            </div>
+                          ) : '—'}
+                        </TableCell>
                         <TableCell className="text-sm">{invoice.fromCountry?.name || '—'}</TableCell>
                         <TableCell className="text-sm font-medium">{invoice.currency} {parseFloat(invoice.totalAmount).toFixed(2)}</TableCell>
                         <TableCell className="text-sm">{new Date(invoice.dueDate).toLocaleDateString()}</TableCell>
@@ -805,6 +847,34 @@ export default function SdpInvoices() {
                           <div className="flex justify-between text-sm">
                             <span className="text-secondary-600">Worker:</span>
                             <span>{invoice.workerName}</span>
+                          </div>
+                        )}
+
+                        {invoice.contract && (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-secondary-600">Contract:</span>
+                            <span className="text-right">
+                              {invoice.contract.jobTitle || 'N/A'}
+                              {invoice.contract.rate && (
+                                <span className="text-xs text-gray-500 ml-1">
+                                  ({invoice.contract.currency} {invoice.contract.rate}/{invoice.contract.rateType})
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        )}
+
+                        {invoice.timesheet && (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-secondary-600">Timesheet:</span>
+                            <span className="text-right">
+                              {formatDate(invoice.timesheet.periodStart)} - {formatDate(invoice.timesheet.periodEnd)}
+                              {invoice.timesheet.totalHours && (
+                                <span className="text-xs text-gray-500 ml-1">
+                                  ({parseFloat(invoice.timesheet.totalHours).toFixed(1)}h)
+                                </span>
+                              )}
+                            </span>
                           </div>
                         )}
 

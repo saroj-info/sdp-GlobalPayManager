@@ -7473,15 +7473,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
         invoices = await storage.getAllSdpInvoices();
       }
       
-      // Attach line items to all invoices
-      const invoicesWithLineItems = await Promise.all(
-        invoices.map(async (inv) => ({
-          ...inv,
-          lineItems: await storage.getSdpInvoiceLineItems(inv.id),
-        }))
+      // Attach line items, contract info, and timesheet info to all invoices
+      const enrichedInvoices = await Promise.all(
+        invoices.map(async (inv) => {
+          const lineItems = await storage.getSdpInvoiceLineItems(inv.id);
+          let contract = null;
+          if (inv.contractId) {
+            const c = await storage.getContractById(inv.contractId);
+            if (c) {
+              contract = {
+                id: c.id,
+                jobTitle: (c as any).jobTitle || (c as any).roleDescription || '',
+                rateType: (c as any).rateType || '',
+                rate: (c as any).rate || '',
+                currency: (c as any).currency || '',
+                status: (c as any).status || '',
+                startDate: (c as any).startDate || null,
+                endDate: (c as any).endDate || null,
+              };
+            }
+          }
+          let timesheet = null;
+          if (inv.timesheetId) {
+            const ts = await storage.getTimesheetById(inv.timesheetId);
+            if (ts) {
+              timesheet = {
+                id: ts.id,
+                periodStart: ts.periodStart,
+                periodEnd: ts.periodEnd,
+                totalHours: ts.totalHours,
+                totalDays: (ts as any).totalDays || null,
+                status: ts.status,
+                workerName: ts.worker ? `${ts.worker.firstName} ${ts.worker.lastName}` : undefined,
+              };
+            }
+          }
+          return { ...inv, lineItems, contract, timesheet };
+        })
       );
-      
-      res.json(invoicesWithLineItems);
+
+      res.json(enrichedInvoices);
     } catch (error) {
       console.error('Error fetching SDP invoices:', error);
       res.status(500).json({ message: 'Failed to fetch SDP invoices' });
@@ -7507,16 +7538,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get SDP invoices sent to this business
       const invoices = await storage.getSdpInvoicesByBusiness(business.id);
-      
-      // Attach line items to all invoices
-      const invoicesWithLineItems = await Promise.all(
-        invoices.map(async (inv) => ({
-          ...inv,
-          lineItems: await storage.getSdpInvoiceLineItems(inv.id),
-        }))
+
+      // Attach line items, contract info, and timesheet info
+      const enrichedInvoices = await Promise.all(
+        invoices.map(async (inv) => {
+          const lineItems = await storage.getSdpInvoiceLineItems(inv.id);
+          let contract = null;
+          if (inv.contractId) {
+            const c = await storage.getContractById(inv.contractId);
+            if (c) {
+              contract = {
+                id: c.id,
+                jobTitle: (c as any).jobTitle || (c as any).roleDescription || '',
+                rateType: (c as any).rateType || '',
+                rate: (c as any).rate || '',
+                currency: (c as any).currency || '',
+                status: (c as any).status || '',
+                startDate: (c as any).startDate || null,
+                endDate: (c as any).endDate || null,
+              };
+            }
+          }
+          let timesheet = null;
+          if (inv.timesheetId) {
+            const ts = await storage.getTimesheetById(inv.timesheetId);
+            if (ts) {
+              timesheet = {
+                id: ts.id,
+                periodStart: ts.periodStart,
+                periodEnd: ts.periodEnd,
+                totalHours: ts.totalHours,
+                totalDays: (ts as any).totalDays || null,
+                status: ts.status,
+                workerName: ts.worker ? `${ts.worker.firstName} ${ts.worker.lastName}` : undefined,
+              };
+            }
+          }
+          return { ...inv, lineItems, contract, timesheet };
+        })
       );
-      
-      res.json(invoicesWithLineItems);
+
+      res.json(enrichedInvoices);
     } catch (error) {
       console.error('Error fetching business SDP invoices:', error);
       res.status(500).json({ message: 'Failed to fetch SDP invoices' });
