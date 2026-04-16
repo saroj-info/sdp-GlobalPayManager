@@ -3373,6 +3373,7 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
     let sortIdx = 1;
     for (const bl of activeBillingLines) {
       let blAmount = 0;
+      const blCurrency = bl.currency || contract.currency;
       if (bl.lineType === 'percentage_of_pay') {
         blAmount = subtotal * (parseFloat(bl.rate || '0') / 100);
       } else if (bl.lineType === 'fixed_percentage') {
@@ -3381,8 +3382,9 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
         blAmount = parseFloat(bl.amount || bl.rate || '0');
       }
       billingLinesTotal += blAmount;
+      const currencyLabel = blCurrency !== contract.currency ? ` (${blCurrency})` : '';
       lineItems.push({
-        description: bl.description,
+        description: `${bl.description}${currencyLabel}`,
         quantity: '1',
         unitPrice: blAmount.toFixed(2),
         amount: blAmount.toFixed(2),

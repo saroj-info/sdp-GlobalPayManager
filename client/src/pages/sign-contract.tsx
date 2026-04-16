@@ -63,9 +63,12 @@ export default function SignContract() {
     onSuccess: () => {
       toast({
         title: "Contract Signed Successfully",
-        description: "Your contract has been signed and recorded. You will receive a confirmation email shortly.",
+        description: "Your contract has been signed and recorded. Redirecting to login...",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/contracts/sign", token] });
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 2000);
     },
     onError: (error) => {
       toast({

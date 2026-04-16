@@ -167,6 +167,26 @@ function SdpBillingLinesPanel({ contractId }: { contractId: string }) {
             <Input value={form.rate} onChange={e => { setForm({ ...form, rate: e.target.value }); setValidationError(''); }} placeholder={form.lineType === 'fixed_amount' ? '500.00' : '0.15'} className="h-8 text-sm" />
           </div>
           <div>
+            <label className="text-xs font-medium text-gray-600 mb-1 block">Currency</label>
+            <Select value={form.currency || 'USD'} onValueChange={v => setForm({ ...form, currency: v })}>
+              <SelectTrigger className="h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="AUD">AUD</SelectItem>
+                <SelectItem value="NZD">NZD</SelectItem>
+                <SelectItem value="USD">USD</SelectItem>
+                <SelectItem value="GBP">GBP</SelectItem>
+                <SelectItem value="SGD">SGD</SelectItem>
+                <SelectItem value="CAD">CAD</SelectItem>
+                <SelectItem value="EUR">EUR</SelectItem>
+                <SelectItem value="INR">INR</SelectItem>
+                <SelectItem value="PHP">PHP</SelectItem>
+                <SelectItem value="JPY">JPY</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
             <label className="text-xs font-medium text-gray-600 mb-1 block">Frequency</label>
             <Select value={form.frequency} onValueChange={v => setForm({ ...form, frequency: v })}>
               <SelectTrigger className="h-8 text-sm">

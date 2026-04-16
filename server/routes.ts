@@ -5983,9 +5983,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/contracts/:id/billing-lines/:lineId', authMiddleware, sdpOnlyMiddleware, async (req: any, res) => {
     try {
       const { lineId } = req.params;
-      const line = await storage.updateContractBillingLine(lineId, req.body);
+      const { id, contractId, createdAt, updatedAt, ...updates } = req.body;
+      const line = await storage.updateContractBillingLine(lineId, updates);
       res.json(line);
     } catch (error) {
+      console.error("Error updating billing line:", error);
       res.status(500).json({ message: "Failed to update billing line" });
     }
   });
