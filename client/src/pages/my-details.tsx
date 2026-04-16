@@ -1001,10 +1001,22 @@ export default function MyDetailsPage() {
                               name="businessEmail"
                               render={({ field }) => (
                                 <FormItem>
-                                  <FormLabel>Business Email</FormLabel>
+                                  <div className="flex items-center justify-between">
+                                    <FormLabel>Business Email</FormLabel>
+                                    {editingSection === 'business' && (
+                                      <button
+                                        type="button"
+                                        className="text-xs text-primary hover:underline"
+                                        onClick={() => businessForm.setValue('businessEmail', personalForm.getValues('email') || '', { shouldValidate: true, shouldDirty: true })}
+                                        data-testid="button-same-email"
+                                      >
+                                        Same as personal
+                                      </button>
+                                    )}
+                                  </div>
                                   <FormControl>
-                                    <Input 
-                                      {...field} 
+                                    <Input
+                                      {...field}
                                       type="email"
                                       disabled={editingSection !== 'business'}
                                       data-testid="input-business-email"
@@ -1055,10 +1067,26 @@ export default function MyDetailsPage() {
                             name="businessAddress"
                             render={({ field }) => (
                               <FormItem>
-                                <FormLabel>Business Address</FormLabel>
+                                <div className="flex items-center justify-between">
+                                  <FormLabel>Business Address</FormLabel>
+                                  {editingSection === 'business' && (
+                                    <button
+                                      type="button"
+                                      className="text-xs text-primary hover:underline"
+                                      onClick={() => {
+                                        const p = personalForm.getValues();
+                                        const parts = [p.streetAddress, p.suburb, p.state, p.postcode].filter(Boolean);
+                                        businessForm.setValue('businessAddress', parts.join(', '), { shouldValidate: true, shouldDirty: true });
+                                      }}
+                                      data-testid="button-same-address"
+                                    >
+                                      Same as personal
+                                    </button>
+                                  )}
+                                </div>
                                 <FormControl>
-                                  <Textarea 
-                                    {...field} 
+                                  <Textarea
+                                    {...field}
                                     disabled={editingSection !== 'business'}
                                     data-testid="input-business-address"
                                   />

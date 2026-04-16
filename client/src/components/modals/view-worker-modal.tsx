@@ -154,11 +154,16 @@ export function ViewWorkerModal({ open, onOpenChange, worker, currentUserType }:
   };
 
   const getInvitationStatus = () => {
-    if (worker.invitationSent) {
-      return { label: 'Invitation Sent', color: 'text-green-600', icon: CheckCircle };
-    } else {
-      return { label: 'Pending Invitation', color: 'text-yellow-600', icon: Clock };
+    if (worker.onboardingCompleted) {
+      return { label: 'Active', color: 'text-green-600', icon: CheckCircle };
     }
+    if (worker.userId) {
+      return { label: 'Accepted', color: 'text-blue-600', icon: CheckCircle };
+    }
+    if (worker.invitationSent) {
+      return { label: 'Invited', color: 'text-yellow-600', icon: Send };
+    }
+    return { label: 'Pending Invitation', color: 'text-gray-500', icon: Clock };
   };
 
   const canChangeEngagementType =

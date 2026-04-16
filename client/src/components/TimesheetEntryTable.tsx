@@ -6,7 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Trash2, Clock, CheckCircle } from "lucide-react";
+import { Plus, Trash2, Clock, CheckCircle, Copy } from "lucide-react";
 
 export interface TimesheetEntryValue {
   date: string;
@@ -164,18 +164,56 @@ export function TimesheetEntryTable({
                   </Badge>
                 )}
               </div>
-              {rateType !== "annual" && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs text-primary hover:text-primary"
-                  onClick={() => addEntry(dateStr)}
-                >
-                  <Plus className="h-3 w-3 mr-1" />
-                  Add Entry
-                </Button>
-              )}
+              <div className="flex items-center gap-1">
+                {rateType === "hourly" && date.getDay() === 1 && dayEntries.length > 0 && dayEntries[0].startTime && dayEntries[0].endTime && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-primary hover:text-primary"
+                    title="Copy this day's hours to Tue–Fri"
+                    onClick={() => {
+                      const src = dayEntries[0];
+                      const next = [...entries];
+                      for (let offset = 1; offset <= 4; offset++) {
+                        const target = new Date(date);
+                        target.setDate(date.getDate() + offset);
+                        const tStr = format(target, "yyyy-MM-dd");
+                        const filtered = next.filter((e) => e.date !== tStr);
+                        const h = calcHours(src.startTime || "", src.endTime || "", src.breakHours || "");
+                        filtered.push({
+                          date: tStr,
+                          startTime: src.startTime,
+                          endTime: src.endTime,
+                          breakHours: src.breakHours,
+                          hoursWorked: h > 0 ? String(h) : "",
+                          description: src.description,
+                          projectRateLineId: src.projectRateLineId,
+                        });
+                        next.length = 0;
+                        next.push(...filtered);
+                      }
+                      onChange(next);
+                    }}
+                    data-testid="button-copy-down"
+                  >
+                    <Copy className="h-3 w-3 mr-1" />
+                    Copy to Tue–Fri
+                  </Button>
+                )}
+                {rateType !== "annual" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-primary hover:text-primary"
+                    onClick={() => addEntry(dateStr)}
+                  >
+                    <Plus className="h-3 w-3 mr-1" />
+                    Add Entry
+                  </Button>
+                )}
+              </div>
             </div>
 
             {/* Entry rows */}

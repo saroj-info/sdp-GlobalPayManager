@@ -1134,7 +1134,14 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                 </Label>
                 <RadioGroup
                   value={formData.countryId}
-                  onValueChange={(value) => setFormData({ ...formData, countryId: value })}
+                  onValueChange={(value) => {
+                    const c = countries.find((x: any) => x.id === value);
+                    setFormData({
+                      ...formData,
+                      countryId: value,
+                      currency: c?.currency || formData.currency,
+                    });
+                  }}
                   className="grid grid-cols-2 md:grid-cols-4 gap-3"
                   data-testid="radiogroup-country"
                 >

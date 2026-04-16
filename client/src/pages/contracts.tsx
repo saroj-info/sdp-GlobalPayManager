@@ -1126,6 +1126,104 @@ export default function ContractsPage() {
                 )}
               </div>
 
+              {/* Additional details — Worker view */}
+              {(user as any)?.userType === 'worker' && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4 p-4 border rounded-lg">
+                    {selectedContract.rateStructure && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Rate Structure</p>
+                        <p className="font-medium capitalize">{String(selectedContract.rateStructure).replace(/_/g, ' ')}</p>
+                      </div>
+                    )}
+                    {selectedContract.noticePeriodDays != null && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Notice Period</p>
+                        <p className="font-medium">{selectedContract.noticePeriodDays} days</p>
+                      </div>
+                    )}
+                    {selectedContract.requiresTimesheet !== undefined && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Timesheet Required</p>
+                        <p className="font-medium">
+                          {selectedContract.requiresTimesheet
+                            ? `Yes${selectedContract.timesheetFrequency ? ` (${selectedContract.timesheetFrequency})` : ''}`
+                            : 'No'}
+                        </p>
+                      </div>
+                    )}
+                    {selectedContract.paymentScheduleType && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Payment Schedule</p>
+                        <p className="font-medium">
+                          {selectedContract.paymentScheduleType === 'days_after'
+                            ? `${selectedContract.paymentDaysAfterPeriod ?? ''} days after period`
+                            : selectedContract.paymentScheduleType === 'fixed_day'
+                            ? `Day ${selectedContract.paymentDay ?? ''} of period`
+                            : String(selectedContract.paymentScheduleType).replace(/_/g, ' ')}
+                        </p>
+                      </div>
+                    )}
+                    {(selectedContract as any).billingMode && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Billing Mode</p>
+                        <p className="font-medium capitalize">{String((selectedContract as any).billingMode).replace(/_/g, ' ')}</p>
+                      </div>
+                    )}
+                    {(selectedContract as any).paymentTerms && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Payment Terms</p>
+                        <p className="font-medium">{(selectedContract as any).paymentTerms}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedContract.isForClient && ((selectedContract as any).clientName || (selectedContract as any).clientAddress) && (
+                    <div className="p-4 border rounded-lg">
+                      <p className="text-sm font-semibold mb-2">Client / Project</p>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        {(selectedContract as any).clientName && (
+                          <div><span className="text-muted-foreground">Client: </span><span className="font-medium">{(selectedContract as any).clientName}</span></div>
+                        )}
+                        {(selectedContract as any).clientCountry && (
+                          <div><span className="text-muted-foreground">Country: </span><span className="font-medium">{(selectedContract as any).clientCountry}</span></div>
+                        )}
+                        {(selectedContract as any).clientCity && (
+                          <div><span className="text-muted-foreground">City: </span><span className="font-medium">{(selectedContract as any).clientCity}</span></div>
+                        )}
+                        {(selectedContract as any).clientAddress && (
+                          <div className="col-span-2"><span className="text-muted-foreground">Address: </span><span className="font-medium">{(selectedContract as any).clientAddress}</span></div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {(selectedContract as any).jobDescription && (
+                    <div className="p-4 border rounded-lg">
+                      <p className="text-sm font-semibold mb-2">Job Description</p>
+                      <p className="text-sm whitespace-pre-wrap text-muted-foreground">{(selectedContract as any).jobDescription}</p>
+                    </div>
+                  )}
+
+                  {(selectedContract.signedAt || (selectedContract as any).emailSentAt || (selectedContract as any).emailViewedAt) && (
+                    <div className="p-4 border rounded-lg">
+                      <p className="text-sm font-semibold mb-2">Signature Activity</p>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        {(selectedContract as any).emailSentAt && (
+                          <div><span className="text-muted-foreground">Sent: </span><span className="font-medium">{new Date((selectedContract as any).emailSentAt).toLocaleString()}</span></div>
+                        )}
+                        {(selectedContract as any).emailViewedAt && (
+                          <div><span className="text-muted-foreground">Viewed: </span><span className="font-medium">{new Date((selectedContract as any).emailViewedAt).toLocaleString()}</span></div>
+                        )}
+                        {selectedContract.signedAt && (
+                          <div><span className="text-muted-foreground">Signed: </span><span className="font-medium">{new Date(selectedContract.signedAt).toLocaleString()}</span></div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Remuneration Lines — Gating for business users viewing pending salary contracts */}
               {(user as any)?.userType === 'business_user' && selectedContract.rateType === 'annual' && selectedContract.status === 'pending_sdp_review' && (
                 <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg">

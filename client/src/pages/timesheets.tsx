@@ -543,7 +543,15 @@ export default function Timesheets() {
 
   const CreateFormContent = () => (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+      <form
+        onSubmit={form.handleSubmit(onSubmit)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+            e.preventDefault();
+          }
+        }}
+        className="space-y-5"
+      >
         {/* Period */}
         <div className="grid grid-cols-2 gap-4">
           <FormField control={form.control} name="periodStart" render={({ field }) => (
