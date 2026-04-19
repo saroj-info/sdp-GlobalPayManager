@@ -609,6 +609,22 @@ class EmailService {
       return false;
     }
   }
+
+  async sendBgvCheckCompletionEmail(options: {
+    businessName: string;
+    businessContactEmail: string;
+    workerName: string;
+    checkLabel: string;
+    checkStatus: string;
+  }): Promise<boolean> {
+    const template = getBgvCompletionEmailTemplate(options);
+    return this.sendEmail({
+      to: options.businessContactEmail,
+      subject: template.subject,
+      html: template.html,
+      text: template.text,
+    });
+  }
 }
 
 // Email template functions for SDP Global Pay communications
@@ -1498,3 +1514,61 @@ export function getPasswordResetTemplate(firstName: string, resetLink: string): 
 
 // Export singleton instance
 export const emailService = new EmailService();
+
+function getBgvStatusLabel(status: string): string {
+  if (status === 'passed') return 'Passed';
+  if (status === 'failed') return 'Failed';
+  if (status === 'refer') return 'Refer for Review';
+  return status;
+}
+
+function getBgvStatusColor(status: string): string {
+  if (status === 'passed') return '#16a34a';
+  if (status === 'failed') return '#dc2626';
+  return '#d97706';
+}
+
+export function getBgvCompletionEmailTemplate(options: {
+  businessName: string;
+  workerName: string;
+  checkLabel: string;
+  checkStatus: string;
+}): { subject: string; html: string; text: string } {
+  const { businessName, workerName, checkLabel, checkStatus } = options;
+  const statusLabel = getBgvStatusLabel(checkStatus);
+  const statusColor = getBgvStatusColor(checkStatus);
+  return {
+    subject: `BGV Check Completed: ${checkLabel} for ${workerName}`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;font-family:Arial,sans-serif;background-color:#f4f4f4;">
+  <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;margin-top:40px;">
+    <div style="background:#0a1628;padding:24px;text-align:center;">
+      <h1 style="color:#d4af37;margin:0;font-size:22px;">SDP Global Pay</h1>
+      <p style="color:#9ca3af;margin:8px 0 0;">Background Verification Update</p>
+    </div>
+    <div style="padding:32px;">
+      <p style="color:#374151;font-size:16px;">Hello <strong>${businessName}</strong>,</p>
+      <p style="color:#374151;">A background check for one of your workers has been completed.</p>
+      <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:20px;margin:24px 0;">
+        <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Worker</p>
+        <p style="margin:0 0 16px;font-weight:bold;font-size:16px;color:#111827;">${workerName}</p>
+        <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Check</p>
+        <p style="margin:0 0 16px;font-size:15px;color:#111827;">${checkLabel}</p>
+        <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Outcome</p>
+        <span style="display:inline-block;background-color:${statusColor};color:#fff;padding:4px 12px;border-radius:9999px;font-weight:bold;font-size:14px;">${statusLabel}</span>
+      </div>
+      <p style="color:#6b7280;font-size:14px;">Log in to your SDP Global Pay dashboard to view the full report and take any necessary action.</p>
+    </div>
+    <div style="background:#f9fafb;padding:16px;text-align:center;border-top:1px solid #e5e7eb;">
+      <p style="color:#9ca3af;font-size:12px;margin:0;">SDP Global Pay &bull; Global Workforce Solutions</p>
+    </div>
+  </div>
+</body>
+</html>
+    `,
+    text: `BGV Check Completed\n\nHello ${businessName},\n\nA background check for ${workerName} has been completed.\n\nCheck: ${checkLabel}\nOutcome: ${statusLabel}\n\nLog in to your SDP Global Pay dashboard to view the full report.\n\nSDP Global Pay Team`,
+  };
+}

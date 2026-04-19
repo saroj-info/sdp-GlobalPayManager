@@ -9352,6 +9352,259 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── BGV Packs ────────────────────────────────────────────────────────────
+
+  // List packs: SDP admin gets all global packs; business user gets global + their own custom packs
+  app.get("/api/bgv-packs", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const businessId = user.userType === 'business' ? user.businessId : (req.query.businessId as string | undefined);
+      const packs = await storage.getBgvPacks(businessId);
+      res.json(packs);
+    } catch (error) {
+      console.error("Error fetching BGV packs:", error);
+      res.status(500).json({ message: "Failed to fetch BGV packs" });
+    }
+  });
+
+  app.post("/api/bgv-packs", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const { name, description, businessId, items } = req.body;
+      if (!name) return res.status(400).json({ message: "Name is required" });
+      const packBusinessId = user.userType === 'admin' ? (businessId || null) : user.businessId;
+      const pack = await storage.createBgvPack({
+        name,
+        description,
+        businessId: packBusinessId,
+        isActive: true,
+        createdByUserId: user.id,
+      });
+      if (items && Array.isArray(items) && items.length > 0) {
+        await storage.replaceBgvPackItems(pack.id, items);
+      }
+      const fullPack = await storage.getBgvPackById(pack.id);
+      res.json(fullPack);
+    } catch (error) {
+      console.error("Error creating BGV pack:", error);
+      res.status(500).json({ message: "Failed to create BGV pack" });
+    }
+  });
+
+  app.patch("/api/bgv-packs/:id", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const { id } = req.params;
+      const { name, description, isActive, items } = req.body;
+      const pack = await storage.updateBgvPack(id, { name, description, isActive });
+      if (items && Array.isArray(items)) {
+        await storage.replaceBgvPackItems(id, items);
+      }
+      const fullPack = await storage.getBgvPackById(pack.id);
+      res.json(fullPack);
+    } catch (error) {
+      console.error("Error updating BGV pack:", error);
+      res.status(500).json({ message: "Failed to update BGV pack" });
+    }
+  });
+
+  app.delete("/api/bgv-packs/:id", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      await storage.deleteBgvPack(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting BGV pack:", error);
+      res.status(500).json({ message: "Failed to delete BGV pack" });
+    }
+  });
+
+  // ─── Worker BGV Requirements ──────────────────────────────────────────────
+
+  app.get("/api/workers/:workerId/bgv-requirements", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const requirements = await storage.getWorkerBgvRequirements(req.params.workerId);
+      res.json(requirements);
+    } catch (error) {
+      console.error("Error fetching BGV requirements:", error);
+      res.status(500).json({ message: "Failed to fetch BGV requirements" });
+    }
+  });
+
+  app.post("/api/workers/:workerId/bgv-requirements", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const { workerId } = req.params;
+      const { businessId, packId, items } = req.body;
+      if (!businessId || !items) return res.status(400).json({ message: "businessId and items are required" });
+      const requirement = await storage.createWorkerBgvRequirement({
+        workerId,
+        businessId,
+        packId: packId || null,
+        items,
+        createdByUserId: user.id,
+      });
+      res.json(requirement);
+    } catch (error) {
+      console.error("Error creating BGV requirement:", error);
+      res.status(500).json({ message: "Failed to create BGV requirement" });
+    }
+  });
+
+  // ─── Worker BGV Checks ────────────────────────────────────────────────────
+
+  app.get("/api/workers/:workerId/bgv-checks", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const checks = await storage.getWorkerBgvChecks(req.params.workerId);
+      res.json(checks);
+    } catch (error) {
+      console.error("Error fetching BGV checks:", error);
+      res.status(500).json({ message: "Failed to fetch BGV checks" });
+    }
+  });
+
+  app.post("/api/workers/:workerId/bgv-checks", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const { workerId } = req.params;
+      const { businessId, requirementId, checkType, label } = req.body;
+      if (!businessId || !checkType || !label) return res.status(400).json({ message: "businessId, checkType, and label are required" });
+      const check = await storage.createWorkerBgvCheck({
+        workerId,
+        businessId,
+        requirementId: requirementId || null,
+        checkType,
+        label,
+        status: 'not_started',
+        createdByUserId: user.id,
+      });
+      res.json(check);
+    } catch (error) {
+      console.error("Error creating BGV check:", error);
+      res.status(500).json({ message: "Failed to create BGV check" });
+    }
+  });
+
+  app.patch("/api/workers/:workerId/bgv-checks/:checkId", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const { checkId } = req.params;
+      const { status, certnOrderId, certnReportUrl, outcomeNotes } = req.body;
+      const updates: any = { status, certnOrderId, certnReportUrl, outcomeNotes };
+      if (status === 'passed' || status === 'failed' || status === 'refer') {
+        updates.completedAt = new Date();
+      }
+      const check = await storage.updateWorkerBgvCheck(checkId, updates);
+      // Send email notification if completed
+      if ((status === 'passed' || status === 'failed' || status === 'refer') && !check.notificationSentAt) {
+        try {
+          const worker = await storage.getWorkerById(check.workerId);
+          const business = await storage.getBusinessById(check.businessId);
+          if (worker && business) {
+            const { emailService } = await import("./emailService");
+            await emailService.sendBgvCheckCompletionEmail({
+              businessName: business.name,
+              businessContactEmail: business.contactEmail || business.email,
+              workerName: `${worker.firstName} ${worker.lastName}`,
+              checkLabel: check.label,
+              checkStatus: status,
+            });
+            await storage.updateWorkerBgvCheck(checkId, { notificationSentAt: new Date() });
+          }
+        } catch (emailErr) {
+          console.error("BGV notification email failed:", emailErr);
+        }
+      }
+      res.json(check);
+    } catch (error) {
+      console.error("Error updating BGV check:", error);
+      res.status(500).json({ message: "Failed to update BGV check" });
+    }
+  });
+
+  // ─── Worker Compliance Documents ─────────────────────────────────────────
+
+  app.get("/api/workers/:workerId/compliance-docs", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const docs = await storage.getWorkerComplianceDocs(req.params.workerId);
+      res.json(docs);
+    } catch (error) {
+      console.error("Error fetching compliance docs:", error);
+      res.status(500).json({ message: "Failed to fetch compliance docs" });
+    }
+  });
+
+  app.post("/api/workers/:workerId/compliance-docs", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const { workerId } = req.params;
+      const { businessId, requirementId, label, documentType, referenceNumber, expiryDate, notes } = req.body;
+      if (!businessId || !label || !documentType) return res.status(400).json({ message: "businessId, label, and documentType are required" });
+      const doc = await storage.createWorkerComplianceDoc({
+        workerId,
+        businessId,
+        requirementId: requirementId || null,
+        label,
+        documentType,
+        referenceNumber,
+        expiryDate: expiryDate ? new Date(expiryDate) : null,
+        notes,
+        status: 'pending_upload',
+        uploadedByUserId: user.id,
+      });
+      res.json(doc);
+    } catch (error) {
+      console.error("Error creating compliance doc:", error);
+      res.status(500).json({ message: "Failed to create compliance doc" });
+    }
+  });
+
+  app.patch("/api/workers/:workerId/compliance-docs/:docId", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const { docId } = req.params;
+      const { status, referenceNumber, expiryDate, notes, objectKey, contentType, fileSizeBytes } = req.body;
+      const updates: any = { status, referenceNumber, notes, objectKey, contentType, fileSizeBytes };
+      if (expiryDate) updates.expiryDate = new Date(expiryDate);
+      if (status === 'verified') {
+        updates.verifiedByUserId = user.id;
+        updates.verifiedAt = new Date();
+      }
+      const doc = await storage.updateWorkerComplianceDoc(docId, updates);
+      res.json(doc);
+    } catch (error) {
+      console.error("Error updating compliance doc:", error);
+      res.status(500).json({ message: "Failed to update compliance doc" });
+    }
+  });
+
+  app.delete("/api/workers/:workerId/compliance-docs/:docId", async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      await storage.deleteWorkerComplianceDoc(req.params.docId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting compliance doc:", error);
+      res.status(500).json({ message: "Failed to delete compliance doc" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

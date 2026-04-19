@@ -463,7 +463,8 @@ function getEmailTemplatePreview(key: string): string {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, FileText, Upload, Edit, Trash2, Eye, Users, Building2, MapPin, Filter } from "lucide-react";
+import { Plus, FileText, Upload, Edit, Trash2, Eye, Users, Building2, MapPin, Filter, Shield, X, ChevronDown, ChevronUp } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -508,6 +509,356 @@ interface Country {
   id: string;
   name: string;
   code: string;
+}
+
+const BGV_CHECK_TYPES = [
+  { value: 'police_check', label: 'Police Check' },
+  { value: 'working_with_children', label: 'Working with Children' },
+  { value: 'right_to_work', label: 'Right to Work' },
+  { value: 'id_verification', label: 'ID Verification' },
+  { value: 'credit_check', label: 'Credit Check' },
+  { value: 'reference_check', label: 'Reference Check' },
+  { value: 'drivers_abstract', label: 'Drivers Abstract' },
+  { value: 'security_licence', label: 'Security Licence' },
+  { value: 'employment_history', label: 'Employment History' },
+  { value: 'academic_qualification', label: 'Academic Qualification' },
+  { value: 'professional_licence', label: 'Professional Licence' },
+  { value: 'other', label: 'Other' },
+];
+
+function BgvPacksPanel() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [editingPack, setEditingPack] = useState<any | null>(null);
+  const [expandedPackId, setExpandedPackId] = useState<string | null>(null);
+  const [packForm, setPackForm] = useState({ name: '', description: '', isActive: true });
+  const [itemForm, setItemForm] = useState({ itemType: 'background_check', checkType: '', label: '', description: '', isRequired: true });
+  const [packItems, setPackItems] = useState<any[]>([]);
+
+  const { data: packs = [], isLoading } = useQuery<any[]>({
+    queryKey: ['/api/bgv-packs'],
+  });
+
+  const createPackMutation = useMutation({
+    mutationFn: (data: any) => apiRequest('POST', '/api/bgv-packs', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/bgv-packs'] });
+      setShowCreateDialog(false);
+      setPackForm({ name: '', description: '', isActive: true });
+      setPackItems([]);
+      toast({ title: 'Pack created', description: 'Global BGV pack created successfully.' });
+    },
+    onError: () => toast({ title: 'Error', description: 'Failed to create pack.', variant: 'destructive' }),
+  });
+
+  const updatePackMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: any }) => apiRequest('PATCH', `/api/bgv-packs/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/bgv-packs'] });
+      setEditingPack(null);
+      toast({ title: 'Pack updated', description: 'BGV pack updated successfully.' });
+    },
+    onError: () => toast({ title: 'Error', description: 'Failed to update pack.', variant: 'destructive' }),
+  });
+
+  const deletePackMutation = useMutation({
+    mutationFn: (id: string) => apiRequest('DELETE', `/api/bgv-packs/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/bgv-packs'] });
+      toast({ title: 'Pack deleted' });
+    },
+    onError: () => toast({ title: 'Error', description: 'Failed to delete pack.', variant: 'destructive' }),
+  });
+
+  const addItem = () => {
+    if (!itemForm.label) return;
+    setPackItems([...packItems, { ...itemForm, sortOrder: packItems.length }]);
+    setItemForm({ itemType: 'background_check', checkType: '', label: '', description: '', isRequired: true });
+  };
+
+  const removeItem = (idx: number) => setPackItems(packItems.filter((_, i) => i !== idx));
+
+  const handleCreate = () => {
+    createPackMutation.mutate({ ...packForm, items: packItems });
+  };
+
+  const handleUpdate = () => {
+    if (!editingPack) return;
+    updatePackMutation.mutate({ id: editingPack.id, data: { ...packForm, items: packItems } });
+  };
+
+  const openEdit = (pack: any) => {
+    setEditingPack(pack);
+    setPackForm({ name: pack.name, description: pack.description || '', isActive: pack.isActive });
+    setPackItems(pack.items || []);
+  };
+
+  const globalPacks = Array.isArray(packs) ? packs.filter((p: any) => !p.businessId) : [];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold flex items-center gap-2">
+            <Shield className="w-6 h-6" />
+            Global BGV Packs
+          </h2>
+          <p className="text-muted-foreground text-sm mt-1">
+            Create and manage global background verification packs available to all businesses.
+          </p>
+        </div>
+        <Button type="button" onClick={() => setShowCreateDialog(true)}>
+          <Plus className="w-4 h-4 mr-2" />
+          Create Pack
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <p className="text-muted-foreground">Loading packs...</p>
+      ) : globalPacks.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            <Shield className="w-12 h-12 mx-auto mb-3 opacity-30" />
+            <p>No global BGV packs yet. Create one to get started.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {globalPacks.map((pack: any) => (
+            <Card key={pack.id}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div>
+                      <CardTitle className="text-base flex items-center gap-2">
+                        {pack.name}
+                        {!pack.isActive && <Badge variant="outline" className="text-xs">Inactive</Badge>}
+                      </CardTitle>
+                      {pack.description && <CardDescription className="text-xs">{pack.description}</CardDescription>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary" className="text-xs">{pack.items?.length || 0} items</Badge>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setExpandedPackId(expandedPackId === pack.id ? null : pack.id)}>
+                      {expandedPackId === pack.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => openEdit(pack)}>
+                      <Edit className="w-4 h-4" />
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" className="text-destructive hover:text-destructive"
+                      onClick={() => { if (window.confirm('Delete this pack?')) deletePackMutation.mutate(pack.id); }}>
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              {expandedPackId === pack.id && pack.items?.length > 0 && (
+                <CardContent className="pt-0">
+                  <div className="space-y-2">
+                    {pack.items.map((item: any, i: number) => (
+                      <div key={i} className="flex items-center gap-2 text-sm py-1.5 px-3 bg-muted/30 rounded-md">
+                        <Badge variant={item.itemType === 'background_check' ? 'default' : 'secondary'} className="text-xs shrink-0">
+                          {item.itemType === 'background_check' ? 'BGV' : item.itemType === 'compliance_document' ? 'Doc' : 'Info'}
+                        </Badge>
+                        <span className="flex-1">{item.label}</span>
+                        {item.checkType && <span className="text-xs text-muted-foreground capitalize">{item.checkType.replace(/_/g, ' ')}</span>}
+                        {!item.isRequired && <Badge variant="outline" className="text-xs">Optional</Badge>}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Create Pack Dialog */}
+      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Create Global BGV Pack</DialogTitle>
+            <DialogDescription>Create a new global background verification pack available to all businesses.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <Label>Pack Name</Label>
+                <Input value={packForm.name} onChange={(e) => setPackForm({ ...packForm, name: e.target.value })} placeholder="e.g. Standard Australian BGV Pack" />
+              </div>
+              <div className="col-span-2">
+                <Label>Description</Label>
+                <Textarea value={packForm.description} onChange={(e) => setPackForm({ ...packForm, description: e.target.value })} placeholder="Brief description of this pack" rows={2} />
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold mb-3">Pack Items</h3>
+              <div className="space-y-2 mb-3">
+                {packItems.map((item, idx) => (
+                  <div key={idx} className="flex items-center gap-2 text-sm py-1.5 px-3 bg-muted/30 rounded-md">
+                    <Badge variant={item.itemType === 'background_check' ? 'default' : 'secondary'} className="text-xs shrink-0">
+                      {item.itemType === 'background_check' ? 'BGV' : 'Doc'}
+                    </Badge>
+                    <span className="flex-1">{item.label}</span>
+                    {!item.isRequired && <Badge variant="outline" className="text-xs">Optional</Badge>}
+                    <Button type="button" size="sm" variant="ghost" className="h-6 px-1" onClick={() => removeItem(idx)}>
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <div className="border rounded-lg p-4 space-y-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase">Add Item</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs">Item Type</Label>
+                    <Select value={itemForm.itemType} onValueChange={(v) => setItemForm({ ...itemForm, itemType: v, checkType: '' })}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="background_check">Background Check</SelectItem>
+                        <SelectItem value="compliance_document">Compliance Document</SelectItem>
+                        <SelectItem value="pre_offer_detail">Pre-Offer Detail</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {itemForm.itemType === 'background_check' && (
+                    <div>
+                      <Label className="text-xs">Check Type</Label>
+                      <Select value={itemForm.checkType} onValueChange={(v) => setItemForm({ ...itemForm, checkType: v })}>
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="Select check type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {BGV_CHECK_TYPES.map(ct => (
+                            <SelectItem key={ct.value} value={ct.value}>{ct.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <Label className="text-xs">Label</Label>
+                  <Input className="h-8 text-sm" value={itemForm.label} onChange={(e) => setItemForm({ ...itemForm, label: e.target.value })} placeholder="e.g. National Police Check" />
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <Switch checked={itemForm.isRequired} onCheckedChange={(v) => setItemForm({ ...itemForm, isRequired: v })} />
+                    <Label className="text-xs">Required</Label>
+                  </div>
+                  <Button type="button" size="sm" variant="outline" onClick={addItem} disabled={!itemForm.label}>
+                    <Plus className="w-3 h-3 mr-1" />
+                    Add Item
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
+            <Button type="button" onClick={handleCreate} disabled={!packForm.name || createPackMutation.isPending}>
+              {createPackMutation.isPending ? 'Creating...' : 'Create Pack'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Pack Dialog */}
+      <Dialog open={!!editingPack} onOpenChange={(open) => { if (!open) setEditingPack(null); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit BGV Pack</DialogTitle>
+            <DialogDescription>Update pack details and items.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <Label>Pack Name</Label>
+                <Input value={packForm.name} onChange={(e) => setPackForm({ ...packForm, name: e.target.value })} />
+              </div>
+              <div className="col-span-2">
+                <Label>Description</Label>
+                <Textarea value={packForm.description} onChange={(e) => setPackForm({ ...packForm, description: e.target.value })} rows={2} />
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch checked={packForm.isActive} onCheckedChange={(v) => setPackForm({ ...packForm, isActive: v })} />
+                <Label>Active</Label>
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold mb-3">Pack Items</h3>
+              <div className="space-y-2 mb-3">
+                {packItems.map((item, idx) => (
+                  <div key={idx} className="flex items-center gap-2 text-sm py-1.5 px-3 bg-muted/30 rounded-md">
+                    <Badge variant={item.itemType === 'background_check' ? 'default' : 'secondary'} className="text-xs shrink-0">
+                      {item.itemType === 'background_check' ? 'BGV' : 'Doc'}
+                    </Badge>
+                    <span className="flex-1">{item.label}</span>
+                    {!item.isRequired && <Badge variant="outline" className="text-xs">Optional</Badge>}
+                    <Button type="button" size="sm" variant="ghost" className="h-6 px-1" onClick={() => removeItem(idx)}>
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <div className="border rounded-lg p-4 space-y-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase">Add Item</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs">Item Type</Label>
+                    <Select value={itemForm.itemType} onValueChange={(v) => setItemForm({ ...itemForm, itemType: v, checkType: '' })}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="background_check">Background Check</SelectItem>
+                        <SelectItem value="compliance_document">Compliance Document</SelectItem>
+                        <SelectItem value="pre_offer_detail">Pre-Offer Detail</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {itemForm.itemType === 'background_check' && (
+                    <div>
+                      <Label className="text-xs">Check Type</Label>
+                      <Select value={itemForm.checkType} onValueChange={(v) => setItemForm({ ...itemForm, checkType: v })}>
+                        <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger>
+                        <SelectContent>
+                          {BGV_CHECK_TYPES.map(ct => <SelectItem key={ct.value} value={ct.value}>{ct.label}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <Label className="text-xs">Label</Label>
+                  <Input className="h-8 text-sm" value={itemForm.label} onChange={(e) => setItemForm({ ...itemForm, label: e.target.value })} placeholder="Item name" />
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <Switch checked={itemForm.isRequired} onCheckedChange={(v) => setItemForm({ ...itemForm, isRequired: v })} />
+                    <Label className="text-xs">Required</Label>
+                  </div>
+                  <Button type="button" size="sm" variant="outline" onClick={addItem} disabled={!itemForm.label}>
+                    <Plus className="w-3 h-3 mr-1" />
+                    Add Item
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setEditingPack(null)}>Cancel</Button>
+            <Button type="button" onClick={handleUpdate} disabled={!packForm.name || updatePackMutation.isPending}>
+              {updatePackMutation.isPending ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
 }
 
 export default function AdminPage() {
@@ -738,6 +1089,7 @@ export default function AdminPage() {
           <TabsTrigger value="email-templates">Email Templates</TabsTrigger>
           <TabsTrigger value="jurisdiction-data">Jurisdiction Data</TabsTrigger>
           <TabsTrigger value="settings">System Settings</TabsTrigger>
+          <TabsTrigger value="bgv-packs">BGV Packs</TabsTrigger>
         </TabsList>
 
         <TabsContent value="templates" className="space-y-6">
@@ -1505,6 +1857,11 @@ Use variables from the helper panel on the right to customize your template.`}
               <p className="text-muted-foreground">System settings panel coming soon...</p>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* ─── BGV Packs Tab ─── */}
+        <TabsContent value="bgv-packs" className="space-y-6">
+          <BgvPacksPanel />
         </TabsContent>
       </Tabs>
 

@@ -35,6 +35,15 @@ The platform is a full-stack web application. The frontend uses React 18, TypeSc
 **Cost of Employment Calculator**: A public-facing tool supporting 17 countries with jurisdiction-specific rates, employee/contractor toggling, CSV export, and detailed employment guides.
 **Two-Factor Authentication (2FA)**: Custom TOTP-based 2FA system with AES-256 encryption, two-phase authentication, rate limiting, audit logging, backup recovery codes, and device trust functionality.
 **Password Reset**: Secure password reset system for SDP users with time-limited token-based email verification, enforcing strong password requirements and preventing email enumeration.
+**Background Verification & Compliance (Feature 7)**:
+- DB tables: `bgv_packs`, `bgv_pack_items`, `worker_bgv_requirements`, `worker_bgv_checks`, `worker_compliance_docs` with full enum support.
+- BGV Packs: SDP admin creates global packs (businessId=null); businesses create custom packs (businessId=set). Pack items can be background checks, compliance documents, or pre-offer details.
+- Certn integration fields on checks: `certnOrderId`, `certnReportUrl` (manual for now, automation in future).
+- At invite time: optional BGV pack selection in add-worker-modal; pack id stored against worker requirements.
+- Worker profile modal: new "BGV & Compliance" tab with check status tracking and compliance document records. Admin/business can add checks, update statuses, and add/remove documents.
+- Admin dashboard: "BGV Packs" tab for SDP to create/edit/delete global packs with items.
+- Email notification: `emailService.sendBgvCheckCompletionEmail()` fires when a check reaches passed/failed/refer; sent to business contact email.
+- Billing: Stripe at cost+10% via Certn — hook in place for automation (Feature 14).
 
 ## System Design Choices
 PostgreSQL is the primary database, accessed via Drizzle ORM. Authentication is integrated with Replit's OpenID Connect, supplemented by a custom test authentication system, and utilizes Passport.js for session management with PostgreSQL session storage. The system includes robust error handling, logging, and secure session configuration with httpOnly and secure cookies. Production readiness includes dedicated seed scripts, environment secret management for the super admin password, and production domain defaults for email links. JWT authentication is used for stateless, secure API access. A special super admin authentication logic validates against an environment secret.

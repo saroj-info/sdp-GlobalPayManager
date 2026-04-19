@@ -28,6 +28,11 @@ import {
   businessInvitations,
   workerBusinessAssociations,
   workerApprovals,
+  bgvPacks,
+  bgvPackItems,
+  workerBgvRequirements,
+  workerBgvChecks,
+  workerComplianceDocs,
   emailTemplateDefinitions,
   emailTemplates,
   emailTemplateVersions,
@@ -110,6 +115,16 @@ import {
   type InsertContractBillingLine,
   type SelectPurchaseOrder,
   type InsertPurchaseOrder,
+  type BgvPack,
+  type InsertBgvPack,
+  type BgvPackItem,
+  type InsertBgvPackItem,
+  type WorkerBgvRequirement,
+  type InsertWorkerBgvRequirement,
+  type WorkerBgvCheck,
+  type InsertWorkerBgvCheck,
+  type WorkerComplianceDoc,
+  type InsertWorkerComplianceDoc,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, inArray, sql, isNull, isNotNull } from "drizzle-orm";
@@ -4013,6 +4028,124 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));
+  }
+
+  // ─── BGV Packs ────────────────────────────────────────────────────────────
+
+  async getBgvPacks(businessId?: string): Promise<(BgvPack & { items: BgvPackItem[] })[]> {
+    const conditions = businessId
+      ? or(isNull(bgvPacks.businessId), eq(bgvPacks.businessId, businessId))
+      : isNull(bgvPacks.businessId);
+    const packs = await db.select().from(bgvPacks).where(conditions);
+    const results = await Promise.all(packs.map(async (pack) => {
+      const items = await db.select().from(bgvPackItems).where(eq(bgvPackItems.packId, pack.id));
+      return { ...pack, items };
+    }));
+    return results;
+  }
+
+  async getBgvPackById(id: string): Promise<(BgvPack & { items: BgvPackItem[] }) | undefined> {
+    const [pack] = await db.select().from(bgvPacks).where(eq(bgvPacks.id, id));
+    if (!pack) return undefined;
+    const items = await db.select().from(bgvPackItems).where(eq(bgvPackItems.packId, id));
+    return { ...pack, items };
+  }
+
+  async createBgvPack(data: InsertBgvPack): Promise<BgvPack> {
+    const [pack] = await db.insert(bgvPacks).values(data).returning();
+    return pack;
+  }
+
+  async updateBgvPack(id: string, updates: Partial<InsertBgvPack>): Promise<BgvPack> {
+    const [pack] = await db.update(bgvPacks).set({ ...updates, updatedAt: new Date() }).where(eq(bgvPacks.id, id)).returning();
+    return pack;
+  }
+
+  async deleteBgvPack(id: string): Promise<void> {
+    await db.delete(bgvPacks).where(eq(bgvPacks.id, id));
+  }
+
+  // ─── BGV Pack Items ───────────────────────────────────────────────────────
+
+  async getBgvPackItems(packId: string): Promise<BgvPackItem[]> {
+    return db.select().from(bgvPackItems).where(eq(bgvPackItems.packId, packId));
+  }
+
+  async createBgvPackItem(data: InsertBgvPackItem): Promise<BgvPackItem> {
+    const [item] = await db.insert(bgvPackItems).values(data).returning();
+    return item;
+  }
+
+  async deleteBgvPackItem(id: string): Promise<void> {
+    await db.delete(bgvPackItems).where(eq(bgvPackItems.id, id));
+  }
+
+  async replaceBgvPackItems(packId: string, items: Omit<InsertBgvPackItem, 'packId'>[]): Promise<BgvPackItem[]> {
+    await db.delete(bgvPackItems).where(eq(bgvPackItems.packId, packId));
+    if (items.length === 0) return [];
+    return db.insert(bgvPackItems).values(items.map(i => ({ ...i, packId }))).returning();
+  }
+
+  // ─── Worker BGV Requirements ──────────────────────────────────────────────
+
+  async getWorkerBgvRequirements(workerId: string): Promise<WorkerBgvRequirement[]> {
+    return db.select().from(workerBgvRequirements).where(eq(workerBgvRequirements.workerId, workerId));
+  }
+
+  async createWorkerBgvRequirement(data: InsertWorkerBgvRequirement): Promise<WorkerBgvRequirement> {
+    const [req] = await db.insert(workerBgvRequirements).values(data).returning();
+    return req;
+  }
+
+  async updateWorkerBgvRequirement(id: string, updates: Partial<InsertWorkerBgvRequirement>): Promise<WorkerBgvRequirement> {
+    const [req] = await db.update(workerBgvRequirements).set({ ...updates, updatedAt: new Date() }).where(eq(workerBgvRequirements.id, id)).returning();
+    return req;
+  }
+
+  // ─── Worker BGV Checks ────────────────────────────────────────────────────
+
+  async getWorkerBgvChecks(workerId: string): Promise<WorkerBgvCheck[]> {
+    return db.select().from(workerBgvChecks).where(eq(workerBgvChecks.workerId, workerId));
+  }
+
+  async getBgvCheckById(id: string): Promise<WorkerBgvCheck | undefined> {
+    const [check] = await db.select().from(workerBgvChecks).where(eq(workerBgvChecks.id, id));
+    return check;
+  }
+
+  async createWorkerBgvCheck(data: InsertWorkerBgvCheck): Promise<WorkerBgvCheck> {
+    const [check] = await db.insert(workerBgvChecks).values(data).returning();
+    return check;
+  }
+
+  async updateWorkerBgvCheck(id: string, updates: Partial<InsertWorkerBgvCheck>): Promise<WorkerBgvCheck> {
+    const [check] = await db.update(workerBgvChecks).set({ ...updates, updatedAt: new Date() }).where(eq(workerBgvChecks.id, id)).returning();
+    return check;
+  }
+
+  // ─── Worker Compliance Documents ──────────────────────────────────────────
+
+  async getWorkerComplianceDocs(workerId: string): Promise<WorkerComplianceDoc[]> {
+    return db.select().from(workerComplianceDocs).where(eq(workerComplianceDocs.workerId, workerId));
+  }
+
+  async getComplianceDocById(id: string): Promise<WorkerComplianceDoc | undefined> {
+    const [doc] = await db.select().from(workerComplianceDocs).where(eq(workerComplianceDocs.id, id));
+    return doc;
+  }
+
+  async createWorkerComplianceDoc(data: InsertWorkerComplianceDoc): Promise<WorkerComplianceDoc> {
+    const [doc] = await db.insert(workerComplianceDocs).values(data).returning();
+    return doc;
+  }
+
+  async updateWorkerComplianceDoc(id: string, updates: Partial<InsertWorkerComplianceDoc>): Promise<WorkerComplianceDoc> {
+    const [doc] = await db.update(workerComplianceDocs).set({ ...updates, updatedAt: new Date() }).where(eq(workerComplianceDocs.id, id)).returning();
+    return doc;
+  }
+
+  async deleteWorkerComplianceDoc(id: string): Promise<void> {
+    await db.delete(workerComplianceDocs).where(eq(workerComplianceDocs.id, id));
   }
 }
 

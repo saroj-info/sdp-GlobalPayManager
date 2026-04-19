@@ -995,6 +995,184 @@ export const marginPayments = pgTable("margin_payments", {
   index("idx_margin_payments_paid_date").on(table.paidDate),
 ]);
 
+// ─── BGV & Compliance ─────────────────────────────────────────────────────────
+
+export const bgvCheckTypeEnum = pgEnum('bgv_check_type', [
+  'police_check',
+  'working_with_children',
+  'right_to_work',
+  'id_verification',
+  'credit_check',
+  'reference_check',
+  'drivers_abstract',
+  'security_licence',
+  'employment_history',
+  'academic_qualification',
+  'professional_licence',
+  'other',
+]);
+
+export const bgvItemTypeEnum = pgEnum('bgv_item_type', [
+  'background_check',
+  'compliance_document',
+  'pre_offer_detail',
+]);
+
+export const bgvStatusEnum = pgEnum('bgv_status', [
+  'not_started',
+  'pending',
+  'in_progress',
+  'passed',
+  'failed',
+  'refer',
+  'cancelled',
+  'not_required',
+]);
+
+export const complianceDocStatusEnum = pgEnum('compliance_doc_status', [
+  'pending_upload',
+  'uploaded',
+  'verified',
+  'rejected',
+  'expired',
+]);
+
+// BGV Packs — named combinations of checks/docs/pre-offer items
+// businessId = null → global SDP pack (visible to all businesses)
+// businessId = set  → custom pack (visible only to that business and SDP acting on their behalf)
+export const bgvPacks = pgTable("bgv_packs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessId: varchar("business_id").references(() => businesses.id), // null = global
+  name: varchar("name").notNull(),
+  description: text("description"),
+  isActive: boolean("is_active").default(true),
+  createdByUserId: varchar("created_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_bgv_packs_business").on(table.businessId),
+]);
+
+// BGV Pack Items — individual items within a pack
+export const bgvPackItems = pgTable("bgv_pack_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  packId: varchar("pack_id").references(() => bgvPacks.id, { onDelete: 'cascade' }).notNull(),
+  itemType: bgvItemTypeEnum("item_type").notNull(),
+  checkType: bgvCheckTypeEnum("check_type"), // required when itemType = background_check
+  label: varchar("label").notNull(),
+  description: text("description"),
+  isRequired: boolean("is_required").default(true),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_bgv_pack_items_pack").on(table.packId),
+]);
+
+// Worker BGV Requirements — what is required for a specific worker (set at invite time)
+export const workerBgvRequirements = pgTable("worker_bgv_requirements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").references(() => workers.id, { onDelete: 'cascade' }).notNull(),
+  businessId: varchar("business_id").references(() => businesses.id).notNull(),
+  packId: varchar("pack_id").references(() => bgvPacks.id), // which pack was used (null if individual items)
+  items: jsonb("items").notNull().$type<Array<{
+    itemType: string;
+    checkType?: string;
+    label: string;
+    description?: string;
+    isRequired: boolean;
+  }>>(), // snapshot of the items at time of assignment
+  createdByUserId: varchar("created_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_worker_bgv_req_worker").on(table.workerId),
+  index("idx_worker_bgv_req_business").on(table.businessId),
+]);
+
+// Worker BGV Checks — individual background check records (one per check type per worker)
+export const workerBgvChecks = pgTable("worker_bgv_checks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").references(() => workers.id, { onDelete: 'cascade' }).notNull(),
+  businessId: varchar("business_id").references(() => businesses.id).notNull(),
+  requirementId: varchar("requirement_id").references(() => workerBgvRequirements.id),
+  checkType: bgvCheckTypeEnum("check_type").notNull(),
+  label: varchar("label").notNull(),
+  status: bgvStatusEnum("status").default('not_started'),
+  certnOrderId: varchar("certn_order_id"), // Certn API order reference
+  certnReportUrl: varchar("certn_report_url"), // URL to Certn report
+  outcomeNotes: text("outcome_notes"), // internal notes on the outcome
+  notificationSentAt: timestamp("notification_sent_at"), // when business was notified
+  requestedAt: timestamp("requested_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
+  createdByUserId: varchar("created_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_worker_bgv_checks_worker").on(table.workerId),
+  index("idx_worker_bgv_checks_business").on(table.businessId),
+  index("idx_worker_bgv_checks_status").on(table.status),
+]);
+
+// Worker Compliance Documents — uploaded docs required as part of BGV
+export const workerComplianceDocs = pgTable("worker_compliance_docs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").references(() => workers.id, { onDelete: 'cascade' }).notNull(),
+  businessId: varchar("business_id").references(() => businesses.id).notNull(),
+  requirementId: varchar("requirement_id").references(() => workerBgvRequirements.id),
+  label: varchar("label").notNull(), // e.g. "Working with Children Certificate"
+  documentType: varchar("document_type").notNull(), // e.g. "wwcc", "police_clearance", "licence"
+  referenceNumber: varchar("reference_number"), // doc's own reference/certificate number
+  expiryDate: timestamp("expiry_date"),
+  objectKey: varchar("object_key"), // object storage key for the uploaded file
+  contentType: varchar("content_type"),
+  fileSizeBytes: integer("file_size_bytes"),
+  status: complianceDocStatusEnum("status").default('pending_upload'),
+  notes: text("notes"),
+  uploadedByUserId: varchar("uploaded_by_user_id").references(() => users.id),
+  verifiedByUserId: varchar("verified_by_user_id").references(() => users.id),
+  verifiedAt: timestamp("verified_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_worker_compliance_docs_worker").on(table.workerId),
+  index("idx_worker_compliance_docs_business").on(table.businessId),
+  index("idx_worker_compliance_docs_status").on(table.status),
+]);
+
+// ─── BGV Insert Schemas & Types ───────────────────────────────────────────────
+
+export const insertBgvPackSchema = createInsertSchema(bgvPacks).omit({
+  id: true, createdAt: true, updatedAt: true,
+});
+export type InsertBgvPack = z.infer<typeof insertBgvPackSchema>;
+export type BgvPack = typeof bgvPacks.$inferSelect;
+
+export const insertBgvPackItemSchema = createInsertSchema(bgvPackItems).omit({
+  id: true, createdAt: true,
+});
+export type InsertBgvPackItem = z.infer<typeof insertBgvPackItemSchema>;
+export type BgvPackItem = typeof bgvPackItems.$inferSelect;
+
+export const insertWorkerBgvRequirementSchema = createInsertSchema(workerBgvRequirements).omit({
+  id: true, createdAt: true, updatedAt: true,
+});
+export type InsertWorkerBgvRequirement = z.infer<typeof insertWorkerBgvRequirementSchema>;
+export type WorkerBgvRequirement = typeof workerBgvRequirements.$inferSelect;
+
+export const insertWorkerBgvCheckSchema = createInsertSchema(workerBgvChecks).omit({
+  id: true, createdAt: true, updatedAt: true,
+});
+export type InsertWorkerBgvCheck = z.infer<typeof insertWorkerBgvCheckSchema>;
+export type WorkerBgvCheck = typeof workerBgvChecks.$inferSelect;
+
+export const insertWorkerComplianceDocSchema = createInsertSchema(workerComplianceDocs).omit({
+  id: true, createdAt: true, updatedAt: true,
+});
+export type InsertWorkerComplianceDoc = z.infer<typeof insertWorkerComplianceDocSchema>;
+export type WorkerComplianceDoc = typeof workerComplianceDocs.$inferSelect;
+
+// ─── End BGV ──────────────────────────────────────────────────────────────────
+
 // Relations
 export const usersRelations = relations(users, ({ many, one }) => ({
   ownedBusinesses: many(businesses),

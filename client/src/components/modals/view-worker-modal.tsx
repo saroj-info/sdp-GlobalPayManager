@@ -8,9 +8,11 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { User, Mail, Phone, MapPin, Building2, Calendar, CheckCircle, Clock, Globe, Edit, Save, X, Send, ArrowLeftRight, AlertTriangle } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { User, Mail, Phone, MapPin, Building2, Calendar, CheckCircle, Clock, Globe, Edit, Save, X, Send, ArrowLeftRight, AlertTriangle, Shield, FileCheck, Plus, Trash2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -32,9 +34,70 @@ export function ViewWorkerModal({ open, onOpenChange, worker, currentUserType }:
 
   const [showChangeTypeDialog, setShowChangeTypeDialog] = useState(false);
   const [targetWorkerType, setTargetWorkerType] = useState('');
+  const [activeTab, setActiveTab] = useState('profile');
+  const [showAddCheckDialog, setShowAddCheckDialog] = useState(false);
+  const [showAddDocDialog, setShowAddDocDialog] = useState(false);
+  const [newCheck, setNewCheck] = useState({ checkType: '', label: '', businessId: '' });
+  const [newDoc, setNewDoc] = useState({ label: '', documentType: '', referenceNumber: '', expiryDate: '', notes: '', businessId: '' });
+  const [editingCheckId, setEditingCheckId] = useState<string | null>(null);
+  const [editingCheckStatus, setEditingCheckStatus] = useState('');
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const { data: bgvChecks = [], refetch: refetchChecks } = useQuery({
+    queryKey: ['/api/workers', worker?.id, 'bgv-checks'],
+    queryFn: () => apiRequest('GET', `/api/workers/${worker.id}/bgv-checks`),
+    enabled: !!worker?.id && open,
+  });
+
+  const { data: complianceDocs = [], refetch: refetchDocs } = useQuery({
+    queryKey: ['/api/workers', worker?.id, 'compliance-docs'],
+    queryFn: () => apiRequest('GET', `/api/workers/${worker.id}/compliance-docs`),
+    enabled: !!worker?.id && open,
+  });
+
+  const createCheckMutation = useMutation({
+    mutationFn: async (data: any) => apiRequest('POST', `/api/workers/${worker.id}/bgv-checks`, data),
+    onSuccess: () => {
+      refetchChecks();
+      setShowAddCheckDialog(false);
+      setNewCheck({ checkType: '', label: '', businessId: '' });
+      toast({ title: 'Check added', description: 'Background check record created.' });
+    },
+    onError: () => toast({ title: 'Error', description: 'Failed to add check.', variant: 'destructive' }),
+  });
+
+  const updateCheckMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) =>
+      apiRequest('PATCH', `/api/workers/${worker.id}/bgv-checks/${id}`, { status }),
+    onSuccess: () => {
+      refetchChecks();
+      setEditingCheckId(null);
+      toast({ title: 'Status updated', description: 'Check status has been updated.' });
+    },
+    onError: () => toast({ title: 'Error', description: 'Failed to update status.', variant: 'destructive' }),
+  });
+
+  const createDocMutation = useMutation({
+    mutationFn: async (data: any) => apiRequest('POST', `/api/workers/${worker.id}/compliance-docs`, data),
+    onSuccess: () => {
+      refetchDocs();
+      setShowAddDocDialog(false);
+      setNewDoc({ label: '', documentType: '', referenceNumber: '', expiryDate: '', notes: '', businessId: '' });
+      toast({ title: 'Document added', description: 'Compliance document record created.' });
+    },
+    onError: () => toast({ title: 'Error', description: 'Failed to add document.', variant: 'destructive' }),
+  });
+
+  const deleteDocMutation = useMutation({
+    mutationFn: async (docId: string) => apiRequest('DELETE', `/api/workers/${worker.id}/compliance-docs/${docId}`),
+    onSuccess: () => {
+      refetchDocs();
+      toast({ title: 'Removed', description: 'Document record removed.' });
+    },
+    onError: () => toast({ title: 'Error', description: 'Failed to remove.', variant: 'destructive' }),
+  });
 
   useEffect(() => {
     if (worker) {
@@ -298,7 +361,25 @@ export function ViewWorkerModal({ open, onOpenChange, worker, currentUserType }:
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4">
+            <TabsList className="mb-4">
+              <TabsTrigger value="profile">
+                <User className="w-4 h-4 mr-1.5" />
+                Profile
+              </TabsTrigger>
+              <TabsTrigger value="bgv" data-testid="tab-bgv-compliance">
+                <Shield className="w-4 h-4 mr-1.5" />
+                BGV &amp; Compliance
+                {Array.isArray(bgvChecks) && bgvChecks.length > 0 && (
+                  <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">
+                    {bgvChecks.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="profile">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Personal Information */}
             <Card>
               <CardHeader>
@@ -555,6 +636,230 @@ export function ViewWorkerModal({ open, onOpenChange, worker, currentUserType }:
                 </div>
               </CardContent>
             </Card>
+          </div>
+            </TabsContent>
+
+            {/* ─── BGV & Compliance Tab ─── */}
+            <TabsContent value="bgv" className="space-y-6">
+              {/* Background Checks */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="flex items-center space-x-2">
+                      <Shield className="w-5 h-5" />
+                      <span>Background Checks</span>
+                    </CardTitle>
+                    {currentUserType !== 'worker' && (
+                      <Button type="button" size="sm" variant="outline" onClick={() => setShowAddCheckDialog(true)}>
+                        <Plus className="w-4 h-4 mr-1" />
+                        Add Check
+                      </Button>
+                    )}
+                  </div>
+                  <CardDescription>Background verification checks required for this worker</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {!Array.isArray(bgvChecks) || bgvChecks.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Shield className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No background checks configured</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {(bgvChecks as any[]).map((check: any) => (
+                        <div key={check.id} className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
+                          <div>
+                            <p className="text-sm font-medium">{check.label}</p>
+                            <p className="text-xs text-muted-foreground capitalize">{check.checkType?.replace(/_/g, ' ')}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {editingCheckId === check.id ? (
+                              <>
+                                <Select value={editingCheckStatus} onValueChange={setEditingCheckStatus}>
+                                  <SelectTrigger className="w-36 h-8 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {['not_started', 'pending', 'in_progress', 'passed', 'failed', 'refer', 'cancelled', 'not_required'].map(s => (
+                                      <SelectItem key={s} value={s} className="text-xs capitalize">{s.replace(/_/g, ' ')}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <Button type="button" size="sm" className="h-8 text-xs"
+                                  onClick={() => updateCheckMutation.mutate({ id: check.id, status: editingCheckStatus })}
+                                  disabled={updateCheckMutation.isPending}>
+                                  Save
+                                </Button>
+                                <Button type="button" size="sm" variant="ghost" className="h-8" onClick={() => setEditingCheckId(null)}>
+                                  <X className="w-3 h-3" />
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Badge variant={
+                                  check.status === 'passed' ? 'default' :
+                                  check.status === 'failed' ? 'destructive' :
+                                  check.status === 'in_progress' ? 'secondary' : 'outline'
+                                } className="capitalize text-xs">
+                                  {check.status?.replace(/_/g, ' ')}
+                                </Badge>
+                                {currentUserType !== 'worker' && (
+                                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2"
+                                    onClick={() => { setEditingCheckId(check.id); setEditingCheckStatus(check.status || 'not_started'); }}>
+                                    <Edit className="w-3 h-3" />
+                                  </Button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Compliance Documents */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="flex items-center space-x-2">
+                      <FileCheck className="w-5 h-5" />
+                      <span>Compliance Documents</span>
+                    </CardTitle>
+                    {currentUserType !== 'worker' && (
+                      <Button type="button" size="sm" variant="outline" onClick={() => setShowAddDocDialog(true)}>
+                        <Plus className="w-4 h-4 mr-1" />
+                        Add Document
+                      </Button>
+                    )}
+                  </div>
+                  <CardDescription>Required compliance documents for this worker</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {!Array.isArray(complianceDocs) || complianceDocs.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <FileCheck className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No compliance documents configured</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {(complianceDocs as any[]).map((doc: any) => (
+                        <div key={doc.id} className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
+                          <div className="flex-1">
+                            <p className="text-sm font-medium">{doc.label}</p>
+                            <p className="text-xs text-muted-foreground">{doc.documentType?.replace(/_/g, ' ')}{doc.referenceNumber && ` · Ref: ${doc.referenceNumber}`}</p>
+                            {doc.expiryDate && (
+                              <p className="text-xs text-orange-600 mt-0.5">Expires: {new Date(doc.expiryDate).toLocaleDateString()}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant={
+                              doc.status === 'verified' ? 'default' :
+                              doc.status === 'rejected' ? 'destructive' :
+                              doc.status === 'expired' ? 'destructive' : 'outline'
+                            } className="capitalize text-xs">
+                              {doc.status?.replace(/_/g, ' ')}
+                            </Badge>
+                            {currentUserType !== 'worker' && (
+                              <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-destructive hover:text-destructive"
+                                onClick={() => deleteDocMutation.mutate(doc.id)}>
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add BGV Check Dialog */}
+      <Dialog open={showAddCheckDialog} onOpenChange={setShowAddCheckDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Background Check</DialogTitle>
+            <DialogDescription>Create a new background check record for this worker.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label htmlFor="check-type">Check Type</Label>
+              <Select value={newCheck.checkType} onValueChange={(v) => setNewCheck({ ...newCheck, checkType: v, label: v.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select check type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {['police_check', 'working_with_children', 'right_to_work', 'id_verification', 'credit_check', 'reference_check', 'drivers_abstract', 'security_licence', 'employment_history', 'academic_qualification', 'professional_licence', 'other'].map(t => (
+                    <SelectItem key={t} value={t}>{t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="check-label">Label</Label>
+              <Input id="check-label" value={newCheck.label} onChange={(e) => setNewCheck({ ...newCheck, label: e.target.value })} placeholder="e.g. National Police Check" />
+            </div>
+            <div>
+              <Label htmlFor="check-business">Business ID</Label>
+              <Input id="check-business" value={newCheck.businessId} onChange={(e) => setNewCheck({ ...newCheck, businessId: e.target.value })} placeholder="Business ID" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setShowAddCheckDialog(false)}>Cancel</Button>
+            <Button type="button"
+              disabled={!newCheck.checkType || !newCheck.label || !newCheck.businessId || createCheckMutation.isPending}
+              onClick={() => createCheckMutation.mutate(newCheck)}>
+              {createCheckMutation.isPending ? 'Adding...' : 'Add Check'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Compliance Document Dialog */}
+      <Dialog open={showAddDocDialog} onOpenChange={setShowAddDocDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Compliance Document</DialogTitle>
+            <DialogDescription>Record a required compliance document for this worker.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label htmlFor="doc-label">Document Name</Label>
+              <Input id="doc-label" value={newDoc.label} onChange={(e) => setNewDoc({ ...newDoc, label: e.target.value })} placeholder="e.g. Working with Children Check" />
+            </div>
+            <div>
+              <Label htmlFor="doc-type">Document Type</Label>
+              <Input id="doc-type" value={newDoc.documentType} onChange={(e) => setNewDoc({ ...newDoc, documentType: e.target.value })} placeholder="e.g. wwcc, police_clearance" />
+            </div>
+            <div>
+              <Label htmlFor="doc-ref">Reference Number</Label>
+              <Input id="doc-ref" value={newDoc.referenceNumber} onChange={(e) => setNewDoc({ ...newDoc, referenceNumber: e.target.value })} placeholder="Certificate/reference number" />
+            </div>
+            <div>
+              <Label htmlFor="doc-expiry">Expiry Date</Label>
+              <Input id="doc-expiry" type="date" value={newDoc.expiryDate} onChange={(e) => setNewDoc({ ...newDoc, expiryDate: e.target.value })} />
+            </div>
+            <div>
+              <Label htmlFor="doc-business">Business ID</Label>
+              <Input id="doc-business" value={newDoc.businessId} onChange={(e) => setNewDoc({ ...newDoc, businessId: e.target.value })} placeholder="Business ID" />
+            </div>
+            <div>
+              <Label htmlFor="doc-notes">Notes</Label>
+              <Textarea id="doc-notes" value={newDoc.notes} onChange={(e) => setNewDoc({ ...newDoc, notes: e.target.value })} placeholder="Any additional notes" rows={2} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setShowAddDocDialog(false)}>Cancel</Button>
+            <Button type="button"
+              disabled={!newDoc.label || !newDoc.documentType || !newDoc.businessId || createDocMutation.isPending}
+              onClick={() => createDocMutation.mutate(newDoc)}>
+              {createDocMutation.isPending ? 'Adding...' : 'Add Document'}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

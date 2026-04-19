@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import { Shield } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -39,6 +41,13 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
     // On-behalf fields for SDP internal users
     onBehalf: isSDPInternal, // SDP users always create on behalf of business
     selectedBusinessId: '',
+  });
+
+  const [selectedBgvPackId, setSelectedBgvPackId] = useState<string>('none');
+
+  const { data: bgvPacksData = [] } = useQuery<any[]>({
+    queryKey: ['/api/bgv-packs'],
+    enabled: open,
   });
 
   // Fetch businesses for SDP internal users
@@ -395,6 +404,51 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
                   not the individual worker. The business will manage their worker's assignment.
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* BGV & Compliance Requirements */}
+          {formData.workerType !== 'third_party_worker' && bgvPacksData.length > 0 && (
+            <div className="space-y-3 p-4 bg-muted/30 border rounded-lg">
+              <div className="flex items-center gap-2">
+                <Shield className="w-4 h-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold">BGV &amp; Compliance Pack</h3>
+                <Badge variant="outline" className="text-xs">Optional</Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Select a background verification pack to assign requirements to this worker at invite time.
+              </p>
+              <Select value={selectedBgvPackId} onValueChange={setSelectedBgvPackId}>
+                <SelectTrigger data-testid="select-bgv-pack">
+                  <SelectValue placeholder="No BGV pack (skip)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No BGV requirements (skip)</SelectItem>
+                  {bgvPacksData.map((pack: any) => (
+                    <SelectItem key={pack.id} value={pack.id}>
+                      {pack.businessId ? '🏢' : '🌐'} {pack.name}
+                      {pack.items?.length > 0 && (
+                        <span className="text-muted-foreground ml-1">({pack.items.length} items)</span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedBgvPackId && selectedBgvPackId !== 'none' && (() => {
+                const pack = bgvPacksData.find((p: any) => p.id === selectedBgvPackId);
+                if (!pack || !pack.items?.length) return null;
+                return (
+                  <div className="mt-2 space-y-1">
+                    {pack.items.map((item: any, i: number) => (
+                      <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground flex-shrink-0" />
+                        <span>{item.label}</span>
+                        {item.isRequired && <Badge variant="outline" className="text-[10px] px-1 py-0">Required</Badge>}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           )}
 
