@@ -9355,7 +9355,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ─── BGV Packs ────────────────────────────────────────────────────────────
 
   // List packs: SDP admin gets all global packs; business user gets global + their own custom packs
-  app.get("/api/bgv-packs", async (req, res) => {
+  app.get("/api/bgv-packs", authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: "Unauthorized" });
@@ -9368,7 +9368,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/bgv-packs", async (req, res) => {
+  app.post("/api/bgv-packs", authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: "Unauthorized" });
@@ -9393,7 +9393,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/bgv-packs/:id", async (req, res) => {
+  app.patch("/api/bgv-packs/:id", authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: "Unauthorized" });
@@ -9411,7 +9411,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/bgv-packs/:id", async (req, res) => {
+  app.delete("/api/bgv-packs/:id", authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: "Unauthorized" });
@@ -9425,7 +9425,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ─── Worker BGV Requirements ──────────────────────────────────────────────
 
-  app.get("/api/workers/:workerId/bgv-requirements", async (req, res) => {
+  app.get("/api/workers/:workerId/bgv-requirements", authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: "Unauthorized" });
@@ -9437,7 +9437,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/workers/:workerId/bgv-requirements", async (req, res) => {
+  app.post("/api/workers/:workerId/bgv-requirements", authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: "Unauthorized" });
@@ -9460,7 +9460,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ─── Worker BGV Checks ────────────────────────────────────────────────────
 
-  app.get("/api/workers/:workerId/bgv-checks", async (req, res) => {
+  app.get("/api/workers/:workerId/bgv-checks", authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: "Unauthorized" });
@@ -9472,7 +9472,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/workers/:workerId/bgv-checks", async (req, res) => {
+  app.post("/api/workers/:workerId/bgv-checks", authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: "Unauthorized" });
@@ -9495,7 +9495,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/workers/:workerId/bgv-checks/:checkId", async (req, res) => {
+  app.patch("/api/workers/:workerId/bgv-checks/:checkId", authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: "Unauthorized" });
