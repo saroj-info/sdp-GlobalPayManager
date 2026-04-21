@@ -712,4 +712,41 @@ Visibility replaces conversations. The platform gives the "always available" ill
 
 ---
 
+## Architecture Notes
+
+- **Database**: PostgreSQL via Drizzle ORM
+- **Auth**: Session-based with bcrypt, optional 2FA
+- **Storage**: Object storage (S3-compatible) for documents, payslips, invoices
+- **Email**: Resend (production), console fallback (dev)
+- **Payments**: Stripe (invoice links, BGV billing future)
+- **BGV Provider**: Certn (manual ordering now, full API automation in Feature #7 future phase)
+- **Banking**: Airwallex (Eleva Business, Feature #5 payment rails)
+- **Dual-role**: A single user can hold both `business` and `worker` roles — load-bearing for Features #1 and #2
+- **Multi-brand**: One system, three front doors — SDP Global Pay (enterprise/business), Eleva (workers), PlacIq (agencies). Brand served based on `window.location.hostname` at load time. Same database, same API, same server.
+- **AI Layer**: Shared service (Feature #6) — all three brands and all user types consume it. OpenAI integration already installed and configured. Role-scoped context layer prevents cross-user data leakage.
+
+---
+
+## Competitive Positioning
+
+| Feature | SDP Global Pay / PlacIq | Deel | Remote | Workday | Astute Payroll | Everest |
+|---|---|---|---|---|---|---|
+| BGV Packs (custom) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Eleva worker brand | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| PlacIq agency brand | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Agency-optimised dashboard | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ |
+| AI instant answers | ✅ (planned) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Proactive exception flags | ✅ (planned) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Self-serve status transparency | ✅ (planned) | Partial | Partial | Partial | ❌ | ❌ |
+| Airwallex banking integration | ✅ (planned) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Insurance referral marketplace | ✅ (planned) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Multi-entity SDP (own EOR) | ✅ (planned) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Global mobility | ✅ (planned) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| HRMS add-on | ✅ (planned) | ✅ | ✅ | ✅ | Partial | Partial |
+| Global payroll engine | ✅ (planned) | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+*Key differentiators vs agency competitors (Astute Payroll, Everest, Vincere): multi-brand architecture, AI instant answers, proactive flags, and self-serve transparency are unique to this platform. Agency competitors have agency dashboards but no AI layer and no worker-community brand.*
+
+---
+
 *More features to be added here as discussed. Always append — never overwrite or compress existing entries.*
