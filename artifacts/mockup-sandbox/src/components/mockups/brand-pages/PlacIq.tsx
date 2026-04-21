@@ -1,8 +1,8 @@
-import { ArrowRight, CheckCircle2, Clock, AlertTriangle, TrendingUp, Users, DollarSign, Zap, ChevronRight, BarChart3, Shield, Bell } from "lucide-react";
+import { ArrowRight, CheckCircle2, Clock, AlertTriangle, TrendingUp, Users, DollarSign, Zap, ChevronRight, BarChart3, Shield, Bell, Phone, Globe2, HeadphonesIcon, Building2 } from "lucide-react";
 
 export function PlacIq() {
   return (
-    <div className="min-h-screen bg-white font-['Inter']" style={{ fontFamily: "'Inter', sans-serif" }}>
+    <div className="min-h-screen bg-white" style={{ fontFamily: "'Inter', sans-serif" }}>
 
       {/* Navigation */}
       <nav className="bg-white border-b border-gray-100 sticky top-0 z-50">
@@ -16,7 +16,7 @@ export function PlacIq() {
             </span>
           </div>
           <div className="hidden md:flex items-center gap-8">
-            {["Features", "Pricing", "For Agencies", "Resources"].map((item) => (
+            {["Features", "How It Works", "For Agencies", "Contact"].map((item) => (
               <a key={item} href="#" className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors">
                 {item}
               </a>
@@ -24,8 +24,8 @@ export function PlacIq() {
           </div>
           <div className="flex items-center gap-3">
             <a href="#" className="text-sm font-medium text-gray-600 hover:text-gray-900">Log In</a>
-            <button className="px-4 py-2 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95" style={{ background: "#f97316" }}>
-              Get Started Free
+            <button className="px-4 py-2 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90" style={{ background: "#f97316" }}>
+              Talk to Us
             </button>
           </div>
         </div>
@@ -40,29 +40,36 @@ export function PlacIq() {
         <div className="max-w-6xl mx-auto px-6 py-24 relative">
           <div className="max-w-3xl">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold mb-8" style={{ background: "rgba(249,115,22,0.15)", color: "#fb923c", border: "1px solid rgba(249,115,22,0.3)" }}>
-              <Zap className="w-3.5 h-3.5" />
-              Built for recruitment agencies running 5–200 contractors
+              <Building2 className="w-3.5 h-3.5" />
+              For recruitment agencies placing 1–50 contractors, temps &amp; gig workers
             </div>
             <h1 className="text-5xl md:text-6xl font-extrabold text-white leading-tight mb-6">
               The Back Office Your<br />
               <span style={{ color: "#fb923c" }}>Agency Actually Needs</span>
             </h1>
-            <p className="text-lg text-blue-100 mb-10 max-w-2xl leading-relaxed">
-              Stop chasing timesheets, fielding "where's my pay?" calls, and firefighting cash flow.
-              PlacIq gives your agency a structured operating system so the platform answers — not you.
+            <p className="text-lg text-blue-100 mb-6 max-w-2xl leading-relaxed">
+              A smart platform backed by real people. PlacIq combines structured EOR and payroll software with the hands-on support of SDP Global Pay — so your agency runs smoothly without the back-office burden.
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 mb-12">
+            <div className="flex items-center gap-3 mb-10 p-4 rounded-xl" style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)" }}>
+              <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: "#f97316" }}>
+                <HeadphonesIcon className="w-4 h-4 text-white" />
+              </div>
+              <p className="text-sm text-blue-100">
+                <span className="font-semibold text-white">Not just software.</span> Behind every PlacIq account is the SDP Global Pay team — handling employer of record, payroll compliance, and worker support when you need it.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-4 mb-10">
               <button className="flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl text-base font-semibold text-white transition-all hover:opacity-90" style={{ background: "#f97316" }}>
-                Get Started Free
+                Talk to Us
                 <ArrowRight className="w-4 h-4" />
               </button>
               <button className="flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl text-base font-semibold text-white border border-white/20 hover:bg-white/10 transition-all">
-                Book a Demo
+                See How It Works
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
             <div className="flex flex-wrap gap-6 text-sm text-blue-200">
-              {["No setup fee", "Free 30-day trial", "Cancel anytime"].map((item) => (
+              {["Full EOR service included", "Global payroll covered", "Real people when you need them"].map((item) => (
                 <div key={item} className="flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                   {item}
@@ -84,9 +91,9 @@ export function PlacIq() {
             <div className="p-5 grid grid-cols-4 gap-3">
               {[
                 { label: "Next Pay Run", value: "Friday 3pm", sub: "Timesheets due Thu 5pm", icon: Clock, color: "#3b82f6" },
-                { label: "Active Contractors", value: "47", sub: "+3 this week", icon: Users, color: "#10b981" },
-                { label: "Outstanding Invoices", value: "$183,400", sub: "12 clients", icon: DollarSign, color: "#f97316" },
-                { label: "Exceptions", value: "3", sub: "Require attention", icon: AlertTriangle, color: "#f59e0b" },
+                { label: "Active Workers", value: "31", sub: "Contractors, temps & gig", icon: Users, color: "#10b981" },
+                { label: "Outstanding Invoices", value: "$94,200", sub: "8 clients", icon: DollarSign, color: "#f97316" },
+                { label: "Exceptions", value: "2", sub: "Require attention", icon: AlertTriangle, color: "#f59e0b" },
               ].map((card) => (
                 <div key={card.label} className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>
                   <div className="flex items-center justify-between mb-2">
@@ -104,6 +111,71 @@ export function PlacIq() {
         </div>
       </section>
 
+      {/* Service model: light-touch system + human wave */}
+      <section className="py-20 bg-white">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="grid md:grid-cols-2 gap-16 items-center">
+            <div>
+              <div className="text-sm font-semibold mb-4 uppercase tracking-widest" style={{ color: "#f97316" }}>
+                How PlacIq Works
+              </div>
+              <h2 className="text-4xl font-bold leading-tight mb-6" style={{ color: "#1a2e4a" }}>
+                Light-touch for you.<br />
+                Heavy-lift behind<br />the scenes.
+              </h2>
+              <p className="text-gray-500 text-lg leading-relaxed mb-8">
+                PlacIq is structured and self-serve by design — but it runs on SDP Global Pay's full EOR and global payroll infrastructure. You get the simplicity of software with the compliance and people-power of a managed service.
+              </p>
+              <div className="space-y-4">
+                {[
+                  { icon: Globe2, color: "#1d6ab5", bg: "#eff6ff", title: "Employer of Record — fully managed", desc: "SDP is the legal employer for your workers in every country. Contracts, statutory compliance, and tax obligations handled end to end." },
+                  { icon: DollarSign, color: "#10b981", bg: "#ecfdf5", title: "Global payroll — we run it", desc: "Multi-currency payroll for contractors, temps, and gig workers. Your people get paid correctly and on time, every time." },
+                  { icon: HeadphonesIcon, color: "#f97316", bg: "#fff7ed", title: "Real people in your corner", desc: "Questions, exceptions, urgent payroll needs — the SDP team picks up. You are never on your own with a support ticket queue." },
+                ].map((item) => (
+                  <div key={item.title} className="flex gap-4 p-4 rounded-xl border border-gray-100 hover:shadow-sm transition-shadow">
+                    <div className="w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center" style={{ background: item.bg }}>
+                      <item.icon className="w-5 h-5" style={{ color: item.color }} />
+                    </div>
+                    <div>
+                      <div className="text-sm font-semibold text-gray-800 mb-0.5">{item.title}</div>
+                      <div className="text-sm text-gray-500">{item.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Human team callout */}
+            <div className="rounded-2xl overflow-hidden border border-gray-100 shadow-xl">
+              <div className="px-6 py-5" style={{ background: "linear-gradient(135deg, #0f1e35, #1d4070)" }}>
+                <div className="text-xs font-semibold uppercase tracking-widest text-blue-300 mb-2">The SDP Global Pay Team</div>
+                <h3 className="text-xl font-bold text-white mb-1">People behind the platform</h3>
+                <p className="text-sm text-blue-200">Available when the platform can't answer — and that's rare.</p>
+              </div>
+              <div className="p-5 bg-white space-y-3">
+                {[
+                  { name: "Payroll Operations", desc: "Runs your pay cycle, resolves exceptions, and ensures every worker is paid correctly", tag: "Managed service", color: "#1d6ab5" },
+                  { name: "Compliance & EOR", desc: "Keeps your contracts, employment obligations, and country-specific rules up to date", tag: "Fully handled", color: "#10b981" },
+                  { name: "Worker Support", desc: "Handles worker queries about pay, contracts, and onboarding — so you don't have to", tag: "On your behalf", color: "#f97316" },
+                  { name: "Account Management", desc: "A named contact at SDP Global Pay who knows your agency and escalates when needed", tag: "Light touch", color: "#8b5cf6" },
+                ].map((team) => (
+                  <div key={team.name} className="flex items-start gap-3 p-3 rounded-xl bg-gray-50">
+                    <div className="w-2 h-2 rounded-full mt-1.5 flex-shrink-0" style={{ background: team.color }} />
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-sm font-semibold text-gray-800">{team.name}</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium text-white" style={{ background: team.color }}>{team.tag}</span>
+                      </div>
+                      <span className="text-xs text-gray-500">{team.desc}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Pain Points */}
       <section className="py-20" style={{ background: "#f8fafc" }}>
         <div className="max-w-6xl mx-auto px-6">
@@ -113,7 +185,7 @@ export function PlacIq() {
               <span style={{ color: "#f97316" }}>We built the structure you're missing.</span>
             </h2>
             <p className="text-gray-500 max-w-xl mx-auto">
-              Every agency we talk to faces the same four problems. PlacIq was built specifically to solve them.
+              Every agency we talk to faces the same four problems. PlacIq — backed by SDP Global Pay — was built to solve them.
             </p>
           </div>
           <div className="grid md:grid-cols-2 gap-6">
@@ -123,28 +195,28 @@ export function PlacIq() {
                 color: "#ef4444",
                 bg: "#fef2f2",
                 title: "\"Where's my pay?\" — every Friday",
-                desc: "Contractors chase you because they can't see status. PlacIq gives every contractor a live dashboard showing exactly when their pay is processing and why.",
+                desc: "Workers chase you because they can't see status. PlacIq gives every contractor, temp, and gig worker a live dashboard showing exactly when their pay is processing — and the SDP team handles worker queries directly.",
               },
               {
                 icon: DollarSign,
                 color: "#f97316",
                 bg: "#fff7ed",
                 title: "Cashflow crunch between invoice and payroll",
-                desc: "Clients pay in 30–45 days. You pay contractors weekly. PlacIq's cashflow panel shows your funding gap in real time so you're never caught short.",
+                desc: "Clients pay in 30–45 days. You pay workers weekly. PlacIq's cashflow panel shows your funding gap in real time so you're never caught short.",
               },
               {
                 icon: BarChart3,
                 color: "#8b5cf6",
                 bg: "#f5f3ff",
-                title: "Custom rates and exceptions piling up",
-                desc: "You said yes to six different billing arrangements. PlacIq enforces structure — rate mismatches and billing inconsistencies are flagged before they become invoicing errors.",
+                title: "Custom rates and billing exceptions",
+                desc: "You said yes to five different billing arrangements. PlacIq enforces structure — rate mismatches and inconsistencies are flagged before they become invoicing errors.",
               },
               {
                 icon: Clock,
                 color: "#1d6ab5",
                 bg: "#eff6ff",
                 title: "Timesheet approvals holding up payroll",
-                desc: "Unapproved timesheets block your pay run. PlacIq automatically flags missing and overdue timesheets to the right people, days before the deadline.",
+                desc: "Unapproved timesheets block your pay run. PlacIq automatically flags missing and overdue timesheets — and the SDP payroll team follows up when needed.",
               },
             ].map((pain) => (
               <div key={pain.title} className="flex gap-5 p-6 rounded-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
@@ -161,24 +233,24 @@ export function PlacIq() {
         </div>
       </section>
 
-      {/* Core concept: Controlled Flexibility */}
+      {/* Visibility section */}
       <section className="py-20 bg-white">
         <div className="max-w-6xl mx-auto px-6">
           <div className="grid md:grid-cols-2 gap-16 items-center">
             <div>
               <div className="text-sm font-semibold mb-4 uppercase tracking-widest" style={{ color: "#f97316" }}>
-                Our Philosophy
+                Platform Design
               </div>
               <h2 className="text-4xl font-bold leading-tight mb-6" style={{ color: "#1a2e4a" }}>
                 Visibility replaces<br />conversations
               </h2>
               <p className="text-gray-500 text-lg leading-relaxed mb-8">
-                Agencies are urgent by nature — your contractors expect instant answers. PlacIq doesn't fight that. It channels it into the platform.
+                Agencies are urgent by nature. PlacIq doesn't fight that — it channels urgency into the platform, so the answer is always visible before anyone picks up the phone.
               </p>
               <div className="space-y-5">
                 {[
-                  { before: "\"Can you check this urgently?\"", after: "Dashboard shows: Approved — Processing Friday 3pm" },
-                  { before: "\"When will contractor X be paid?\"", after: "AI instantly answers from live payroll data" },
+                  { before: "\"Can you check this urgently?\"", after: "Dashboard: Approved — Processing Friday 3pm" },
+                  { before: "\"When will contractor X be paid?\"", after: "AI answers instantly from live payroll data" },
                   { before: "\"Why is this invoice different?\"", after: "Rate mismatch flagged and explained automatically" },
                 ].map((item, i) => (
                   <div key={i} className="flex gap-4 items-start">
@@ -206,16 +278,16 @@ export function PlacIq() {
                   <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: "#1d6ab5" }}>
                     <span className="text-white text-xs font-bold">P</span>
                   </div>
-                  <span className="text-sm font-semibold text-gray-700">Contractor Status Feed</span>
+                  <span className="text-sm font-semibold text-gray-700">Worker Status Feed</span>
                 </div>
                 <Bell className="w-4 h-4 text-gray-400" />
               </div>
               <div className="p-4 space-y-3 bg-white">
                 {[
                   { name: "James T.", role: "IT Contractor", status: "Timesheet Approved", sub: "Updated 12 mins ago", badge: "approved", next: "Payroll runs Friday" },
-                  { name: "Maria C.", role: "Healthcare — RN", status: "Missing Timesheet", sub: "Due 2 days ago", badge: "warning", next: "Approve to unlock pay run" },
-                  { name: "Alex W.", role: "Security Consultant", status: "BGV Check Complete", sub: "Updated 1 hour ago", badge: "complete", next: "Contract ready to send" },
-                  { name: "Priya M.", role: "Finance Analyst", status: "Paid", sub: "Processed Thursday", badge: "paid", next: "Payslip available" },
+                  { name: "Maria C.", role: "Temp — Healthcare", status: "Missing Timesheet", sub: "Due 2 days ago", badge: "warning", next: "Approve to unlock pay run" },
+                  { name: "Alex W.", role: "Gig — Security", status: "BGV Check Complete", sub: "Updated 1 hour ago", badge: "complete", next: "Contract ready to send" },
+                  { name: "Priya M.", role: "Contractor — Finance", status: "Paid", sub: "Processed Thursday", badge: "paid", next: "Payslip available" },
                 ].map((row) => {
                   const colors: Record<string, { bg: string; text: string }> = {
                     approved: { bg: "#d1fae5", text: "#065f46" },
@@ -257,20 +329,20 @@ export function PlacIq() {
         <div className="max-w-6xl mx-auto px-6">
           <div className="text-center mb-14">
             <h2 className="text-3xl font-bold mb-4" style={{ color: "#1a2e4a" }}>
-              Everything your agency needs in one place
+              Everything your agency needs — nothing it doesn't
             </h2>
             <p className="text-gray-500 max-w-xl mx-auto">
-              Contracts, timesheets, BGV checks, invoicing, and payroll — all structured around how agencies actually operate.
+              EOR, global payroll, contracts, timesheets, BGV, and invoicing — structured around how agencies actually operate, backed by a team that knows the work.
             </p>
           </div>
           <div className="grid md:grid-cols-3 gap-5">
             {[
-              { icon: Clock, color: "#1d6ab5", bg: "#eff6ff", title: "Payroll Schedule Dashboard", desc: "Every agency user sees the next payroll run date, cutoff time, and how many timesheets are still pending — in big, clear numbers." },
-              { icon: Bell, color: "#f97316", bg: "#fff7ed", title: "Proactive Exception Flags", desc: "Missing timesheets, rate mismatches, pending approvals, and document expiries are surfaced automatically — before they block your pay run." },
-              { icon: Zap, color: "#8b5cf6", bg: "#f5f3ff", title: "AI Instant Answers", desc: 'Ask "When will contractor X be paid?" in plain English. PlacIq pulls live data and answers instantly — no digging through menus.' },
-              { icon: Shield, color: "#10b981", bg: "#ecfdf5", title: "BGV & Compliance Packs", desc: "Select the compliance requirements for each contractor type — police checks, right to work, licences — all tracked in one place." },
-              { icon: TrendingUp, color: "#ef4444", bg: "#fef2f2", title: "Cashflow Panel", desc: "See outstanding client invoices vs upcoming payroll obligations side by side. Know your funding gap before it becomes a crisis." },
-              { icon: BarChart3, color: "#f59e0b", bg: "#fffbeb", title: "Margin & Contractor Summary", desc: "Active contractors this week, total margin this pay period, and headcount changes — everything you need to manage your book of business." },
+              { icon: Globe2, color: "#1d6ab5", bg: "#eff6ff", title: "Employer of Record", desc: "SDP is the legal employer in every country. Contracts, statutory compliance, and payroll tax — all managed by our team on your behalf." },
+              { icon: Clock, color: "#10b981", bg: "#ecfdf5", title: "Payroll Schedule Dashboard", desc: "Every agency user sees the next payroll run date, cutoff time, and pending timesheets — managed end to end by SDP." },
+              { icon: Bell, color: "#f97316", bg: "#fff7ed", title: "Proactive Exception Flags", desc: "Missing timesheets, rate mismatches, and approval blocks surfaced automatically — before they affect your pay run." },
+              { icon: Zap, color: "#8b5cf6", bg: "#f5f3ff", title: "AI Instant Answers", desc: "Ask any question about your workers, pay runs, or invoices in plain English — answered instantly from live data." },
+              { icon: Shield, color: "#10b981", bg: "#ecfdf5", title: "BGV & Compliance Packs", desc: "Police checks, right to work, licences — all tracked per worker type. Managed through the platform, escalated to the team when needed." },
+              { icon: TrendingUp, color: "#ef4444", bg: "#fef2f2", title: "Cashflow Panel", desc: "Outstanding client invoices vs upcoming payroll obligations side by side — so you always know your funding position." },
             ].map((feat) => (
               <div key={feat.title} className="bg-white rounded-2xl p-6 border border-gray-100 hover:shadow-md transition-shadow">
                 <div className="w-11 h-11 rounded-xl flex items-center justify-center mb-4" style={{ background: feat.bg }}>
@@ -284,111 +356,24 @@ export function PlacIq() {
         </div>
       </section>
 
-      {/* Pricing teaser */}
-      <section className="py-20 bg-white">
-        <div className="max-w-6xl mx-auto px-6">
-          <div className="text-center mb-14">
-            <h2 className="text-3xl font-bold mb-4" style={{ color: "#1a2e4a" }}>Simple pricing. No surprises.</h2>
-            <p className="text-gray-500">Start free. Scale as your agency grows.</p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
-            {[
-              {
-                name: "Starter",
-                price: "$149",
-                period: "/month",
-                desc: "Up to 15 active contractors",
-                features: ["Payroll schedule dashboard", "Contractor status feed", "Timesheet management", "Standard compliance docs", "Email support"],
-                cta: "Start Free Trial",
-                highlight: false,
-              },
-              {
-                name: "Agency",
-                price: "$349",
-                period: "/month",
-                desc: "Up to 75 active contractors",
-                features: ["Everything in Starter", "AI Instant Answers", "Proactive exception flags", "Cashflow panel", "BGV packs (Certn)", "Priority support"],
-                cta: "Start Free Trial",
-                highlight: true,
-              },
-              {
-                name: "Scale",
-                price: "Custom",
-                period: "",
-                desc: "75+ contractors or bespoke needs",
-                features: ["Everything in Agency", "Dedicated account manager", "Custom invoicing rules", "SDP Global Pay managed tier", "SLA guarantee"],
-                cta: "Talk to Us",
-                highlight: false,
-              },
-            ].map((plan) => (
-              <div
-                key={plan.name}
-                className="rounded-2xl p-6 flex flex-col"
-                style={plan.highlight ? {
-                  background: "linear-gradient(160deg, #1d4070, #1d6ab5)",
-                  border: "none",
-                  boxShadow: "0 20px 60px rgba(29,106,181,0.35)",
-                } : {
-                  border: "1.5px solid #e5e7eb",
-                  background: "white",
-                }}
-              >
-                <div className="mb-6">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className={`text-sm font-semibold ${plan.highlight ? "text-blue-200" : "text-gray-500"}`}>{plan.name}</span>
-                    {plan.highlight && <span className="text-xs px-2 py-0.5 rounded-full font-semibold text-white" style={{ background: "#f97316" }}>Most Popular</span>}
-                  </div>
-                  <div className="flex items-end gap-1 mb-1">
-                    <span className={`text-4xl font-extrabold ${plan.highlight ? "text-white" : "text-gray-900"}`}>{plan.price}</span>
-                    {plan.period && <span className={`text-sm pb-1 ${plan.highlight ? "text-blue-200" : "text-gray-400"}`}>{plan.period}</span>}
-                  </div>
-                  <p className={`text-xs ${plan.highlight ? "text-blue-200" : "text-gray-400"}`}>{plan.desc}</p>
-                </div>
-                <ul className="space-y-2.5 mb-8 flex-1">
-                  {plan.features.map((f) => (
-                    <li key={f} className="flex items-start gap-2 text-sm">
-                      <CheckCircle2 className={`w-4 h-4 mt-0.5 flex-shrink-0 ${plan.highlight ? "text-emerald-300" : "text-emerald-500"}`} />
-                      <span className={plan.highlight ? "text-blue-100" : "text-gray-600"}>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-                <button
-                  className="w-full py-3 rounded-xl text-sm font-semibold transition-all hover:opacity-90"
-                  style={plan.highlight ? {
-                    background: "#f97316",
-                    color: "white",
-                  } : {
-                    border: "1.5px solid #1d6ab5",
-                    color: "#1d6ab5",
-                    background: "white",
-                  }}
-                >
-                  {plan.cta}
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* Escalation path to SDP Global Pay */}
       <section className="py-16" style={{ background: "#0f1e35" }}>
         <div className="max-w-4xl mx-auto px-6 text-center">
           <div className="text-sm font-semibold mb-3 uppercase tracking-widest" style={{ color: "#fb923c" }}>
-            Growing beyond self-serve?
+            Growing fast?
           </div>
           <h2 className="text-3xl font-bold text-white mb-4">
-            Running 50+ contractors or need dedicated support?
+            Running 50+ contractors or need a fully managed service?
           </h2>
           <p className="text-blue-200 mb-8 text-lg">
-            PlacIq is built for agencies that want structure and self-serve.
-            When you need a dedicated account manager, custom SLAs, or managed EOR services — step up to SDP Global Pay.
+            PlacIq is built for agencies that want a structured, self-serve system with EOR and payroll support behind it.
+            When you need dedicated account management, custom SLAs, or a fully bespoke service — step up to SDP Global Pay.
           </p>
           <button className="inline-flex items-center gap-2 px-6 py-3.5 rounded-xl font-semibold text-white transition-all hover:opacity-90" style={{ background: "#f97316" }}>
             Talk to SDP Global Pay
             <ArrowRight className="w-4 h-4" />
           </button>
-          <p className="text-blue-300/50 text-sm mt-4">No disruption to your contractors or data when you upgrade</p>
+          <p className="text-blue-300/50 text-sm mt-4">No disruption to your workers or data when you move up</p>
         </div>
       </section>
 
