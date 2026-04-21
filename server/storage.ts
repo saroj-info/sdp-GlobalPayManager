@@ -4083,7 +4083,16 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
   async replaceBgvPackItems(packId: string, items: Omit<InsertBgvPackItem, 'packId'>[]): Promise<BgvPackItem[]> {
     await db.delete(bgvPackItems).where(eq(bgvPackItems.packId, packId));
     if (items.length === 0) return [];
-    return db.insert(bgvPackItems).values(items.map(i => ({ ...i, packId }))).returning();
+    const cleaned = items.map((i, idx) => ({
+      packId,
+      itemType: i.itemType,
+      checkType: (i.checkType && i.checkType !== '') ? i.checkType : null,
+      label: i.label,
+      description: i.description || null,
+      isRequired: i.isRequired ?? true,
+      sortOrder: i.sortOrder ?? idx,
+    }));
+    return db.insert(bgvPackItems).values(cleaned).returning();
   }
 
   // ─── Worker BGV Requirements ──────────────────────────────────────────────
