@@ -247,11 +247,11 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
 
   // Update form data when edit mode changes
   useEffect(() => {
-    if (editMode && existingContract) {
-      setFormData(getInitialFormData());
-    } else if (!editMode) {
-      setFormData(getInitialFormData());
-    }
+    const newData = getInitialFormData();
+    setFormData(newData);
+    // Sync refs so the template-clearing effect doesn't treat this as a country/type change
+    prevCountryRef.current = newData.countryId;
+    prevEmploymentTypeRef.current = newData.employmentType;
   }, [editMode, existingContract]);
 
   // Reset template selection when country or employment type actually changes

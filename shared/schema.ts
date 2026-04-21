@@ -444,6 +444,7 @@ export const contracts = pgTable("contracts", {
   countryId: varchar("country_id").references(() => countries.id).notNull(),
   roleTitleId: varchar("role_title_id").references(() => roleTitles.id),
   customRoleTitle: varchar("custom_role_title"), // if not using predefined role
+  templateId: varchar("template_id").references(() => contractTemplates.id), // contract template used to generate this contract
   employmentType: employmentTypeEnum("employment_type").notNull(),
   rateType: rateTypeEnum("rate_type").notNull(),
   rate: decimal("rate", { precision: 12, scale: 2 }).notNull(),
