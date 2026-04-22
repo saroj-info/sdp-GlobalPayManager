@@ -494,7 +494,7 @@ export default function MyDetailsPage() {
   const handleSaveSection = async (section: string) => {
     let data: any = {};
     let isValid = false;
-    
+
     switch (section) {
       case 'personal':
         isValid = await personalForm.trigger();
@@ -510,18 +510,20 @@ export default function MyDetailsPage() {
         if (data.dateOfBirth) {
           data.dateOfBirth = new Date(data.dateOfBirth).toISOString();
         }
+        data.personalDetailsCompleted = true;
         break;
       case 'business':
         isValid = await businessForm.trigger();
         if (!isValid) {
           toast({
-            title: "Error", 
+            title: "Error",
             description: "Please fill in all required fields correctly.",
             variant: "destructive",
           });
           return;
         }
         data = businessForm.getValues();
+        data.businessDetailsCompleted = true;
         break;
       case 'bank':
         isValid = await bankForm.trigger();
@@ -534,6 +536,7 @@ export default function MyDetailsPage() {
           return;
         }
         data = bankForm.getValues();
+        data.bankDetailsCompleted = true;
         break;
       case 'tax':
         isValid = await taxForm.trigger();

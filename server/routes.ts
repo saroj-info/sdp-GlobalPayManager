@@ -5021,23 +5021,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user?.id;
       const userType = req.user?.userType;
-      
+
       // Only workers can access this endpoint
       if (userType !== 'worker') {
         return res.status(403).json({ message: "Access denied - workers only" });
       }
-      
+
       const worker = await storage.getWorkerByUserId(userId);
       if (!worker) {
         return res.status(404).json({ message: "Worker profile not found" });
       }
-      
+
       // Convert dateOfBirth string to Date object if present
       const updates = { ...req.body };
       if (updates.dateOfBirth && typeof updates.dateOfBirth === 'string') {
         updates.dateOfBirth = new Date(updates.dateOfBirth);
       }
-      
+
+      // Auto-derive completion flags from the merged record
+      const merged: any = { ...worker, ...updates };
+      const nonEmpty = (v: any) => v !== null && v !== undefined && String(v).trim() !== '';
+
+      if (nonEmpty(merged.firstName) && nonEmpty(merged.lastName) && nonEmpty(merged.email)
+          && nonEmpty(merged.phoneNumber) && nonEmpty(merged.dateOfBirth)
+          && nonEmpty(merged.streetAddress) && nonEmpty(merged.suburb)
+          && nonEmpty(merged.state) && nonEmpty(merged.postcode)) {
+        updates.personalDetailsCompleted = true;
+      }
+
+      if (nonEmpty(merged.accountName) && nonEmpty(merged.bankName) && nonEmpty(merged.accountNumber)) {
+        updates.bankDetailsCompleted = true;
+      }
+
+      if (merged.workerType === 'contractor' && nonEmpty(merged.businessStructure)) {
+        updates.businessDetailsCompleted = true;
+      }
+
       const updatedWorker = await storage.updateWorkerProfile(worker.id, updates);
       res.json(updatedWorker);
     } catch (error) {
