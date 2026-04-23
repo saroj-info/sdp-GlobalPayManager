@@ -1639,7 +1639,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Return user info with token
-      res.json({ 
+      res.json({
         message: "Login successful",
         token,
         user: {

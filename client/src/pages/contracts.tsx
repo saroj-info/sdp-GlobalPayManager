@@ -1102,7 +1102,7 @@ export default function ContractsPage() {
                 </h3>
                 {selectedContract.worker && (
                   <p className="text-lg text-muted-foreground">
-                    {selectedContract.worker.firstName} {selectedContract.worker.lastName}
+                    {selectedContract.worker.firstName} {selectedContract.worker.lastName} ({selectedContract.worker.email})
                   </p>
                 )}
                 <ContractStatusBadge contract={selectedContract} />
