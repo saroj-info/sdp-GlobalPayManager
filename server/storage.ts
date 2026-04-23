@@ -1281,6 +1281,8 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(contracts)
       .where(eq(contracts.signingToken, token));
+
+      console.log('getContractBySigningToken - token:', token, 'contract:', contract);
     
     return contract;
   }

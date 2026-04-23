@@ -92,9 +92,15 @@ export async function handleLogout() {
     // Continue with logout even if API call fails
   }
   
-  // Clear localStorage
-  localStorage.removeItem('authToken');
-  
+  // Clear entire localStorage and sessionStorage
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+  } catch (e) {
+    // fall back to removing the known key if clear fails
+    localStorage.removeItem('authToken');
+  }
+
   // Clear all TanStack Query cache
   queryClient.clear();
   

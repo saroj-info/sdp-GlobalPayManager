@@ -5569,30 +5569,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json(contract);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating contract:", error);
-      
+      console.error("Error details:", { message: error?.message, code: error?.code, detail: error?.detail, stack: error?.stack });
+
       if (error instanceof z.ZodError) {
         const errorMessages = error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
-        return res.status(400).json({ 
-          message: "Validation error", 
+        return res.status(400).json({
+          message: "Validation error",
           details: errorMessages
         });
       }
-      
+
       if (error && typeof error === 'object' && 'code' in error) {
         if (error.code === '23505') {
           return res.status(400).json({ message: "A contract with these details already exists" });
         }
         if (error.code === '23503') {
-          return res.status(400).json({ message: "Invalid reference: Please check the worker, business, country, or template selection" });
+          return res.status(400).json({ message: "Invalid reference: Please check the worker, business, country, or template selection", details: error?.detail });
         }
         if (error.code === '23502') {
-          return res.status(400).json({ message: "Missing required fields. Please fill in all required contract information." });
+          return res.status(400).json({ message: "Missing required fields. Please fill in all required contract information.", details: error?.detail });
         }
       }
-      
-      res.status(400).json({ message: "Failed to create contract. Please check your information and try again." });
+
+      res.status(400).json({
+        message: "Failed to create contract. Please check your information and try again.",
+        details: error?.message || String(error),
+      });
     }
   });
 
@@ -5701,12 +5705,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { token } = req.params;
       const contract = await storage.getContractBySigningToken(token);
-      
+
       if (!contract) {
         return res.status(404).json({ message: "Contract not found or link expired" });
       }
-      
-      res.json(contract);
+
+      // Enrich response with worker, business, country and role title so the signing page can display them
+      const [worker, business, roleTitle] = await Promise.all([
+        storage.getWorkerById(contract.workerId),
+        storage.getBusinessById(contract.businessId),
+        contract.roleTitleId ? storage.getRoleTitle(contract.roleTitleId) : Promise.resolve(null),
+      ]);
+
+      res.json({
+        ...contract,
+        worker: worker ? { id: worker.id, firstName: worker.firstName, lastName: worker.lastName, email: worker.email } : null,
+        business: business ? { id: business.id, name: business.name } : null,
+        roleTitle: roleTitle ? { id: roleTitle.id, title: roleTitle.title } : null,
+      });
     } catch (error) {
       console.error("Error fetching contract for signing:", error);
       res.status(500).json({ message: "Failed to fetch contract" });

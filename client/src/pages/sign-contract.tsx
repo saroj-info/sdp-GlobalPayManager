@@ -21,17 +21,21 @@ export default function SignContract() {
 
   const token = params?.token;
 
-  // Redirect to login if not authenticated
+  // Redirect to login if not authenticated, with a clear message first
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
-      // Store the signing token in sessionStorage so we can redirect back after login
       if (token) {
         sessionStorage.setItem('pendingSigningToken', token);
       }
-      window.location.href = '/test-login';
-      return;
+      toast({
+        title: "Please log in first",
+        description: "You need to log in before signing the contract. Redirecting to login...",
+      });
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 1500);
     }
-  }, [isAuthenticated, isLoading, token]);
+  }, [isAuthenticated, isLoading, token, toast]);
 
   // Fetch contract details using the token
   const { data: contract, isLoading: contractLoading, error } = useQuery({
@@ -63,11 +67,11 @@ export default function SignContract() {
     onSuccess: () => {
       toast({
         title: "Contract Signed Successfully",
-        description: "Your contract has been signed and recorded. Redirecting to login...",
+        description: "Your contract has been signed and recorded. Redirecting to home...",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/contracts/sign", token] });
       setTimeout(() => {
-        window.location.href = '/login';
+        window.location.href = '/';
       }, 2000);
     },
     onError: (error) => {
@@ -86,6 +90,22 @@ export default function SignContract() {
           <Clock className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
           <p>Loading contract...</p>
         </div>
+      </div>
+    );
+  }
+
+  // User not authenticated — show login-required screen (redirect is already queued via the effect above)
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <Card className="max-w-md mx-auto">
+          <CardHeader>
+            <CardTitle className="text-blue-600">Login Required</CardTitle>
+            <CardDescription>
+              Please log in before signing your contract. Redirecting to the login page...
+            </CardDescription>
+          </CardHeader>
+        </Card>
       </div>
     );
   }
