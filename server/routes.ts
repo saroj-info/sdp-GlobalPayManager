@@ -5900,7 +5900,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const contract = await storage.getContract(id);
       if (!contract) return res.status(404).json({ message: "Contract not found" });
-      const lines = (req.body.lines || []).map((l: any, i: number) => ({ ...l, contractId: id, sortOrder: i }));
+      const emptyToNull = (v: any) => (v === '' || v === undefined ? null : v);
+      const lines = (req.body.lines || [])
+        .filter((l: any) => l && l.projectName && l.rate !== '' && l.rate != null)
+        .map((l: any, i: number) => ({
+          ...l,
+          contractId: id,
+          sortOrder: i,
+          rate: String(l.rate),
+          clientRate: emptyToNull(l.clientRate),
+          projectCode: emptyToNull(l.projectCode),
+          startDate: l.startDate ? new Date(l.startDate) : null,
+          endDate: l.endDate ? new Date(l.endDate) : null,
+          notes: emptyToNull(l.notes),
+        }));
       const saved = await storage.replaceContractRateLines(id, lines);
       res.json(saved);
     } catch (error) {

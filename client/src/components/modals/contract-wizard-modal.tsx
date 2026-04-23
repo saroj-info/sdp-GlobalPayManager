@@ -175,9 +175,11 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         clientBillingType: (existingContract as any).clientBillingType || 'rate_based',
         fixedBillingAmount: (existingContract as any).fixedBillingAmount?.toString() || '',
         fixedBillingFrequency: (existingContract as any).fixedBillingFrequency || 'monthly',
-        // On-behalf fields for SDP Internal users
-        onBehalf: existingContract.onBehalf || false,
-        selectedBusinessId: existingContract.selectedBusinessId || '',
+        // On-behalf fields for SDP Internal users — derived from audit field on the contract
+        onBehalf: isSDPInternal && !!(existingContract.createdOnBehalfOfBusinessId || existingContract.businessId),
+        selectedBusinessId: isSDPInternal
+          ? (existingContract.createdOnBehalfOfBusinessId || existingContract.businessId || '')
+          : '',
         // SDP Entity
         sdpEntityId: existingContract.sdpEntityId || '',
       };
@@ -252,6 +254,38 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     // Sync refs so the template-clearing effect doesn't treat this as a country/type change
     prevCountryRef.current = newData.countryId;
     prevEmploymentTypeRef.current = newData.employmentType;
+    // Reset rate lines; they'll be hydrated from the server below when editing a multiple-rate contract
+    setProjectRateLines([]);
+  }, [editMode, existingContract]);
+
+  // Load existing project rate lines when editing a contract with multiple rate structure
+  useEffect(() => {
+    if (!editMode || !existingContract?.id || existingContract?.rateStructure !== 'multiple') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest('GET', `/api/contracts/${existingContract.id}/rate-lines`);
+        const lines = await res.json();
+        if (!cancelled && Array.isArray(lines)) {
+          setProjectRateLines(
+            lines.map((l: any) => ({
+              id: l.id,
+              projectName: l.projectName || '',
+              projectCode: l.projectCode || '',
+              rateType: l.rateType || existingContract.rateType || 'hourly',
+              rate: l.rate != null ? String(l.rate) : '',
+              clientRate: l.clientRate != null ? String(l.clientRate) : '',
+              currency: l.currency || existingContract.currency || 'AUD',
+              isDefault: !!l.isDefault,
+              notes: l.notes || '',
+            }))
+          );
+        }
+      } catch (e) {
+        console.error('Failed to load existing rate lines:', e);
+      }
+    })();
+    return () => { cancelled = true; };
   }, [editMode, existingContract]);
 
   // Reset template selection when country or employment type actually changes
@@ -491,43 +525,64 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     },
   });
 
+  // Per-step validation — returns first missing field error, or null if valid
+  const validateStep4 = (): string | null => {
+    if (!formData.roleTitleId && !formData.customRoleTitle) {
+      return "Please select a role title or enter a custom one.";
+    }
+    if (formData.roleTitleId === 'custom' && !formData.customRoleTitle?.trim()) {
+      return "Please enter the custom role title.";
+    }
+    if (!formData.roleDescription || formData.roleDescription.trim() === '') {
+      return "Please provide a role description.";
+    }
+    if (!formData.templateId) {
+      return "Please select a contract template.";
+    }
+    if (!formData.startDate) {
+      return "Please select a start date.";
+    }
+    if (['casual', 'fixed_term'].includes(formData.employmentType) && !formData.endDate) {
+      return "End date is required for this engagement type.";
+    }
+    // Rate validation depends on rate structure
+    if (formData.rateStructure === 'multiple') {
+      const hasValidLine = projectRateLines.some((l: any) =>
+        l && l.projectName?.trim() && l.rate && !isNaN(parseFloat(l.rate)) && parseFloat(l.rate) > 0
+      );
+      if (!hasValidLine) {
+        return "Please add at least one project rate line with a name and rate.";
+      }
+    } else {
+      if (!formData.rate || isNaN(parseFloat(formData.rate)) || parseFloat(formData.rate) <= 0) {
+        return "Please enter a valid rate.";
+      }
+    }
+    if (isSDPInternal && formData.onBehalf && !formData.selectedBusinessId) {
+      return "Please select a business when creating contracts on behalf.";
+    }
+    return null;
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (step < 4) return; // Only handle submission on final steps
-    
-    if (!formData.workerId || !formData.countryId || !formData.startDate || !formData.rate || !formData.templateId) {
+
+    if (!formData.workerId || !formData.countryId) {
       toast({
         title: "Error",
-        description: "Please fill in all required fields including contract template.",
+        description: "Please select a worker and country on Step 1.",
         variant: "destructive",
       });
       return;
     }
 
-    if (!formData.roleTitleId && !formData.customRoleTitle) {
+    const step4Error = validateStep4();
+    if (step4Error) {
       toast({
         title: "Error",
-        description: "Please select a role title or enter a custom one.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (!formData.roleDescription || formData.roleDescription.trim() === '') {
-      toast({
-        title: "Error",
-        description: "Please provide a role description.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    // Validate end date for engagement types that require it
-    if (['casual', 'fixed_term'].includes(formData.employmentType) && !formData.endDate) {
-      toast({
-        title: "Error",
-        description: "End date is required for this engagement type.",
+        description: step4Error,
         variant: "destructive",
       });
       return;
@@ -580,9 +635,20 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       firstTimesheetStartDate = calculatedDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
     }
 
+    // For multiple rate structure, backend still requires a top-level rate — use the default/first line's rate
+    const primaryRateLine = formData.rateStructure === 'multiple'
+      ? (projectRateLines.find((l: any) => l.isDefault && l.rate) || projectRateLines.find((l: any) => l.rate))
+      : null;
+    const effectiveRate = primaryRateLine?.rate || formData.rate;
+    // Same for customer billing rate when client billing is rate-based on a multiple-rate contract
+    const effectiveCustomerBillingRate = (formData.isForClient && formData.clientBillingType !== 'fixed_price' && formData.rateStructure === 'multiple')
+      ? (primaryRateLine?.clientRate || formData.customerBillingRate)
+      : formData.customerBillingRate;
+
     const contractData = {
       ...formData,
-      rate: formData.rate,
+      rate: effectiveRate,
+      customerBillingRate: effectiveCustomerBillingRate,
       // Include on-behalf fields for SDP internal users
       onBehalf: isSDPInternal ? formData.onBehalf : false,
       selectedBusinessId: isSDPInternal && formData.onBehalf ? formData.selectedBusinessId : undefined,
@@ -2678,10 +2744,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                     }
                     disabled={createContractMutation.isPending}
                     onClick={
-                      (user as any)?.userType === 'sdp_internal' || 
+                      (user as any)?.userType === 'sdp_internal' ||
                       (formData.employmentType === 'contractor' && !formData.contractorCompliance)
                         ? (e) => {
                             e.preventDefault();
+                            const err = validateStep4();
+                            if (err) {
+                              toast({ title: "Error", description: err, variant: "destructive" });
+                              return;
+                            }
                             setStep(5);
                           }
                         : undefined
