@@ -95,6 +95,22 @@ interface SdpInvoice {
   } | null;
 }
 
+// Format a timesheet's total worked time based on the contract's rate type (hours vs days)
+function formatTimesheetTotal(ts: { totalHours?: string | null; totalDays?: string | null } | null | undefined, rateType?: string | null): string {
+  if (!ts) return '';
+  const hours = parseFloat(ts.totalHours || '0');
+  const days = parseFloat(ts.totalDays || '0');
+  if (rateType === 'daily') {
+    if (days > 0) return `${days.toFixed(1)}d`;
+    if (hours > 0) return `${(hours / 8).toFixed(1)}d`;
+    return '0.0d';
+  }
+  // hourly (default) or annual — show hours
+  if (hours > 0) return `${hours.toFixed(1)}h`;
+  if (days > 0) return `${(days * 8).toFixed(1)}h`;
+  return '0.0h';
+}
+
 const statusColors = {
   draft: "bg-gray-100 text-gray-800",
   issued: "bg-blue-100 text-blue-800",
@@ -597,7 +613,7 @@ export default function SdpInvoices() {
                           {formatDate(timesheet.periodStart)} - {formatDate(timesheet.periodEnd)}
                         </div>
                         <Badge className="bg-green-100 text-green-800">
-                          {timesheet.totalHours}h
+                          {formatTimesheetTotal(timesheet, timesheet.contract?.rateType)}
                         </Badge>
                       </div>
                       <div className="text-sm text-secondary-600 mb-2">
@@ -716,8 +732,7 @@ export default function SdpInvoices() {
                             <div>
                               <div>{new Date(invoice.timesheet.periodStart).toLocaleDateString()} - {new Date(invoice.timesheet.periodEnd).toLocaleDateString()}</div>
                               <div className="text-xs text-gray-500">
-                                {invoice.timesheet.totalHours ? `${parseFloat(invoice.timesheet.totalHours).toFixed(1)}h` : ''}
-                                {invoice.timesheet.totalDays ? ` / ${parseFloat(invoice.timesheet.totalDays).toFixed(1)}d` : ''}
+                                {formatTimesheetTotal(invoice.timesheet, invoice.contract?.rateType)}
                               </div>
                             </div>
                           ) : '—'}
@@ -869,11 +884,10 @@ export default function SdpInvoices() {
                             <span className="text-secondary-600">Timesheet:</span>
                             <span className="text-right">
                               {formatDate(invoice.timesheet.periodStart)} - {formatDate(invoice.timesheet.periodEnd)}
-                              {invoice.timesheet.totalHours && (
-                                <span className="text-xs text-gray-500 ml-1">
-                                  ({parseFloat(invoice.timesheet.totalHours).toFixed(1)}h)
-                                </span>
-                              )}
+                              {(() => {
+                                const label = formatTimesheetTotal(invoice.timesheet, invoice.contract?.rateType);
+                                return label ? <span className="text-xs text-gray-500 ml-1">({label})</span> : null;
+                              })()}
                             </span>
                           </div>
                         )}

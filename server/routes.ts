@@ -6460,11 +6460,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // sdp_internal users pass through without additional checks
 
       await storage.updateTimesheetStatus(id, status, userId, rejectionReason);
-      
+      console.log(`[invoice] PATCH /timesheets/${id}/status → status='${status}' contractId=${timesheet.contractId}`);
+
       // If approving a timesheet, auto-generate invoices based on contract billingMode
       if (status === 'approved') {
         const contract = await storage.getContractById(timesheet.contractId);
-        
+        console.log(`[invoice] approved branch reached — contract found=${!!contract} isForClient=${contract?.isForClient} billingMode=${(contract as any)?.billingMode} invoiceCustomer=${contract?.invoiceCustomer} rateType=${contract?.rateType}`);
+
         // Salary contracts (annual) do not generate auto-invoices — payroll handles this separately
         if (contract && contract.rateType === 'annual') {
           console.log(`Salary contract ${contract.id}: skipping auto-invoice on timesheet approval`);
@@ -6478,6 +6480,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const rateStructure = (contract as any).rateStructure || 'single';
               const clientBillingType = (contract as any).clientBillingType || 'rate_based';
               const workerRate = parseFloat(contract.rate);
+              console.log(`[invoice] start contract=${contract.id} timesheet=${timesheet.id} billingMode=${billingMode} rateType=${rateType} rateStructure=${rateStructure} clientBillingType=${clientBillingType} workerRate=${workerRate} isForClient=${contract.isForClient}`);
               if (isNaN(workerRate)) {
                 throw new Error(`Contract ${contract.id} has invalid/missing rate — cannot auto-generate invoice`);
               }
@@ -6486,6 +6489,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               let rateLines: any[] = [];
               if (rateStructure === 'multiple') {
                 rateLines = await storage.getContractRateLines(contract.id);
+                console.log(`[invoice] multi-rate contract — ${rateLines.length} rate lines:`, rateLines.map((r: any) => ({ id: r.id, name: r.projectName, rate: r.rate, clientRate: r.clientRate, isDefault: r.isDefault })));
+                console.log(`[invoice] timesheet entries (${timesheet.entries.length}):`, timesheet.entries.map((e: any) => ({ date: e.date, hours: e.hoursWorked, days: e.daysWorked, projectRateLineId: e.projectRateLineId })));
               }
 
               // Build a map of rateLineId → rate for quick lookup
@@ -6501,8 +6506,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Group entries by their rate line
                 const rateGroups = new Map<string, { hours: number; days: number; rate: number; label: string }>();
                 for (const entry of timesheet.entries) {
+                  console.log(`[invoice] processing timesheet entry — date=${entry.date} hours=${entry.hoursWorked} days=${entry.daysWorked} projectRateLineId=${entry.projectRateLineId}`);
                   const rateLineId = entry.projectRateLineId;
                   const entryRate = rateLineId ? (rateLineMap.get(rateLineId) ?? workerRate) : workerRate;
+                  console.log(`[invoice] entry rate determined as ${entryRate} (rateLineId=${rateLineId})`);
                   const rl = rateLines.find((r: any) => r.id === rateLineId);
                   const label = rl?.description || 'Standard Rate';
                   const key = rateLineId || 'default';
@@ -6578,7 +6585,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 clientLineItems.push({ description: `Fixed period billing — ${timesheet.periodStart} to ${timesheet.periodEnd}`, quantity: '1', unitPrice: customerBillingAmount.toFixed(2), amount: customerBillingAmount.toFixed(2), sortOrder: 0 });
               } else {
                 // Rate-based client billing
-                const customerRate = contract.customerBillingRate ? parseFloat(contract.customerBillingRate) : 0;
+                const topLevelCustomerRate = contract.customerBillingRate ? parseFloat(contract.customerBillingRate) : 0;
+                // Fallback when neither the specific entry's rate line nor the contract have a client rate:
+                // use the default rate line's clientRate, or the first line's clientRate.
+                const defaultLineClientRate = (() => {
+                  const def = rateLines.find((r: any) => r.isDefault && r.clientRate);
+                  if (def) return parseFloat(def.clientRate);
+                  const firstWith = rateLines.find((r: any) => r.clientRate);
+                  return firstWith ? parseFloat(firstWith.clientRate) : 0;
+                })();
+                const customerRate = topLevelCustomerRate || defaultLineClientRate;
                 if (rateStructure === 'multiple' && rateLines.length > 0) {
                   // Use per-entry rates for client invoice too
                   const rateGroups = new Map<string, { hours: number; days: number; rate: number; label: string }>();
@@ -6626,6 +6642,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }
 
               const suggestedMargin = customerBillingAmount - workerCost;
+              console.log(`[invoice] computed workerCost=${workerCost} customerBillingAmount=${customerBillingAmount} margin=${suggestedMargin} currency=${contract.customerCurrency || contract.currency}`);
               const invoiceDate = new Date();
               const paymentTermsDays = parseInt(contract.paymentTerms || '30');
               const dueDate = new Date(invoiceDate);
@@ -6677,7 +6694,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
               // Helper: create SDP→HostClient invoice (category: customer_billing)
               const createCustomerBillingInvoice = async () => {
                 if (!contract.customerBusinessId) throw new Error('Contract missing customerBusinessId for customer billing invoice');
-                if (clientBillingType !== 'fixed_price' && (!contract.customerBillingRate || parseFloat(contract.customerBillingRate) <= 0)) throw new Error('Contract missing valid customerBillingRate');
+                // For rate-based billing: either the top-level customerBillingRate OR per-line clientRate on rate lines must drive a positive amount
+                if (clientBillingType !== 'fixed_price' && customerBillingAmount <= 0) {
+                  throw new Error(`Contract ${contract.id} produced 0 customer billing amount — set customerBillingRate or clientRate on rate lines`);
+                }
                 if (!contract.customerCurrency) throw new Error('Contract missing customerCurrency');
                 const existing = allInvoices.find(inv =>
                   inv.timesheetId === timesheet.id && inv.invoiceCategory === 'customer_billing'
@@ -6774,11 +6794,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 await createSdpToBusinessInvoice();
                 await createB2CInvoice();
               }
-            } catch (invoiceError) {
-              console.error('Failed to auto-generate invoice on timesheet approval:', invoiceError);
+            } catch (invoiceError: any) {
+              console.error('[invoice] FAILED to auto-generate invoice on timesheet approval — message:', invoiceError?.message);
+              console.error('[invoice] stack:', invoiceError?.stack);
               // Don't fail the timesheet approval if invoice generation fails
             }
+          } else {
+            console.log(`[invoice] skipping auto-invoice — contract ${contract?.id} has no billingMode and invoiceCustomer=${contract?.invoiceCustomer}`);
           }
+        } else if (contract) {
+          console.log(`[invoice] skipping auto-invoice — contract ${contract.id} isForClient=false`);
         }
       }
       
@@ -7529,30 +7554,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const lineItems = await storage.getSdpInvoiceLineItems(inv.id);
           let contract = null;
           if (inv.contractId) {
-            const c = await storage.getContractById(inv.contractId);
+            const c: any = await storage.getContractById(inv.contractId);
             if (c) {
+              let resolvedTitle = c.customRoleTitle || '';
+              if (!resolvedTitle && c.roleTitleId) {
+                try {
+                  const rt = await storage.getRoleTitle(c.roleTitleId);
+                  resolvedTitle = rt?.title || '';
+                } catch {}
+              }
               contract = {
                 id: c.id,
-                jobTitle: (c as any).jobTitle || (c as any).roleDescription || '',
-                rateType: (c as any).rateType || '',
-                rate: (c as any).rate || '',
-                currency: (c as any).currency || '',
-                status: (c as any).status || '',
-                startDate: (c as any).startDate || null,
-                endDate: (c as any).endDate || null,
+                jobTitle: resolvedTitle || c.jobDescription || '',
+                rateType: c.rateType || '',
+                rate: c.rate || '',
+                currency: c.currency || '',
+                status: c.status || '',
+                startDate: c.startDate || null,
+                endDate: c.endDate || null,
               };
             }
           }
           let timesheet = null;
           if (inv.timesheetId) {
-            const ts = await storage.getTimesheetById(inv.timesheetId);
+            const ts: any = await storage.getTimesheetById(inv.timesheetId);
             if (ts) {
+              // Derive totals from entries when the persisted columns are empty
+              const totalHoursNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.hoursWorked || '0') || 0), 0);
+              const totalDaysNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.daysWorked || '0') || 0), 0);
               timesheet = {
                 id: ts.id,
                 periodStart: ts.periodStart,
                 periodEnd: ts.periodEnd,
-                totalHours: ts.totalHours,
-                totalDays: (ts as any).totalDays || null,
+                totalHours: (parseFloat(ts.totalHours || '0') > 0) ? ts.totalHours : totalHoursNum.toFixed(2),
+                totalDays: ts.totalDays ?? (totalDaysNum > 0 ? totalDaysNum.toFixed(2) : null),
                 status: ts.status,
                 workerName: ts.worker ? `${ts.worker.firstName} ${ts.worker.lastName}` : undefined,
               };
@@ -7595,30 +7630,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const lineItems = await storage.getSdpInvoiceLineItems(inv.id);
           let contract = null;
           if (inv.contractId) {
-            const c = await storage.getContractById(inv.contractId);
+            const c: any = await storage.getContractById(inv.contractId);
             if (c) {
+              let resolvedTitle = c.customRoleTitle || '';
+              if (!resolvedTitle && c.roleTitleId) {
+                try {
+                  const rt = await storage.getRoleTitle(c.roleTitleId);
+                  resolvedTitle = rt?.title || '';
+                } catch {}
+              }
               contract = {
                 id: c.id,
-                jobTitle: (c as any).jobTitle || (c as any).roleDescription || '',
-                rateType: (c as any).rateType || '',
-                rate: (c as any).rate || '',
-                currency: (c as any).currency || '',
-                status: (c as any).status || '',
-                startDate: (c as any).startDate || null,
-                endDate: (c as any).endDate || null,
+                jobTitle: resolvedTitle || c.jobDescription || '',
+                rateType: c.rateType || '',
+                rate: c.rate || '',
+                currency: c.currency || '',
+                status: c.status || '',
+                startDate: c.startDate || null,
+                endDate: c.endDate || null,
               };
             }
           }
           let timesheet = null;
           if (inv.timesheetId) {
-            const ts = await storage.getTimesheetById(inv.timesheetId);
+            const ts: any = await storage.getTimesheetById(inv.timesheetId);
             if (ts) {
+              const totalHoursNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.hoursWorked || '0') || 0), 0);
+              const totalDaysNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.daysWorked || '0') || 0), 0);
               timesheet = {
                 id: ts.id,
                 periodStart: ts.periodStart,
                 periodEnd: ts.periodEnd,
-                totalHours: ts.totalHours,
-                totalDays: (ts as any).totalDays || null,
+                totalHours: (parseFloat(ts.totalHours || '0') > 0) ? ts.totalHours : totalHoursNum.toFixed(2),
+                totalDays: ts.totalDays ?? (totalDaysNum > 0 ? totalDaysNum.toFixed(2) : null),
                 status: ts.status,
                 workerName: ts.worker ? `${ts.worker.firstName} ${ts.worker.lastName}` : undefined,
               };
