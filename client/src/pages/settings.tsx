@@ -426,7 +426,7 @@ export default function Settings() {
           >
             Cancel
           </Button>
-          <Button 
+          <Button
             onClick={handleSaveProfile}
             disabled={updateProfileMutation.isPending}
             className="flex items-center gap-2"
@@ -436,6 +436,7 @@ export default function Settings() {
             {updateProfileMutation.isPending ? 'Saving...' : 'Save Changes'}
           </Button>
         </div>
+
       </div>
     </div>
   );

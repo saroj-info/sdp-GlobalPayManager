@@ -409,6 +409,30 @@ class EmailService {
     });
   }
 
+  async sendHostClientCredentialsEmail(to: string, firstName: string, businessName: string, tempPassword: string): Promise<boolean> {
+    const loginLink = `${getEmailBaseUrl()}/login`;
+    const safeName = firstName?.trim() || 'there';
+    return this.sendEmail({
+      to,
+      subject: `Your SDP Global Pay account for ${businessName} is ready`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Welcome, ${safeName}!</h2>
+          <p>An account has been created for you on SDP Global Pay so that <strong>${businessName}</strong> can review and approve work performed for your business.</p>
+          <p>You can sign in with the following temporary credentials:</p>
+          <div style="background:#f3f4f6;padding:12px 16px;border-radius:6px;margin:12px 0;font-family:monospace;">
+            <div><strong>Email:</strong> ${to}</div>
+            <div><strong>Temporary password:</strong> ${tempPassword}</div>
+          </div>
+          <p>Please log in and change your password from <em>Settings → Change Password</em> as soon as possible.</p>
+          <a href="${loginLink}" style="display:inline-block;background:#2563eb;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">Log in to SDP Global Pay</a>
+          <p style="margin-top:16px;color:#6b7280;font-size:14px;">If you did not expect this, you can safely ignore this email.</p>
+        </div>
+      `,
+      text: `Welcome ${safeName}!\n\nAn account has been created for you on SDP Global Pay for ${businessName}.\n\nEmail: ${to}\nTemporary password: ${tempPassword}\n\nLog in: ${loginLink}\n\nPlease change your password after first login from Settings > Change Password.`,
+    });
+  }
+
   async sendWorkerInvitationEmail(to: string, firstName: string, inviteToken: string, businessName: string): Promise<boolean> {
     const signupLink = `${getEmailBaseUrl()}/signup?token=${inviteToken}&accountType=contractor`;
     return this.sendEmail({

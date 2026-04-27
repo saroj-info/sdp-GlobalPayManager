@@ -595,7 +595,7 @@ export default function SdpInvoices() {
         </div>
       )}
 
-          {/* Available Timesheets for Invoice Creation */}
+          {/* Available Timesheets for Invoice Creation — hidden, kept for future use
           {availableTimesheets.length > 0 && (
             <Card className="mb-6">
               <CardHeader>
@@ -637,6 +637,7 @@ export default function SdpInvoices() {
               </CardContent>
             </Card>
           )}
+          */}
 
           {/* Invoice Category Tabs */}
           <Tabs value={activeCategory} onValueChange={setActiveCategory} className="mb-6">

@@ -1784,6 +1784,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Change password (authenticated). Verifies current password, then sets a new one.
+  app.post('/api/account/change-password', authMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const schema = z.object({
+        currentPassword: z.string().min(1, 'Current password is required'),
+        newPassword: z.string().min(8, 'New password must be at least 8 characters'),
+      });
+      const { currentPassword, newPassword } = schema.parse(req.body);
+      if (currentPassword === newPassword) {
+        return res.status(400).json({ message: 'New password must be different from current password' });
+      }
+      const user = await storage.getUser(userId);
+      if (!user || !user.passwordHash) {
+        return res.status(400).json({ message: 'Cannot change password for this account' });
+      }
+      const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!ok) {
+        return res.status(401).json({ message: 'Current password is incorrect' });
+      }
+      const newHash = await bcrypt.hash(newPassword, 10);
+      await storage.updatePasswordHash(userId, newHash);
+      res.json({ message: 'Password updated successfully' });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0]?.message || 'Invalid input' });
+      }
+      console.error('Change password error:', error);
+      res.status(500).json({ message: 'Failed to update password' });
+    }
+  });
+
   // Profile Management Routes
   // Get user profile
   app.get('/api/profile', authMiddleware, async (req: any, res) => {
@@ -4614,7 +4646,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ownerId: userId,
       });
 
-      res.status(201).json(hostClient);
+      // If a contact email was supplied, provision a login for the host client and email creds.
+      // Failures here must not roll back the host client creation.
+      let loginCreated = false;
+      if (contactEmail?.trim()) {
+        try {
+          const cleanedEmail = contactEmail.trim().toLowerCase();
+          const existing = await storage.getUserByEmail(cleanedEmail);
+          if (!existing) {
+            const tempPassword = crypto.randomBytes(8).toString('base64').replace(/[+/=]/g, '').slice(0, 12);
+            const passwordHash = await bcrypt.hash(tempPassword, 10);
+            const nameParts = (contactName || '').trim().split(/\s+/);
+            const firstName = nameParts[0] || hostClient.name;
+            const lastName = nameParts.slice(1).join(' ') || '';
+            const newUser = await storage.createUser({
+              email: cleanedEmail,
+              firstName,
+              lastName,
+              userType: 'business_user',
+              accessibleBusinessIds: [hostClient.id],
+              passwordHash,
+              emailVerified: true,
+              isActive: true,
+            } as any);
+            // Make the new user the owner so getBusinessByOwnerId resolves on login
+            try {
+              await storage.updateBusiness(hostClient.id, { ownerId: newUser.id } as any);
+            } catch (ownerErr) {
+              console.warn('Could not update host client ownerId to new user:', ownerErr);
+            }
+            await emailService.sendHostClientCredentialsEmail(cleanedEmail, firstName, hostClient.name, tempPassword);
+            loginCreated = true;
+          }
+        } catch (loginErr) {
+          console.error('Host client login provisioning failed (host client still created):', loginErr);
+        }
+      }
+
+      res.status(201).json({ ...hostClient, loginCreated });
     } catch (error) {
       console.error("Error creating host client:", error);
       res.status(500).json({ message: "Failed to create host client" });
@@ -5217,13 +5286,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const business = await storage.getBusinessByOwnerId(userId);
-      
+
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
       }
-      
-      const contracts = await storage.getContractsByBusiness(business.id);
-      const contractsWithStatus = await addDerivedStatusToContracts(contracts);
+
+      // Contracts where this business is the employing business
+      const ownContracts = await storage.getContractsByBusiness(business.id);
+      // Contracts where this business is the host client (read-only view)
+      const hostClientContracts = await storage.getContractsByCustomerBusiness(business.id);
+      // Tag host-client contracts so the frontend can render them read-only
+      const hostClientTagged = hostClientContracts.map((c: any) => ({ ...c, viewerRole: 'host_client', readOnly: true }));
+      const ownTagged = ownContracts.map((c: any) => ({ ...c, viewerRole: 'employing_business', readOnly: false }));
+
+      // Merge, dedupe by id (in case a business is both employing and host client somehow)
+      const seen = new Set<string>();
+      const merged = [...ownTagged, ...hostClientTagged].filter((c: any) => {
+        if (seen.has(c.id)) return false;
+        seen.add(c.id);
+        return true;
+      });
+
+      const contractsWithStatus = await addDerivedStatusToContracts(merged);
       const contractsWithRemuneration = await addRemunerationLinesToContracts(contractsWithStatus, userType);
 
       // Enrich with customer business name for contracts with a host client
@@ -6289,32 +6373,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
       
+      // Helper to attach the contract's approver role and customerBusinessId so the UI can gate buttons
+      const attachContractMeta = async (ts: any) => {
+        if (!ts.contractId) return ts;
+        try {
+          const c: any = await storage.getContractById(ts.contractId);
+          return {
+            ...ts,
+            timesheetApproverRole: c?.timesheetApproverRole || null,
+            contractEmployingBusinessId: c?.businessId || null,
+            contractCustomerBusinessId: c?.customerBusinessId || null,
+          };
+        } catch {
+          return ts;
+        }
+      };
+
       if (userType === 'sdp_internal') {
         // SDP internal users can see all timesheets; include sdpInvoiced flag
         const allTimesheets = await storage.getAllTimesheets();
         const timesheetsWithFlag = await Promise.all(allTimesheets.map(async (ts) => {
           const link = await storage.getTimesheetSdpInvoiceLink(ts.id);
           const sdpInvoiced = !!link && link.invoiceStatus !== 'void' && link.invoiceStatus !== 'cancelled';
-          return { ...ts, sdpInvoiced };
+          return await attachContractMeta({ ...ts, sdpInvoiced });
         }));
         res.json(timesheetsWithFlag);
         return;
       }
-      
+
       const business = await storage.getBusinessByOwnerId(userId);
-      
+
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
       }
-      
+
       // Get own timesheets (workers on contracts where this business is the employer)
       const ownTimesheets = await storage.getTimesheetsByBusiness(business.id);
-      const ownTimesheetsWithFlag = ownTimesheets.map(t => ({ ...t, isProvided: false, providedByBusinessName: null }));
+      const ownTimesheetsWithFlag = await Promise.all(ownTimesheets.map(t => attachContractMeta({ ...t, isProvided: false, providedByBusinessName: null })));
 
       // Also get timesheets for workers provided TO this business by other businesses
       // (contracts where this business is the customerBusinessId — host client scenario)
       const providedTimesheets = await storage.getTimesheetsByCustomerBusiness(business.id);
-      const providedTimesheetsWithFlag = providedTimesheets.map(t => ({ ...t, isProvided: true }));
+      const providedTimesheetsWithFlag = await Promise.all(providedTimesheets.map(t => attachContractMeta({ ...t, isProvided: true })));
 
       res.json([...ownTimesheetsWithFlag, ...providedTimesheetsWithFlag]);
     } catch (error) {
@@ -6437,27 +6537,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Timesheet not found" });
       }
 
-      // Authorization: SDP can approve any timesheet.
-      // Business users can approve if they are the employing business (businessId)
-      // OR the host client (customerBusinessId) for the contract — host clients confirm
-      // hours worked at their site. Workers may not approve their own timesheets.
+      // Authorization: enforce the contract's `timesheetApproverRole` if set, fall back to legacy "any of {SDP, business, host client}" otherwise.
       if (userType === 'worker') {
         return res.status(403).json({ message: "Workers cannot approve timesheets" });
       }
-      if (userType === 'business_user') {
+      const authContract: any = await storage.getContractById(timesheet.contractId);
+      if (!authContract) return res.status(404).json({ message: "Contract not found" });
+      const approverRole: string | null = authContract.timesheetApproverRole || null;
+      const labels: Record<string, string> = { sdp: 'SDP', business: 'Employing Business', host_client: 'Host Client' };
+      const denyMsg = approverRole ? `Only ${labels[approverRole] || approverRole} can approve this timesheet` : "Unauthorized to update this timesheet status";
+
+      if (userType === 'sdp_internal') {
+        if (approverRole && approverRole !== 'sdp') {
+          return res.status(403).json({ message: denyMsg });
+        }
+      } else if (userType === 'business_user') {
         const business = await storage.getBusinessByOwnerId(userId);
         if (!business) return res.status(404).json({ message: "Business not found" });
-
-        const contract = await storage.getContractById(timesheet.contractId);
-        if (!contract) return res.status(404).json({ message: "Contract not found" });
-
-        const isEmployingBusiness = contract.businessId === business.id;
-        const isHostClient = contract.customerBusinessId === business.id;
-        if (!isEmployingBusiness && !isHostClient) {
-          return res.status(403).json({ message: "Unauthorized to update this timesheet status" });
+        const isEmployingBusiness = authContract.businessId === business.id;
+        const isHostClient = authContract.customerBusinessId === business.id;
+        if (!approverRole) {
+          // Legacy: keep prior behaviour (employing business or host client may approve)
+          if (!isEmployingBusiness && !isHostClient) {
+            return res.status(403).json({ message: denyMsg });
+          }
+        } else if (approverRole === 'business' && !isEmployingBusiness) {
+          return res.status(403).json({ message: denyMsg });
+        } else if (approverRole === 'host_client' && !isHostClient) {
+          return res.status(403).json({ message: denyMsg });
+        } else if (approverRole === 'sdp') {
+          return res.status(403).json({ message: denyMsg });
         }
       }
-      // sdp_internal users pass through without additional checks
 
       await storage.updateTimesheetStatus(id, status, userId, rejectionReason);
       console.log(`[invoice] PATCH /timesheets/${id}/status → status='${status}' contractId=${timesheet.contractId}`);
@@ -7624,7 +7735,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get SDP invoices sent to this business
       const invoices = await storage.getSdpInvoicesByBusiness(business.id);
 
-      // Attach line items, contract info, and timesheet info
+      // Attach line items, contract info, timesheet info, worker info
       const enrichedInvoices = await Promise.all(
         invoices.map(async (inv) => {
           const lineItems = await storage.getSdpInvoiceLineItems(inv.id);
@@ -7642,12 +7753,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
               contract = {
                 id: c.id,
                 jobTitle: resolvedTitle || c.jobDescription || '',
+                employmentType: c.employmentType || '',
                 rateType: c.rateType || '',
                 rate: c.rate || '',
                 currency: c.currency || '',
+                rateStructure: c.rateStructure || '',
+                billingMode: c.billingMode || '',
+                paymentTerms: c.paymentTerms || '',
                 status: c.status || '',
                 startDate: c.startDate || null,
                 endDate: c.endDate || null,
+                noticePeriodDays: c.noticePeriodDays ?? null,
+                timesheetFrequency: c.timesheetFrequency || '',
+                timesheetApproverRole: c.timesheetApproverRole || null,
               };
             }
           }
@@ -7664,11 +7782,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 totalHours: (parseFloat(ts.totalHours || '0') > 0) ? ts.totalHours : totalHoursNum.toFixed(2),
                 totalDays: ts.totalDays ?? (totalDaysNum > 0 ? totalDaysNum.toFixed(2) : null),
                 status: ts.status,
+                entryCount: ts.entries?.length || 0,
+                submittedAt: ts.submittedAt || null,
+                approvedAt: ts.approvedAt || null,
                 workerName: ts.worker ? `${ts.worker.firstName} ${ts.worker.lastName}` : undefined,
               };
             }
           }
-          return { ...inv, lineItems, contract, timesheet };
+          let worker = null;
+          if (inv.workerId) {
+            try {
+              const w: any = await storage.getWorkerById(inv.workerId);
+              if (w) worker = { id: w.id, firstName: w.firstName, lastName: w.lastName, email: w.email };
+            } catch {}
+          }
+          return { ...inv, lineItems, contract, timesheet, worker };
         })
       );
 
@@ -7740,16 +7868,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const userType = req.user?.userType;
 
+      // Helper: enrich an invoice with line items + contract + timesheet + worker + host client business
+      const enrich = async (inv: any) => {
+        const lineItems = await storage.getSdpInvoiceLineItems(inv.id);
+        let contract: any = null;
+        if (inv.contractId) {
+          try {
+            const c: any = await storage.getContractById(inv.contractId);
+            if (c) {
+              let title = c.customRoleTitle || '';
+              if (!title && c.roleTitleId) {
+                const rt = await storage.getRoleTitle(c.roleTitleId);
+                title = rt?.title || '';
+              }
+              contract = {
+                id: c.id,
+                jobTitle: title || c.jobDescription || '',
+                employmentType: c.employmentType,
+                rateType: c.rateType,
+                rate: c.rate,
+                currency: c.currency,
+                rateStructure: c.rateStructure,
+                customerBillingRate: c.customerBillingRate,
+                customerCurrency: c.customerCurrency,
+                customerBillingRateType: c.customerBillingRateType,
+                clientBillingType: c.clientBillingType,
+                billingMode: c.billingMode,
+                paymentTerms: c.paymentTerms,
+                startDate: c.startDate,
+                endDate: c.endDate,
+                noticePeriodDays: c.noticePeriodDays ?? null,
+                timesheetFrequency: c.timesheetFrequency || '',
+                timesheetApproverRole: c.timesheetApproverRole || null,
+                invoicingFrequency: c.invoicingFrequency || '',
+              };
+            }
+          } catch {}
+        }
+        let timesheet: any = null;
+        if (inv.timesheetId) {
+          try {
+            const ts: any = await storage.getTimesheetById(inv.timesheetId);
+            if (ts) {
+              const totalHoursNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.hoursWorked || '0') || 0), 0);
+              const totalDaysNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.daysWorked || '0') || 0), 0);
+              timesheet = {
+                id: ts.id,
+                periodStart: ts.periodStart,
+                periodEnd: ts.periodEnd,
+                totalHours: (parseFloat(ts.totalHours || '0') > 0) ? ts.totalHours : totalHoursNum.toFixed(2),
+                totalDays: ts.totalDays ?? (totalDaysNum > 0 ? totalDaysNum.toFixed(2) : null),
+                status: ts.status,
+                entryCount: ts.entries?.length || 0,
+                submittedAt: ts.submittedAt || null,
+                approvedAt: ts.approvedAt || null,
+              };
+            }
+          } catch {}
+        }
+        let worker: any = null;
+        if (inv.workerId) {
+          try {
+            const w: any = await storage.getWorkerById(inv.workerId);
+            if (w) worker = { id: w.id, firstName: w.firstName, lastName: w.lastName, email: w.email };
+          } catch {}
+        }
+        let toBusiness: any = null;
+        if (inv.toBusinessId) {
+          try {
+            const b: any = await storage.getBusinessById(inv.toBusinessId);
+            if (b) toBusiness = { id: b.id, name: b.name, contactEmail: b.contactEmail, contactName: b.contactName };
+          } catch {}
+        }
+        return { ...inv, lineItems, contract, timesheet, worker, toBusiness };
+      };
+
       if (userType === 'sdp_internal') {
-        // SDP sees all client-related invoice types: customer_billing and business_to_client
         const allInvoices = await storage.getAllSdpInvoices();
         const clientInvoices = allInvoices.filter(inv =>
           inv.invoiceCategory === 'business_to_client' || inv.invoiceCategory === 'customer_billing'
         );
-        const withLineItems = await Promise.all(
-          clientInvoices.map(async (inv) => ({ ...inv, lineItems: await storage.getSdpInvoiceLineItems(inv.id) }))
-        );
-        return res.json(withLineItems);
+        const enriched = await Promise.all(clientInvoices.map(enrich));
+        return res.json(enriched);
       }
 
       if (userType !== 'business_user') {
@@ -7760,16 +7960,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!business) return res.status(404).json({ message: 'Business not found' });
 
       const allInvoices = await storage.getAllSdpInvoices();
-      // Include both manual (business_to_client) and auto-generated (customer_billing)
-      // invoices raised on behalf of this business — both have fromBusinessId set
       const clientInvoices = allInvoices.filter(inv =>
         inv.fromBusinessId === business.id &&
         (inv.invoiceCategory === 'business_to_client' || inv.invoiceCategory === 'customer_billing')
       );
-      const withLineItems = await Promise.all(
-        clientInvoices.map(async (inv) => ({ ...inv, lineItems: await storage.getSdpInvoiceLineItems(inv.id) }))
-      );
-      res.json(withLineItems);
+      const enriched = await Promise.all(clientInvoices.map(enrich));
+      res.json(enriched);
     } catch (error) {
       console.error('Error fetching client invoices:', error);
       res.status(500).json({ message: 'Failed to fetch client invoices' });

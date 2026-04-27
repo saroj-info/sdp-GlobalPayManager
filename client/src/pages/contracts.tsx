@@ -571,6 +571,53 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
   );
 }
 
+// Read-only display of project rate lines on a multi-rate contract
+function ContractRateLinesPanel({ contractId, currency, rateType }: { contractId: string; currency?: string; rateType?: string }) {
+  const { data: rateLines = [], isLoading } = useQuery<any[]>({
+    queryKey: ['/api/contracts', contractId, 'rate-lines'],
+    queryFn: async () => {
+      const res = await apiRequest('GET', `/api/contracts/${contractId}/rate-lines`);
+      return res.json();
+    },
+    enabled: !!contractId,
+  });
+
+  if (isLoading) {
+    return <div className="text-xs text-muted-foreground p-3">Loading rate lines...</div>;
+  }
+  if (!rateLines || rateLines.length === 0) {
+    return <div className="text-xs text-muted-foreground p-3">No project rate lines defined.</div>;
+  }
+
+  const unit = rateType === 'daily' ? '/day' : rateType === 'hourly' ? '/hour' : '';
+  return (
+    <div className="divide-y divide-secondary-200/60">
+      {rateLines.map((rl: any) => (
+        <div key={rl.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-secondary-900 truncate">{rl.projectName || 'Standard Rate'}</span>
+              {rl.isDefault && <Badge variant="outline" className="text-[10px] h-4 px-1.5">Default</Badge>}
+              {rl.projectCode && <span className="text-[10px] text-muted-foreground">[{rl.projectCode}]</span>}
+            </div>
+            {rl.description && <div className="text-xs text-muted-foreground truncate">{rl.description}</div>}
+          </div>
+          <div className="text-right flex-shrink-0">
+            <div className="text-sm font-semibold text-primary-700 tabular-nums">
+              {rl.currency || currency} {parseFloat(rl.rate || '0').toFixed(2)}{unit}
+            </div>
+            {rl.clientRate && parseFloat(rl.clientRate) > 0 && (
+              <div className="text-[11px] text-muted-foreground">
+                Client: {rl.currency || currency} {parseFloat(rl.clientRate).toFixed(2)}{unit}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ContractsPage() {
   const [showContractWizard, setShowContractWizard] = useState(false);
   const [selectedContract, setSelectedContract] = useState<any>(null);
@@ -1083,9 +1130,9 @@ export default function ContractsPage() {
         preselectedWorkerId={preselectedWorkerId}
       />
 
-      {/* Contract Details Modal - Simple Summary */}
+      {/* Contract Details Modal - Comprehensive Summary */}
       <Dialog open={showContractDetails} onOpenChange={setShowContractDetails}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
@@ -1118,14 +1165,17 @@ export default function ContractsPage() {
                   <p className="text-sm text-muted-foreground">Country</p>
                   <p className="font-semibold">{selectedContract.country?.name}</p>
                 </div>
-                <div className="text-center">
-                  <p className="text-sm text-muted-foreground">Rate</p>
-                  <p className="font-semibold">
-                    {selectedContract.rateType === 'annual'
-                      ? `${selectedContract.currency} ${selectedContract.totalPackageValue || selectedContract.rate} / year (CTC)`
-                      : `${selectedContract.currency} ${selectedContract.rate} / ${selectedContract.rateType}`}
-                  </p>
-                </div>
+                {/* Rate is the worker's pay rate — hide it from the worker themselves and the host client */}
+                {(user as any)?.userType !== 'worker' && (selectedContract as any)?.viewerRole !== 'host_client' && (
+                  <div className="text-center">
+                    <p className="text-sm text-muted-foreground">Rate</p>
+                    <p className="font-semibold">
+                      {selectedContract.rateType === 'annual'
+                        ? `${selectedContract.currency} ${selectedContract.totalPackageValue || selectedContract.rate} / year (CTC)`
+                        : `${selectedContract.currency} ${selectedContract.rate} / ${selectedContract.rateType}`}
+                    </p>
+                  </div>
+                )}
                 <div className="text-center">
                   <p className="text-sm text-muted-foreground">Duration</p>
                   <p className="font-semibold">
@@ -1146,25 +1196,35 @@ export default function ContractsPage() {
                 )}
               </div>
 
-              {/* Additional details — Worker view */}
-              {(user as any)?.userType === 'worker' && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4 p-4 border rounded-lg">
+              {/* Comprehensive details — visible to all roles */}
+              <div className="space-y-4">
+                {/* Contract Configuration */}
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="px-4 py-2 bg-secondary-50 border-b">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Contract Configuration</p>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4 p-4 text-sm">
                     {selectedContract.rateStructure && (
                       <div>
-                        <p className="text-sm text-muted-foreground">Rate Structure</p>
+                        <p className="text-xs text-muted-foreground">Rate Structure</p>
                         <p className="font-medium capitalize">{String(selectedContract.rateStructure).replace(/_/g, ' ')}</p>
+                      </div>
+                    )}
+                    {selectedContract.rateType && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Rate Type</p>
+                        <p className="font-medium capitalize">{selectedContract.rateType}</p>
                       </div>
                     )}
                     {selectedContract.noticePeriodDays != null && (
                       <div>
-                        <p className="text-sm text-muted-foreground">Notice Period</p>
+                        <p className="text-xs text-muted-foreground">Notice Period</p>
                         <p className="font-medium">{selectedContract.noticePeriodDays} days</p>
                       </div>
                     )}
                     {selectedContract.requiresTimesheet !== undefined && (
                       <div>
-                        <p className="text-sm text-muted-foreground">Timesheet Required</p>
+                        <p className="text-xs text-muted-foreground">Timesheet Required</p>
                         <p className="font-medium">
                           {selectedContract.requiresTimesheet
                             ? `Yes${selectedContract.timesheetFrequency ? ` (${selectedContract.timesheetFrequency})` : ''}`
@@ -1172,9 +1232,27 @@ export default function ContractsPage() {
                         </p>
                       </div>
                     )}
+                    {(selectedContract as any).timesheetCalculationMethod && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Period Calc Method</p>
+                        <p className="font-medium capitalize">{String((selectedContract as any).timesheetCalculationMethod).replace(/_/g, ' ')}</p>
+                      </div>
+                    )}
+                    {(selectedContract as any).firstTimesheetStartDate && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">First Timesheet Start</p>
+                        <p className="font-medium">{new Date((selectedContract as any).firstTimesheetStartDate).toLocaleDateString()}</p>
+                      </div>
+                    )}
+                    {(selectedContract as any).timesheetApproverRole && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Timesheet Approver</p>
+                        <p className="font-medium capitalize">{String((selectedContract as any).timesheetApproverRole).replace(/_/g, ' ')}</p>
+                      </div>
+                    )}
                     {selectedContract.paymentScheduleType && (
                       <div>
-                        <p className="text-sm text-muted-foreground">Payment Schedule</p>
+                        <p className="text-xs text-muted-foreground">Payment Schedule</p>
                         <p className="font-medium">
                           {selectedContract.paymentScheduleType === 'days_after'
                             ? `${selectedContract.paymentDaysAfterPeriod ?? ''} days after period`
@@ -1184,65 +1262,198 @@ export default function ContractsPage() {
                         </p>
                       </div>
                     )}
+                    {selectedContract.paymentDay && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Payment Day</p>
+                        <p className="font-medium">{selectedContract.paymentDay}</p>
+                      </div>
+                    )}
+                    {selectedContract.paymentHolidayRule != null && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Holiday Rule</p>
+                        <p className="font-medium">{selectedContract.paymentHolidayRule ? 'Use prior working day' : 'Pay on date'}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Pay & Billing */}
+                {(() => {
+                  const isWorkerView = (user as any)?.userType === 'worker';
+                  const isHostClientView = (selectedContract as any)?.viewerRole === 'host_client';
+                  // Worker Rate (worker pay) — only SDP & employing business should see this
+                  const canSeeWorkerRate = !isWorkerView && !isHostClientView;
+                  // Client Billing Rate — SDP, employing business, AND host client (they're the one being billed)
+                  const canSeeClientBillingRate = !isWorkerView;
+                  const rateUnit = selectedContract.rateType === 'daily' ? 'day' : selectedContract.rateType === 'hourly' ? 'hour' : selectedContract.rateType;
+                  return (
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="px-4 py-2 bg-secondary-50 border-b">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Pay & Billing</p>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4 p-4 text-sm">
+                    {/* Worker Rate — shown for SDP & employing business only */}
+                    {canSeeWorkerRate && selectedContract.rate && selectedContract.rateType && selectedContract.rateType !== 'annual' && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Worker {selectedContract.rateType === 'daily' ? 'Daily' : 'Hourly'} Rate</p>
+                        <p className="font-medium">{selectedContract.currency} {parseFloat(selectedContract.rate).toFixed(2)} / {rateUnit}</p>
+                      </div>
+                    )}
+                    {selectedContract.totalPackageValue && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total Package (CTC)</p>
+                        <p className="font-medium">{selectedContract.currency} {parseFloat(selectedContract.totalPackageValue).toLocaleString()}</p>
+                      </div>
+                    )}
                     {(selectedContract as any).billingMode && (
                       <div>
-                        <p className="text-sm text-muted-foreground">Billing Mode</p>
+                        <p className="text-xs text-muted-foreground">Billing Mode</p>
                         <p className="font-medium capitalize">{String((selectedContract as any).billingMode).replace(/_/g, ' ')}</p>
+                      </div>
+                    )}
+                    {(selectedContract as any).clientBillingType && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Client Billing Type</p>
+                        <p className="font-medium capitalize">{String((selectedContract as any).clientBillingType).replace(/_/g, ' ')}</p>
+                      </div>
+                    )}
+                    {/* Client Billing Rate — shown to SDP, employing business, AND host client */}
+                    {canSeeClientBillingRate && (selectedContract as any).customerBillingRate && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Client Billing Rate</p>
+                        <p className="font-medium">{(selectedContract as any).customerCurrency || selectedContract.currency} {parseFloat((selectedContract as any).customerBillingRate).toFixed(2)} / {(selectedContract as any).customerBillingRateType || 'hour'}</p>
+                      </div>
+                    )}
+                    {(selectedContract as any).fixedBillingAmount && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Fixed Billing</p>
+                        <p className="font-medium">{(selectedContract as any).customerCurrency || selectedContract.currency} {(selectedContract as any).fixedBillingAmount}{(selectedContract as any).fixedBillingFrequency ? ` / ${(selectedContract as any).fixedBillingFrequency}` : ''}</p>
+                      </div>
+                    )}
+                    {(selectedContract as any).invoicingFrequency && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Invoicing Frequency</p>
+                        <p className="font-medium capitalize">{(selectedContract as any).invoicingFrequency}</p>
                       </div>
                     )}
                     {(selectedContract as any).paymentTerms && (
                       <div>
-                        <p className="text-sm text-muted-foreground">Payment Terms</p>
-                        <p className="font-medium">{(selectedContract as any).paymentTerms}</p>
+                        <p className="text-xs text-muted-foreground">Payment Terms</p>
+                        <p className="font-medium">Net {(selectedContract as any).paymentTerms}</p>
+                      </div>
+                    )}
+                    {(selectedContract as any).customerCurrency && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Customer Currency</p>
+                        <p className="font-medium">{(selectedContract as any).customerCurrency}</p>
                       </div>
                     )}
                   </div>
-
-                  {selectedContract.isForClient && ((selectedContract as any).clientName || (selectedContract as any).clientAddress) && (
-                    <div className="p-4 border rounded-lg">
-                      <p className="text-sm font-semibold mb-2">Client / Project</p>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
-                        {(selectedContract as any).clientName && (
-                          <div><span className="text-muted-foreground">Client: </span><span className="font-medium">{(selectedContract as any).clientName}</span></div>
-                        )}
-                        {(selectedContract as any).clientCountry && (
-                          <div><span className="text-muted-foreground">Country: </span><span className="font-medium">{(selectedContract as any).clientCountry}</span></div>
-                        )}
-                        {(selectedContract as any).clientCity && (
-                          <div><span className="text-muted-foreground">City: </span><span className="font-medium">{(selectedContract as any).clientCity}</span></div>
-                        )}
-                        {(selectedContract as any).clientAddress && (
-                          <div className="col-span-2"><span className="text-muted-foreground">Address: </span><span className="font-medium">{(selectedContract as any).clientAddress}</span></div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {(selectedContract as any).jobDescription && (
-                    <div className="p-4 border rounded-lg">
-                      <p className="text-sm font-semibold mb-2">Job Description</p>
-                      <p className="text-sm whitespace-pre-wrap text-muted-foreground">{(selectedContract as any).jobDescription}</p>
-                    </div>
-                  )}
-
-                  {(selectedContract.signedAt || (selectedContract as any).emailSentAt || (selectedContract as any).emailViewedAt) && (
-                    <div className="p-4 border rounded-lg">
-                      <p className="text-sm font-semibold mb-2">Signature Activity</p>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
-                        {(selectedContract as any).emailSentAt && (
-                          <div><span className="text-muted-foreground">Sent: </span><span className="font-medium">{new Date((selectedContract as any).emailSentAt).toLocaleString()}</span></div>
-                        )}
-                        {(selectedContract as any).emailViewedAt && (
-                          <div><span className="text-muted-foreground">Viewed: </span><span className="font-medium">{new Date((selectedContract as any).emailViewedAt).toLocaleString()}</span></div>
-                        )}
-                        {selectedContract.signedAt && (
-                          <div><span className="text-muted-foreground">Signed: </span><span className="font-medium">{new Date(selectedContract.signedAt).toLocaleString()}</span></div>
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </div>
-              )}
+                  );
+                })()}
+
+                {/* Project rate lines — only when contract uses multiple rates */}
+                {selectedContract.rateStructure === 'multiple' && (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="px-4 py-2 bg-secondary-50 border-b flex items-center justify-between">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Project Rate Lines</p>
+                      <Badge variant="secondary" className="text-[10px]">Multi-rate</Badge>
+                    </div>
+                    <ContractRateLinesPanel
+                      contractId={selectedContract.id}
+                      currency={selectedContract.currency}
+                      rateType={selectedContract.rateType}
+                    />
+                  </div>
+                )}
+
+                {/* Client / Project info — only when isForClient */}
+                {selectedContract.isForClient && ((selectedContract as any).clientName || (selectedContract as any).clientAddress || (selectedContract as any).customerBusinessName) && (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="px-4 py-2 bg-secondary-50 border-b">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Client / Project</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 p-4 text-sm">
+                      {(selectedContract as any).customerBusinessName && (
+                        <div><span className="text-xs text-muted-foreground">Host Client: </span><span className="font-medium">{(selectedContract as any).customerBusinessName}</span></div>
+                      )}
+                      {(selectedContract as any).clientName && (
+                        <div><span className="text-xs text-muted-foreground">Client Name: </span><span className="font-medium">{(selectedContract as any).clientName}</span></div>
+                      )}
+                      {(selectedContract as any).clientCountry && (
+                        <div><span className="text-xs text-muted-foreground">Country: </span><span className="font-medium">{(selectedContract as any).clientCountry}</span></div>
+                      )}
+                      {(selectedContract as any).clientCity && (
+                        <div><span className="text-xs text-muted-foreground">City: </span><span className="font-medium">{(selectedContract as any).clientCity}</span></div>
+                      )}
+                      {(selectedContract as any).clientContactEmail && (
+                        <div><span className="text-xs text-muted-foreground">Contact Email: </span><span className="font-medium">{(selectedContract as any).clientContactEmail}</span></div>
+                      )}
+                      {(selectedContract as any).clientContactPhone && (
+                        <div><span className="text-xs text-muted-foreground">Contact Phone: </span><span className="font-medium">{(selectedContract as any).clientContactPhone}</span></div>
+                      )}
+                      {(selectedContract as any).clientAddress && (
+                        <div className="col-span-2"><span className="text-xs text-muted-foreground">Address: </span><span className="font-medium">{(selectedContract as any).clientAddress}</span></div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* SDP / Third-party entity references */}
+                {((selectedContract as any).sdpEntityId || (selectedContract as any).thirdPartyBusinessId || (selectedContract as any).thirdPartyBusinessName) && (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="px-4 py-2 bg-secondary-50 border-b">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Entity References</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 p-4 text-sm">
+                      {(selectedContract as any).sdpEntityId && (
+                        <div><span className="text-xs text-muted-foreground">SDP Entity: </span><span className="font-medium">{(selectedContract as any).sdpEntityId}</span></div>
+                      )}
+                      {(selectedContract as any).thirdPartyBusinessName && (
+                        <div><span className="text-xs text-muted-foreground">Third Party Vendor: </span><span className="font-medium">{(selectedContract as any).thirdPartyBusinessName}</span></div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Job Description */}
+                {(selectedContract as any).jobDescription && (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="px-4 py-2 bg-secondary-50 border-b">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Job Description</p>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-sm whitespace-pre-wrap text-secondary-800">{(selectedContract as any).jobDescription}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Signature Activity */}
+                {(selectedContract.signedAt || (selectedContract as any).emailSentAt || (selectedContract as any).emailViewedAt || (selectedContract as any).signatureText) && (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="px-4 py-2 bg-secondary-50 border-b">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Signature Activity</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 p-4 text-sm">
+                      {(selectedContract as any).emailSentAt && (
+                        <div><span className="text-xs text-muted-foreground">Email Sent: </span><span className="font-medium">{new Date((selectedContract as any).emailSentAt).toLocaleString()}</span></div>
+                      )}
+                      {(selectedContract as any).emailViewedAt && (
+                        <div><span className="text-xs text-muted-foreground">Email Viewed: </span><span className="font-medium">{new Date((selectedContract as any).emailViewedAt).toLocaleString()}</span></div>
+                      )}
+                      {selectedContract.signedAt && (
+                        <div><span className="text-xs text-muted-foreground">Signed: </span><span className="font-medium">{new Date(selectedContract.signedAt).toLocaleString()}</span></div>
+                      )}
+                      {(selectedContract as any).signatureText && (
+                        <div><span className="text-xs text-muted-foreground">Signed By (typed): </span><span className="font-medium">{(selectedContract as any).signatureText}</span></div>
+                      )}
+
+                    </div>
+                  </div>
+                )}
+
+              </div>
 
               {/* Remuneration Lines — Gating for business users viewing pending salary contracts */}
               {(user as any)?.userType === 'business_user' && selectedContract.rateType === 'annual' && selectedContract.status === 'pending_sdp_review' && (
@@ -1266,11 +1477,17 @@ export default function ContractsPage() {
 
               {/* Actions - Different for workers vs business users */}
               <div className="flex justify-center gap-3 pt-4">
-                {(user as any)?.userType === 'worker' ? (
-                  // Worker view - read-only
+                {((user as any)?.userType === 'worker' || (selectedContract as any)?.readOnly === true) ? (
+                  // Worker / Host Client view - read-only
                   <>
-                    <Button 
-                      variant="outline" 
+                    {(selectedContract as any)?.viewerRole === 'host_client' && (
+                      <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 text-blue-700 rounded-md">
+                        <Lock className="h-4 w-4" />
+                        <span className="text-sm font-medium">Host Client View (Read-only)</span>
+                      </div>
+                    )}
+                    <Button
+                      variant="outline"
                       data-testid="button-view-document"
                       onClick={() => {
                         if (!selectedContract?.contractDocument) {

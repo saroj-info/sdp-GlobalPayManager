@@ -458,6 +458,9 @@ export const contracts = pgTable("contracts", {
   timesheetFrequency: timesheetFrequencyEnum("timesheet_frequency"),
   firstTimesheetStartDate: timestamp("first_timesheet_start_date"), // First period start date calculated from contract wizard
   
+  // Who is responsible for approving timesheets on this contract: 'sdp' | 'business' | 'host_client'. Null = legacy (any may approve).
+  timesheetApproverRole: varchar("timesheet_approver_role"),
+
   // Timesheet Period Configuration
   timesheetCalculationMethod: varchar("timesheet_calculation_method"), // For weekly: 'monday_sunday', 'tuesday_monday', etc. For fortnightly: 'week_1' or 'week_2'. For monthly: day number (1-28). For semi-monthly: '1st_15th'
   paymentScheduleType: varchar("payment_schedule_type"), // 'days_after' or 'specific_day'

@@ -723,6 +723,15 @@ export class DatabaseStorage implements IStorage {
     return business;
   }
 
+  async updateBusiness(businessId: string, updates: Partial<Business>): Promise<Business | undefined> {
+    const [updated] = await db
+      .update(businesses)
+      .set({ ...updates, updatedAt: new Date() } as any)
+      .where(eq(businesses.id, businessId))
+      .returning();
+    return updated;
+  }
+
   // Get businesses a user has access to (either as owner or through accessibleBusinessIds)
   async getBusinessesForUser(userId: string): Promise<Business[]> {
     // Get user to check their accessibleBusinessIds
@@ -4014,6 +4023,13 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
         passwordResetRequestedAt: null,
         updatedAt: new Date(),
       })
+      .where(eq(users.id, userId));
+  }
+
+  async updatePasswordHash(userId: string, newPasswordHash: string): Promise<void> {
+    await db
+      .update(users)
+      .set({ passwordHash: newPasswordHash, updatedAt: new Date() })
       .where(eq(users.id, userId));
   }
 }

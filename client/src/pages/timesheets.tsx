@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -279,7 +279,7 @@ export default function Timesheets() {
   // ── Mutations ──────────────────────────────────────────────────────────────
 
   const createTimesheetMutation = useMutation({
-    mutationFn: async ({ data, attachments, expenses }: { data: any; attachments: File[]; expenses: ExpenseLine[] }) => {
+    mutationFn: async ({ data, attachments, expenses, submitAfterCreate }: { data: any; attachments: File[]; expenses: ExpenseLine[]; submitAfterCreate?: boolean }) => {
       const timesheet: any = await apiRequest('POST', '/api/timesheets', data).then(r => r.json());
       if (attachments.length > 0 && timesheet?.id) {
         for (const file of attachments) {
@@ -298,9 +298,12 @@ export default function Timesheets() {
           }
         }
       }
-      return timesheet;
+      if (submitAfterCreate && timesheet?.id) {
+        await apiRequest('PATCH', `/api/timesheets/${timesheet.id}/submit`, {});
+      }
+      return { timesheet, submitted: !!submitAfterCreate };
     },
-    onSuccess: () => {
+    onSuccess: (res: any) => {
       queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] });
       setShowCreateTimesheet(false);
       setSelectedWorkerId('');
@@ -309,7 +312,10 @@ export default function Timesheets() {
       setExpenseLines([]);
       setShowExpenses(false);
       form.reset();
-      toast({ title: "Timesheet created", description: "Timesheet saved as draft." });
+      toast({
+        title: res?.submitted ? "Timesheet submitted" : "Timesheet created",
+        description: res?.submitted ? "Timesheet submitted for approval." : "Timesheet saved as draft.",
+      });
     },
     onError: (error: any) => {
       toast({ title: "Error", description: error.message || "Failed to create timesheet.", variant: "destructive" });
@@ -388,6 +394,8 @@ export default function Timesheets() {
     toast({ title: "Period selected", description: formatPeriod(period) });
   };
 
+  const submitAfterCreateRef = useRef(false);
+
   const onSubmit = async (data: TimesheetFormData) => {
     const rateType = contractRateType || 'hourly';
     const normalizedEntries = (data.entries as any[])
@@ -447,7 +455,13 @@ export default function Timesheets() {
       if (w) processedData.businessId = w.businessId;
     }
 
-    createTimesheetMutation.mutate({ data: processedData, attachments, expenses: expenseLines });
+    createTimesheetMutation.mutate({
+      data: processedData,
+      attachments,
+      expenses: expenseLines,
+      submitAfterCreate: submitAfterCreateRef.current,
+    });
+    submitAfterCreateRef.current = false;
   };
 
   // ── Derived data ───────────────────────────────────────────────────────────
@@ -540,8 +554,12 @@ export default function Timesheets() {
   }
 
   // ── Shared create form content (used in both dialogs) ─────────────────────
+  // NOTE: rendered as a value via {createFormContent}, NOT as {createFormContent}.
+  // Defining it as a component would create a fresh component identity on every parent
+  // render, which forces React to unmount/remount the entire form on every keystroke
+  // and steals focus from the inputs.
 
-  const CreateFormContent = () => (
+  const createFormContent = (
     <Form {...form}>
       <form
         onSubmit={form.handleSubmit(onSubmit)}
@@ -670,11 +688,25 @@ export default function Timesheets() {
           </FormItem>
         )} />
 
-        <div className="flex justify-end space-x-2 pt-2">
+        <div className="flex justify-end flex-wrap gap-2 pt-2">
           <Button type="button" variant="outline" onClick={() => setShowCreateTimesheet(false)}>Cancel</Button>
-          <Button type="submit" disabled={createTimesheetMutation.isPending}>
+          <Button
+            type="submit"
+            variant="outline"
+            disabled={createTimesheetMutation.isPending}
+            onClick={() => { submitAfterCreateRef.current = false; }}
+          >
             <Save className="mr-2 h-4 w-4" />
-            {createTimesheetMutation.isPending ? 'Saving...' : 'Save as Draft'}
+            {createTimesheetMutation.isPending && !submitAfterCreateRef.current ? 'Saving...' : 'Save as Draft'}
+          </Button>
+          <Button
+            type="submit"
+            disabled={createTimesheetMutation.isPending}
+            onClick={() => { submitAfterCreateRef.current = true; }}
+            className="bg-green-600 hover:bg-green-700"
+          >
+            <CheckCircle className="mr-2 h-4 w-4" />
+            {createTimesheetMutation.isPending && submitAfterCreateRef.current ? 'Submitting...' : 'Submit for Approval'}
           </Button>
         </div>
       </form>
@@ -689,30 +721,69 @@ export default function Timesheets() {
     const pStart = new Date(timesheet.periodStart).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
     const pEnd = new Date(timesheet.periodEnd).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 
+    // Per-contract timesheet approver gating
+    const approverRole: string | null = timesheet.timesheetApproverRole || null;
+    const canApproveByRole = (() => {
+      if (isWorker) return false;
+      if (!approverRole) {
+        // Legacy contracts (no approver chosen): preserve previous behaviour
+        return isSDP || !provided || provided;
+      }
+      if (approverRole === 'sdp') return isSDP;
+      if (approverRole === 'business') return !isSDP && !provided;
+      if (approverRole === 'host_client') return !isSDP && provided;
+      return false;
+    })();
+
+    const initials = isWorker
+      ? `T${(timesheet.entries?.length || 0)}`.slice(0, 2)
+      : `${timesheet.worker?.firstName?.[0] || ''}${timesheet.worker?.lastName?.[0] || ''}`.toUpperCase() || 'W';
+    // Sum hours/days from actual entries (the persisted totals can be 0 for daily timesheets).
+    const entryTotals = (timesheet.entries || []).reduce(
+      (acc: { hours: number; days: number }, e: any) => ({
+        hours: acc.hours + (parseFloat(e.hoursWorked || '0') || 0),
+        days: acc.days + (parseFloat(e.daysWorked || '0') || 0),
+      }),
+      { hours: 0, days: 0 }
+    );
+    const totalHours = parseFloat(timesheet.totalHours || '0') || entryTotals.hours;
+    const totalDays = parseFloat(timesheet.totalDays || '0') || entryTotals.days;
+    const totalDisplay = totalDays > 0
+      ? `${totalDays.toFixed(1)}d`
+      : `${totalHours > 0 ? totalHours.toFixed(1) : '0'}h`;
+
     return (
-      <Card className={`border-l-4 ${STATUS_LEFT[s] || 'border-l-gray-300'} ${provided ? 'bg-blue-50/30' : ''}`}>
+      <Card className={`border-l-4 ${STATUS_LEFT[s] || 'border-l-gray-300'} ${provided ? 'bg-blue-50/30' : ''} hover:shadow-md transition-shadow`}>
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-3">
-            <div className="flex-1 min-w-0">
-              <CardTitle className="text-base font-semibold truncate">
-                {isWorker ? `${pStart} – ${pEnd}` : `${timesheet.worker?.firstName} ${timesheet.worker?.lastName}`}
-              </CardTitle>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
-                {!isWorker && (
-                  <span className="text-xs text-muted-foreground">{pStart} – {pEnd}</span>
-                )}
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Clock className="h-3 w-3" />
-                  {timesheet.totalHours || 0}h
-                </span>
-                {!isWorker && timesheet.business?.name && (
-                  <span className="text-xs text-muted-foreground">{timesheet.business.name}</span>
-                )}
-                {provided && timesheet.providedByBusinessName && (
-                  <span className="text-xs text-blue-600 flex items-center gap-1">
-                    <Building2 className="h-3 w-3" />via {timesheet.providedByBusinessName}
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <div className={`h-10 w-10 rounded-lg flex items-center justify-center font-semibold text-sm flex-shrink-0 ${provided ? 'bg-blue-100 text-blue-700' : 'bg-primary-100 text-primary-700'}`}>
+                {initials}
+              </div>
+              <div className="flex-1 min-w-0">
+                <CardTitle className="text-base font-semibold truncate">
+                  {isWorker ? `${pStart} – ${pEnd}` : `${timesheet.worker?.firstName} ${timesheet.worker?.lastName}`}
+                </CardTitle>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+                  {!isWorker && (
+                    <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+                      <CalendarDays className="h-3 w-3" />{pStart} – {pEnd}
+                    </span>
+                  )}
+                  <span className="text-xs font-medium text-secondary-700 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary-100">
+                    <Clock className="h-3 w-3" />{totalDisplay}
                   </span>
-                )}
+                  {!isWorker && timesheet.business?.name && (
+                    <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+                      <Building2 className="h-3 w-3" />{timesheet.business.name}
+                    </span>
+                  )}
+                  {provided && timesheet.providedByBusinessName && (
+                    <span className="text-xs text-blue-600 inline-flex items-center gap-1">
+                      <Building2 className="h-3 w-3" />via {timesheet.providedByBusinessName}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -724,7 +795,7 @@ export default function Timesheets() {
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-7 w-7 p-0"
+                className="h-8 w-8 p-0 rounded-full"
                 onClick={() => setExpandedTimesheetId(expanded ? null : timesheet.id)}
               >
                 {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -737,24 +808,53 @@ export default function Timesheets() {
           <CardContent className="pt-0 space-y-4">
             {/* Entries summary */}
             {timesheet.entries && timesheet.entries.length > 0 && (
-              <div>
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                  Time Entries ({timesheet.entries.length})
-                </h4>
-                <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {timesheet.entries.map((entry: any, i: number) => (
-                    <div key={entry.id || i} className="flex justify-between items-center py-1 px-2 bg-muted/40 rounded text-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-xs text-muted-foreground w-20">
-                          {new Date(entry.date).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}
+              <div className="rounded-lg border bg-secondary-50/40">
+                <div className="flex items-center justify-between px-3 py-2 border-b bg-white rounded-t-lg">
+                  <h4 className="text-xs font-semibold text-secondary-700 uppercase tracking-wide flex items-center gap-1.5">
+                    <Clock className="h-3.5 w-3.5" />
+                    Time Entries
+                  </h4>
+                  <span className="text-xs font-medium text-secondary-600">
+                    {timesheet.entries.length} {timesheet.entries.length === 1 ? 'entry' : 'entries'} · <span className="text-primary-700 font-semibold">{totalDisplay}</span>
+                  </span>
+                </div>
+                <div className="divide-y divide-secondary-200/60 max-h-56 overflow-y-auto">
+                  {timesheet.entries.map((entry: any, i: number) => {
+                    const dt = new Date(entry.date);
+                    const dayShort = dt.toLocaleDateString('en-AU', { weekday: 'short' });
+                    const dayNum = dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+                    const valueLabel = entry.hoursWorked
+                      ? `${parseFloat(entry.hoursWorked).toFixed(2)}h`
+                      : entry.daysWorked
+                      ? `${parseFloat(entry.daysWorked).toFixed(2)}d`
+                      : entry.isPresent
+                      ? 'Present'
+                      : '—';
+                    return (
+                      <div key={entry.id || i} className="flex items-center gap-3 px-3 py-2 hover:bg-white transition-colors">
+                        <div className="flex flex-col items-center w-12 flex-shrink-0">
+                          <span className="text-[10px] font-semibold text-secondary-500 uppercase">{dayShort}</span>
+                          <span className="text-xs font-medium text-secondary-800">{dayNum}</span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          {(entry.startTime || entry.endTime) && (
+                            <div className="text-[11px] text-secondary-500 inline-flex items-center gap-1">
+                              {entry.startTime} – {entry.endTime}
+                              {entry.breakHours && parseFloat(entry.breakHours) > 0 && (
+                                <span className="text-amber-600">· {entry.breakHours}h break</span>
+                              )}
+                            </div>
+                          )}
+                          {entry.description && (
+                            <div className="text-xs text-secondary-700 truncate">{entry.description}</div>
+                          )}
+                        </div>
+                        <span className="text-sm font-semibold text-primary-700 tabular-nums flex-shrink-0">
+                          {valueLabel}
                         </span>
-                        {entry.description && <span className="text-xs text-muted-foreground truncate max-w-32">{entry.description}</span>}
                       </div>
-                      <span className="text-xs font-medium text-foreground ml-2">
-                        {entry.hoursWorked ? `${entry.hoursWorked}h` : entry.daysWorked ? `${entry.daysWorked}d` : entry.isPresent ? 'Present' : '-'}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -764,23 +864,44 @@ export default function Timesheets() {
 
             {/* Notes */}
             {timesheet.notes && (
-              <div className="text-xs text-muted-foreground p-2 bg-blue-50 rounded border border-blue-100">
-                <span className="font-medium text-blue-700">Notes: </span>{timesheet.notes}
+              <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3">
+                <div className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide mb-1">Notes</div>
+                <div className="text-sm text-blue-900 whitespace-pre-wrap">{timesheet.notes}</div>
               </div>
             )}
 
             {/* Rejection reason */}
             {s === 'rejected' && timesheet.rejectionReason && (
-              <div className="p-2 bg-red-50 border border-red-100 rounded text-xs text-red-700">
-                <span className="font-medium">Rejection reason: </span>{timesheet.rejectionReason}
+              <div className="rounded-lg border border-red-200 bg-red-50/70 p-3">
+                <div className="text-[11px] font-semibold text-red-700 uppercase tracking-wide mb-1 flex items-center gap-1">
+                  <XCircle className="h-3 w-3" />Rejection Reason
+                </div>
+                <div className="text-sm text-red-900">{timesheet.rejectionReason}</div>
               </div>
             )}
 
-            {/* Timestamps */}
-            <div className="flex gap-4 text-xs text-muted-foreground">
-              {timesheet.submittedAt && <span>Submitted: {new Date(timesheet.submittedAt).toLocaleDateString()}</span>}
-              {timesheet.approvedAt && <span>Approved: {new Date(timesheet.approvedAt).toLocaleDateString()}</span>}
-            </div>
+            {/* Status timeline */}
+            {(timesheet.submittedAt || timesheet.approvedAt) && (
+              <div className="rounded-lg bg-secondary-50/60 border border-secondary-200 p-3">
+                <div className="text-[11px] font-semibold text-secondary-600 uppercase tracking-wide mb-2">Activity</div>
+                <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs">
+                  {timesheet.submittedAt && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-2 w-2 rounded-full bg-amber-500" />
+                      <span className="text-secondary-600">Submitted</span>
+                      <span className="font-medium text-secondary-900">{new Date(timesheet.submittedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                    </div>
+                  )}
+                  {timesheet.approvedAt && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                      <span className="text-secondary-600">{s === 'rejected' ? 'Rejected' : 'Approved'}</span>
+                      <span className="font-medium text-secondary-900">{new Date(timesheet.approvedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex flex-wrap gap-2 pt-1 border-t">
@@ -791,7 +912,7 @@ export default function Timesheets() {
                   </Button>
                 </>
               )}
-              {!isWorker && s === 'submitted' && !provided && (
+              {!isWorker && s === 'submitted' && !provided && canApproveByRole && (
                 <>
                   <Button size="sm" onClick={() => approveTimesheetMutation.mutate(timesheet.id)} disabled={approveTimesheetMutation.isPending} className="bg-green-600 hover:bg-green-700">
                     <CheckCircle className="h-4 w-4 mr-1" />{approveTimesheetMutation.isPending ? 'Approving...' : 'Approve'}
@@ -801,17 +922,24 @@ export default function Timesheets() {
                   </Button>
                 </>
               )}
-              {provided && s === 'submitted' && (
+              {provided && s === 'submitted' && canApproveByRole && (
                 <>
                   <Button size="sm" className="bg-green-600 hover:bg-green-700"
-                    onClick={() => fetch(`/api/timesheets/${timesheet.id}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'approved' }) }).then(() => queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] }))}>
-                    <CheckCircle className="h-4 w-4 mr-1" />Approve
+                    onClick={() => approveTimesheetMutation.mutate(timesheet.id)}
+                    disabled={approveTimesheetMutation.isPending}>
+                    <CheckCircle className="h-4 w-4 mr-1" />{approveTimesheetMutation.isPending ? 'Approving...' : 'Approve'}
                   </Button>
                   <Button size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50"
-                    onClick={() => fetch(`/api/timesheets/${timesheet.id}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'rejected' }) }).then(() => queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] }))}>
-                    <XCircle className="h-4 w-4 mr-1" />Reject
+                    onClick={() => rejectTimesheetMutation.mutate(timesheet.id)}
+                    disabled={rejectTimesheetMutation.isPending}>
+                    <XCircle className="h-4 w-4 mr-1" />{rejectTimesheetMutation.isPending ? 'Rejecting...' : 'Reject'}
                   </Button>
                 </>
+              )}
+              {!isWorker && s === 'submitted' && !canApproveByRole && approverRole && (
+                <span className="text-xs text-muted-foreground self-center">
+                  Awaiting approval by {approverRole === 'sdp' ? 'SDP' : approverRole === 'business' ? 'Employing Business' : 'Host Client'}
+                </span>
               )}
               {isSDP && s === 'draft' && (
                 <>
@@ -877,31 +1005,80 @@ export default function Timesheets() {
     <div className="p-6">
       <div className="max-w-7xl mx-auto space-y-6">
 
-        {/* Contract selector for workers with multiple contracts */}
+        {/* Contract selector — at the top for workers with multiple contracts */}
         {isWorker && workerTimesheetContracts.length > 1 && (
-          <Card className="border-blue-200 bg-blue-50/50">
-            <CardContent className="py-4">
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-blue-900">
-                  <FileText className="w-4 h-4" />
-                  Select Contract
-                </div>
-                <Select value={workerSelectedContractId} onValueChange={setWorkerSelectedContractId}>
-                  <SelectTrigger className="w-[400px]">
-                    <SelectValue placeholder="Choose a contract..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {workerTimesheetContracts.map((c: any) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.customRoleTitle || c.employmentType} · {c.country?.name || c.countryId} · {c.rateType} · {c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A'}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          <div className="rounded-xl border bg-white shadow-sm p-4 flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="h-8 w-8 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
+                <FileText className="h-4 w-4" />
               </div>
-            </CardContent>
-          </Card>
+              <div>
+                <div className="text-sm font-semibold text-secondary-900 leading-tight">Active Contract</div>
+                <div className="text-[11px] text-muted-foreground">Choose which contract these timesheets belong to</div>
+              </div>
+            </div>
+            <div className="flex-1 md:max-w-md">
+              <Select value={workerSelectedContractId} onValueChange={setWorkerSelectedContractId}>
+                <SelectTrigger className="bg-white">
+                  <SelectValue placeholder="Choose a contract..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {workerTimesheetContracts.map((c: any) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.customRoleTitle || c.employmentType} · {c.country?.name || c.countryId} · {c.rateType} · {c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         )}
+
+        {/* Hero header with stats overview */}
+        <div className="rounded-2xl bg-gradient-to-br from-primary-50 via-white to-blue-50 border border-primary-100 p-6 shadow-sm">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
+            <div>
+              <div className="flex items-center gap-2">
+                <div className="h-9 w-9 rounded-lg bg-primary-600 flex items-center justify-center text-white shadow-md">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <h1 className="text-2xl font-bold text-secondary-900">Timesheets</h1>
+              </div>
+              <p className="text-sm text-secondary-600 mt-1.5 ml-11">
+                {isWorker ? 'Submit and track the hours you work on each contract.' : 'Review and approve timesheets submitted by your workers.'}
+              </p>
+            </div>
+            {isWorker && activeTimesheetContract && (
+              <Button size="lg" className="shadow-md gap-2" onClick={() => setShowCreateTimesheet(true)} data-testid="button-create-timesheet-hero">
+                <Plus className="h-4 w-4" />New Timesheet
+              </Button>
+            )}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {([
+              { key: 'all', label: 'Total', icon: ListIcon, accent: 'text-secondary-700', bg: 'bg-white' },
+              { key: 'draft', label: 'Drafts', icon: FileText, accent: 'text-gray-700', bg: 'bg-gray-50/80' },
+              { key: 'submitted', label: 'Pending Approval', icon: Clock, accent: 'text-amber-700', bg: 'bg-amber-50/80' },
+              { key: 'approved', label: 'Approved', icon: CheckCircle, accent: 'text-emerald-700', bg: 'bg-emerald-50/80' },
+            ] as const).map((s) => {
+              const Icon = s.icon as any;
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  onClick={() => setStatusFilter(s.key)}
+                  className={`text-left rounded-xl border p-4 transition-all hover:shadow-md ${statusFilter === s.key ? 'ring-2 ring-primary-500 border-primary-300 shadow-sm' : 'border-secondary-200'} ${s.bg}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className={`text-xs font-medium uppercase tracking-wide ${s.accent}`}>{s.label}</div>
+                    <Icon className={`h-4 w-4 ${s.accent}`} />
+                  </div>
+                  <div className={`text-2xl font-bold mt-1 ${s.accent}`}>{statusCounts[s.key] || 0}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         {/* No eligible contracts */}
         {isWorker && workerTimesheetContracts.length === 0 && (
@@ -967,27 +1144,19 @@ export default function Timesheets() {
           </Card>
         )}
 
-        {/* Top bar: Create button + view/filter controls */}
-        <div className="space-y-2">
+        {/* Top bar: view + search controls (status filtering happens via the hero stat tiles above) */}
+        <div className="rounded-xl border bg-white p-3 shadow-sm space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 flex-wrap">
-              {/* Status filter tabs */}
-              <div className="flex items-center border rounded-lg overflow-hidden">
-                {(['all', 'draft', 'submitted', 'approved', 'rejected'] as const).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setStatusFilter(s)}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${statusFilter === s ? 'bg-primary text-white' : 'hover:bg-muted text-muted-foreground'}`}
-                  >
-                    {s.charAt(0).toUpperCase() + s.slice(1)}
-                    {statusCounts[s] > 0 && (
-                      <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] ${statusFilter === s ? 'bg-white/20' : 'bg-muted'}`}>
-                        {statusCounts[s]}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
+              {statusFilter !== 'all' && (
+                <button
+                  onClick={() => setStatusFilter('all')}
+                  className="text-xs font-medium px-3 py-1.5 rounded-md bg-primary-50 text-primary-700 hover:bg-primary-100 transition-colors inline-flex items-center gap-1.5"
+                >
+                  Showing: <span className="capitalize font-semibold">{statusFilter}</span>
+                  <XIcon className="h-3 w-3" />
+                </button>
+              )}
 
               {/* View toggle */}
               <div className="flex items-center border rounded-lg p-1">
@@ -1034,14 +1203,9 @@ export default function Timesheets() {
               )}
             </div>
 
-          {/* Create button */}
+          {/* Worker Create Timesheet Dialog (opened from hero button) */}
           {isWorker && activeTimesheetContract && (
             <Dialog open={showCreateTimesheet} onOpenChange={setShowCreateTimesheet}>
-              <DialogTrigger asChild>
-                <Button data-testid="button-create-timesheet">
-                  <Plus className="mr-2 h-4 w-4" />New Timesheet
-                </Button>
-              </DialogTrigger>
               <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Create New Timesheet</DialogTitle>
@@ -1075,7 +1239,7 @@ export default function Timesheets() {
                   </div>
                 )}
 
-                <CreateFormContent />
+                {createFormContent}
               </DialogContent>
             </Dialog>
           )}
@@ -1151,7 +1315,7 @@ export default function Timesheets() {
                         </div>
                       </div>
                     )}
-                    <CreateFormContent />
+                    {createFormContent}
                   </>
                 )}
               </DialogContent>
@@ -1266,23 +1430,34 @@ export default function Timesheets() {
 
         {/* Timesheet list */}
         {filteredTimesheets.length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center">
-              <Clock className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-50" />
-              <h3 className="text-base font-medium text-foreground mb-1">
+          <Card className="border-dashed">
+            <CardContent className="py-16 text-center">
+              <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-primary-50 flex items-center justify-center">
+                <Clock className="w-8 h-8 text-primary-500" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground mb-1">
                 {statusFilter === 'all'
                   ? isWorker ? "No timesheets yet" : "No timesheets submitted"
                   : `No ${statusFilter} timesheets`}
               </h3>
-              <p className="text-sm text-muted-foreground">
-                {statusFilter === 'all' && isWorker ? "Create your first timesheet to start tracking your work hours." : ""}
+              <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                {statusFilter === 'all' && isWorker
+                  ? "Create your first timesheet to start tracking your work hours and submit them for approval."
+                  : statusFilter !== 'all'
+                  ? `Try selecting a different status filter or clearing your filters to see other timesheets.`
+                  : "Workers haven't submitted any timesheets yet."}
               </p>
+              {isWorker && activeTimesheetContract && statusFilter === 'all' && (
+                <Button className="mt-4 gap-2" onClick={() => setShowCreateTimesheet(true)}>
+                  <Plus className="h-4 w-4" />Create Timesheet
+                </Button>
+              )}
             </CardContent>
           </Card>
         ) : viewMode === 'list' ? (
-          <Card className="overflow-hidden">
+          <Card className="overflow-hidden shadow-sm">
             {/* List header */}
-            <div className={`flex items-center gap-3 px-4 py-2 bg-muted/50 border-b text-xs font-semibold text-muted-foreground uppercase tracking-wide`}>
+            <div className="flex items-center gap-3 px-4 py-2.5 bg-muted/40 border-b text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               <div className="flex-1">Period{!isWorker && ' / Worker'}</div>
               <div className="w-20 text-right">Hours</div>
               {!isWorker && <div className="w-32">Business</div>}
@@ -1292,7 +1467,7 @@ export default function Timesheets() {
             {filteredTimesheets.map((t: any) => <TimesheetRow key={t.id} timesheet={t} />)}
           </Card>
         ) : (
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {filteredTimesheets.map((t: any) => <TimesheetCard key={t.id} timesheet={t} />)}
           </div>
         )}

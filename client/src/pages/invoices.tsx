@@ -115,10 +115,17 @@ export default function Invoices() {
     enabled: user?.userType === 'business_user',
   });
 
-  // Client invoices raised BY this business TO their host clients
+  // Detect whether the current user owns a host-client business (parentBusinessId set)
+  const { data: myBusiness } = useQuery<any>({
+    queryKey: ["/api/businesses/me"],
+    enabled: user?.userType === 'business_user',
+  });
+  const isHostClientBusiness = !!myBusiness?.parentBusinessId;
+
+  // Client invoices raised BY this business TO their host clients — not relevant for host-client users
   const { data: clientInvoices = [], isLoading: isClientInvoicesLoading } = useQuery<any[]>({
     queryKey: ["/api/client-invoices"],
-    enabled: user?.userType === 'business_user',
+    enabled: user?.userType === 'business_user' && !isHostClientBusiness,
   });
 
   const { data: timesheets = [] } = useQuery({
@@ -260,7 +267,7 @@ export default function Invoices() {
           {/* Tabs for business users to separate contractor and SDP invoices */}
           {user?.userType === 'business_user' ? (
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className={`grid w-full ${isHostClientBusiness ? 'grid-cols-2' : 'grid-cols-3'}`}>
                 <TabsTrigger value="contractor" className="flex items-center gap-2" data-testid="tab-contractor-invoices">
                   <FileText className="h-4 w-4" />
                   Contractor Invoices
@@ -269,13 +276,15 @@ export default function Invoices() {
                   <Building className="h-4 w-4" />
                   SDP Global Pay Invoices
                 </TabsTrigger>
-                <TabsTrigger value="client" className="flex items-center gap-2" data-testid="tab-client-invoices">
-                  <Globe className="h-4 w-4" />
-                  Client Invoices
-                  {clientInvoices.length > 0 && (
-                    <span className="ml-1 bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded-full">{clientInvoices.length}</span>
-                  )}
-                </TabsTrigger>
+                {!isHostClientBusiness && (
+                  <TabsTrigger value="client" className="flex items-center gap-2" data-testid="tab-client-invoices">
+                    <Globe className="h-4 w-4" />
+                    Client Invoices
+                    {clientInvoices.length > 0 && (
+                      <span className="ml-1 bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded-full">{clientInvoices.length}</span>
+                    )}
+                  </TabsTrigger>
+                )}
               </TabsList>
               
               <TabsContent value="contractor" className="mt-6">
@@ -323,7 +332,7 @@ export default function Invoices() {
                   </div>
                 </div>
                 
-                {/* Available Timesheets for Invoice Creation */}
+                {/* Available Timesheets for Invoice Creation — hidden, kept for future use
                 {canCreateInvoices && timesheets.length > 0 && (
                   <Card className="mb-6">
                     <CardHeader>
@@ -363,6 +372,7 @@ export default function Invoices() {
                     </CardContent>
                   </Card>
                 )}
+                */}
 
                 {/* Contractor Invoices Grid or List */}
                 {isLoading ? (
@@ -719,36 +729,99 @@ export default function Invoices() {
                                   {invoice.status.replace('_', ' ')}
                                 </Badge>
                               </div>
-                              <CardDescription>
-                                <div className="flex items-center gap-1">
-                                  <Globe className="h-3 w-3" />
-                                  {invoice.fromCountryName}
-                                </div>
+                              <CardDescription className="flex items-center gap-1">
+                                <Globe className="h-3 w-3" />
+                                {(invoice as any).fromCountryName}
                               </CardDescription>
                             </CardHeader>
-                            
+
                             <CardContent className="space-y-4">
                               <div className="space-y-2">
+                                {(invoice as any).worker && (
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-secondary-600">Worker:</span>
+                                    <span className="font-medium truncate max-w-[60%] text-right">{(invoice as any).worker.firstName} {(invoice as any).worker.lastName}</span>
+                                  </div>
+                                )}
+                                {(invoice as any).contract?.jobTitle && (
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-secondary-600">Role:</span>
+                                    <span className="truncate max-w-[60%] text-right">{(invoice as any).contract.jobTitle}</span>
+                                  </div>
+                                )}
+                                {(invoice as any).timesheet && (
+                                  <>
+                                    <div className="flex justify-between text-sm">
+                                      <span className="text-secondary-600">Period:</span>
+                                      <span>{formatDate((invoice as any).timesheet.periodStart)} – {formatDate((invoice as any).timesheet.periodEnd)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-sm">
+                                      <span className="text-secondary-600">Time Logged:</span>
+                                      <span>
+                                        {parseFloat((invoice as any).timesheet.totalDays || '0') > 0
+                                          ? `${parseFloat((invoice as any).timesheet.totalDays).toFixed(1)}d`
+                                          : `${parseFloat((invoice as any).timesheet.totalHours || '0').toFixed(1)}h`}
+                                        {(invoice as any).timesheet.entryCount ? ` · ${(invoice as any).timesheet.entryCount} entries` : ''}
+                                      </span>
+                                    </div>
+                                  </>
+                                )}
+                                {(invoice as any).contract?.rateType && (
+                                  isHostClientBusiness
+                                    ? (
+                                      // Host clients only see the rate they're being billed (their cost per worker hour/day),
+                                      // labelled as "Worker Rate" — they should not know the worker's actual pay.
+                                      (invoice as any).contract.customerBillingRate && (
+                                        <div className="flex justify-between text-sm">
+                                          <span className="text-secondary-600">Worker Rate:</span>
+                                          <span>{(invoice as any).contract.customerCurrency || (invoice as any).contract.currency} {parseFloat((invoice as any).contract.customerBillingRate).toFixed(2)}/{(invoice as any).contract.customerBillingRateType || ((invoice as any).contract.rateType === 'daily' ? 'day' : 'hr')}</span>
+                                        </div>
+                                      )
+                                    )
+                                    : (
+                                      // SDP and employing business see the actual worker pay rate
+                                      (invoice as any).contract.rate && (
+                                        <div className="flex justify-between text-sm">
+                                          <span className="text-secondary-600">Worker Rate:</span>
+                                          <span>{(invoice as any).contract.currency} {parseFloat((invoice as any).contract.rate).toFixed(2)}/{(invoice as any).contract.rateType === 'daily' ? 'day' : (invoice as any).contract.rateType === 'hourly' ? 'hr' : (invoice as any).contract.rateType}</span>
+                                        </div>
+                                      )
+                                    )
+                                )}
                                 <div className="flex justify-between text-sm">
                                   <span className="text-secondary-600">Service:</span>
-                                  <span className="capitalize">{invoice.serviceType.replace('_', ' ')}</span>
+                                  <span className="capitalize text-right truncate max-w-[60%]">{invoice.serviceType.replace(/_/g, ' ')}</span>
                                 </div>
-                                
+
                                 <div className="flex justify-between text-sm">
                                   <span className="text-secondary-600">Due Date:</span>
                                   <span>{formatDate(invoice.dueDate)}</span>
                                 </div>
-                                
+
+                                {(invoice as any).contract?.paymentTerms && (
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-secondary-600">Payment Terms:</span>
+                                    <span>Net {(invoice as any).contract.paymentTerms}</span>
+                                  </div>
+                                )}
+
                                 <div className="flex justify-between text-sm">
                                   <span className="text-secondary-600">Subtotal:</span>
                                   <span>{invoice.currency} {parseFloat(invoice.subtotal).toFixed(2)}</span>
                                 </div>
-                                
+
                                 <div className="flex justify-between text-sm">
-                                  <span className="text-secondary-600">GST/VAT:</span>
+                                  <span className="text-secondary-600">GST/VAT{invoice.gstVatRate ? ` (${parseFloat(invoice.gstVatRate).toFixed(0)}%)` : ''}:</span>
                                   <span>{invoice.currency} {parseFloat(invoice.gstVatAmount).toFixed(2)}</span>
                                 </div>
-                                
+
+                                {(invoice as any).lineItems && (invoice as any).lineItems.length > 0 && (
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-secondary-600">Line Items:</span>
+                                    <span>{(invoice as any).lineItems.length}</span>
+                                  </div>
+                                )}
+
                                 <div className="flex justify-between font-medium pt-2 border-t">
                                   <span>Total Amount:</span>
                                   <span className="text-primary-600">
@@ -758,17 +831,33 @@ export default function Invoices() {
                               </div>
 
                               {invoice.description && (
-                                <div className="text-sm text-secondary-600">
+                                <div className="text-xs text-secondary-600 bg-secondary-50 rounded p-2">
                                   {invoice.description}
                                 </div>
                               )}
 
-                              {invoice.isCrossBorder && (
-                                <Badge variant="outline" className="text-xs text-blue-600">
-                                  <Globe className="h-3 w-3 mr-1" />
-                                  Cross-Border
-                                </Badge>
-                              )}
+                              <div className="flex flex-wrap gap-1.5">
+                                {invoice.isCrossBorder && (
+                                  <Badge variant="outline" className="text-xs text-blue-600">
+                                    <Globe className="h-3 w-3 mr-1" />Cross-Border
+                                  </Badge>
+                                )}
+                                {(invoice as any).timesheetId && (
+                                  <Badge variant="outline" className="text-xs">
+                                    <Clock className="h-3 w-3 mr-1" />From Timesheet
+                                  </Badge>
+                                )}
+                                {(invoice as any).contract?.billingMode && (
+                                  <Badge variant="outline" className="text-xs capitalize">
+                                    {String((invoice as any).contract.billingMode).replace(/_/g, ' ')}
+                                  </Badge>
+                                )}
+                                {(invoice as any).contract?.employmentType && (
+                                  <Badge variant="outline" className="text-xs capitalize">
+                                    {String((invoice as any).contract.employmentType).replace(/_/g, ' ')}
+                                  </Badge>
+                                )}
+                              </div>
 
                               {(invoice.status === 'issued' || invoice.status === 'overdue') && (
                                 <Button 
@@ -894,9 +983,10 @@ export default function Invoices() {
                             <TableRow>
                               <TableHead>Invoice #</TableHead>
                               <TableHead>Type</TableHead>
-                              <TableHead>Billed To / Service</TableHead>
+                              <TableHead>Billed To</TableHead>
+                              <TableHead>Worker / Role</TableHead>
+                              <TableHead>Period</TableHead>
                               <TableHead>Amount</TableHead>
-                              <TableHead>Invoice Date</TableHead>
                               <TableHead>Due Date</TableHead>
                               <TableHead>Status</TableHead>
                             </TableRow>
@@ -914,13 +1004,28 @@ export default function Invoices() {
                                       <Badge className="bg-indigo-100 text-indigo-700 text-xs">Manual</Badge>
                                     )}
                                   </TableCell>
+                                  <TableCell className="text-sm">{invoice.toBusiness?.name || '—'}</TableCell>
                                   <TableCell className="text-sm">
-                                    {isAutoGenerated
-                                      ? (invoice.toBusiness?.name || '—')
-                                      : (invoice.serviceType?.replace(/_/g, ' ') || '—')}
+                                    {invoice.worker ? (
+                                      <div>
+                                        <div className="font-medium">{invoice.worker.firstName} {invoice.worker.lastName}</div>
+                                        {invoice.contract?.jobTitle && <div className="text-xs text-muted-foreground truncate max-w-[160px]">{invoice.contract.jobTitle}</div>}
+                                      </div>
+                                    ) : '—'}
+                                  </TableCell>
+                                  <TableCell className="text-sm">
+                                    {invoice.timesheet ? (
+                                      <div>
+                                        <div>{new Date(invoice.timesheet.periodStart).toLocaleDateString()} – {new Date(invoice.timesheet.periodEnd).toLocaleDateString()}</div>
+                                        <div className="text-xs text-muted-foreground">
+                                          {parseFloat(invoice.timesheet.totalDays || '0') > 0
+                                            ? `${parseFloat(invoice.timesheet.totalDays).toFixed(1)}d`
+                                            : `${parseFloat(invoice.timesheet.totalHours || '0').toFixed(1)}h`}
+                                        </div>
+                                      </div>
+                                    ) : invoice.periodStart ? `${new Date(invoice.periodStart).toLocaleDateString()} – ${new Date(invoice.periodEnd).toLocaleDateString()}` : '—'}
                                   </TableCell>
                                   <TableCell className="text-sm font-medium">{invoice.currency} {parseFloat(invoice.totalAmount || '0').toFixed(2)}</TableCell>
-                                  <TableCell className="text-sm">{invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString() : '—'}</TableCell>
                                   <TableCell className="text-sm">{invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : '—'}</TableCell>
                                   <TableCell>
                                     <Badge className={
@@ -939,70 +1044,122 @@ export default function Invoices() {
                         </Table>
                       </div>
                     ) : (
-                  <div className="grid gap-4">
+                  <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
                     {clientInvoices.map((invoice: any) => {
                       const isAutoGenerated = invoice.invoiceCategory === 'customer_billing';
-                      const borderColor = isAutoGenerated ? 'border-l-purple-500' : 'border-l-indigo-500';
+                      const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons] || FileText;
+                      const totalLabel = invoice.timesheet
+                        ? (parseFloat(invoice.timesheet.totalDays || '0') > 0
+                            ? `${parseFloat(invoice.timesheet.totalDays).toFixed(1)}d`
+                            : `${parseFloat(invoice.timesheet.totalHours || '0').toFixed(1)}h`)
+                        : null;
                       return (
-                        <Card key={invoice.id} className={`border-l-4 ${borderColor}`}>
+                        <Card key={invoice.id} className="hover:shadow-md transition-shadow" data-testid={`client-invoice-${invoice.id}`}>
                           <CardHeader className="pb-3">
-                            <div className="flex items-start justify-between">
-                              <div>
-                                <div className="flex items-center gap-2 mb-1">
-                                  <CardTitle className="text-base">{invoice.invoiceNumber}</CardTitle>
-                                  {isAutoGenerated ? (
-                                    <Badge className="bg-purple-100 text-purple-700 text-xs">
-                                      <CheckCircle className="h-3 w-3 mr-1" />
-                                      Auto-generated
-                                    </Badge>
-                                  ) : (
-                                    <Badge className="bg-indigo-100 text-indigo-700 text-xs">
-                                      <FileText className="h-3 w-3 mr-1" />
-                                      Manual
-                                    </Badge>
-                                  )}
-                                </div>
-                                <p className="text-sm text-gray-600">{invoice.description}</p>
-                              </div>
-                              <Badge className={
-                                invoice.status === 'paid' ? 'bg-green-100 text-green-800' :
-                                invoice.status === 'sent' ? 'bg-blue-100 text-blue-800' :
-                                invoice.status === 'overdue' ? 'bg-red-100 text-red-800' :
-                                'bg-gray-100 text-gray-700'
-                              }>
+                            <div className="flex items-center justify-between">
+                              <CardTitle className="text-lg">{invoice.invoiceNumber}</CardTitle>
+                              <Badge className={statusColors[invoice.status as keyof typeof statusColors] || 'bg-gray-100 text-gray-700'}>
+                                <StatusIcon className="h-3 w-3 mr-1" />
                                 {invoice.status}
                               </Badge>
                             </div>
+                            <CardDescription className="flex items-center gap-2 mt-1">
+                              <Globe className="h-3.5 w-3.5 text-indigo-500 flex-shrink-0" />
+                              <span className="truncate">{invoice.toBusiness?.name || 'Host Client'}</span>
+                              {isAutoGenerated ? (
+                                <Badge className="bg-purple-100 text-purple-700 text-[10px] py-0 ml-auto">Auto</Badge>
+                              ) : (
+                                <Badge className="bg-indigo-100 text-indigo-700 text-[10px] py-0 ml-auto">Manual</Badge>
+                              )}
+                            </CardDescription>
                           </CardHeader>
-                          <CardContent>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                              <div>
-                                <span className="text-gray-500">Amount</span>
-                                <p className="font-semibold">{invoice.currency} {parseFloat(invoice.totalAmount || '0').toFixed(2)}</p>
+
+                          <CardContent className="space-y-4">
+                            <div className="space-y-2">
+                              {invoice.worker && (
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Worker:</span>
+                                  <span className="font-medium truncate max-w-[60%] text-right">{invoice.worker.firstName} {invoice.worker.lastName}</span>
+                                </div>
+                              )}
+                              {invoice.contract?.jobTitle && (
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Role:</span>
+                                  <span className="truncate max-w-[60%] text-right">{invoice.contract.jobTitle}</span>
+                                </div>
+                              )}
+                              {(invoice.timesheet || invoice.periodStart) && (
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Period:</span>
+                                  <span>
+                                    {invoice.timesheet
+                                      ? `${formatDate(invoice.timesheet.periodStart)} – ${formatDate(invoice.timesheet.periodEnd)}`
+                                      : `${formatDate(invoice.periodStart)} – ${formatDate(invoice.periodEnd)}`}
+                                  </span>
+                                </div>
+                              )}
+                              {totalLabel && (
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Time Logged:</span>
+                                  <span>{totalLabel}</span>
+                                </div>
+                              )}
+                              {invoice.contract?.rateType && invoice.contract?.customerBillingRate && (
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Client Rate:</span>
+                                  <span>{invoice.contract.customerCurrency || invoice.currency} {parseFloat(invoice.contract.customerBillingRate).toFixed(2)}/{invoice.contract.rateType === 'daily' ? 'day' : invoice.contract.rateType === 'hourly' ? 'hr' : invoice.contract.rateType}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between text-sm">
+                                <span className="text-secondary-600">Invoice Date:</span>
+                                <span>{invoice.invoiceDate ? formatDate(invoice.invoiceDate) : '—'}</span>
                               </div>
-                              <div>
-                                <span className="text-gray-500">Invoice Date</span>
-                                <p className="font-medium">{invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString() : '—'}</p>
+                              <div className="flex justify-between text-sm">
+                                <span className="text-secondary-600">Due Date:</span>
+                                <span>{invoice.dueDate ? formatDate(invoice.dueDate) : '—'}</span>
                               </div>
-                              <div>
-                                <span className="text-gray-500">Due Date</span>
-                                <p className="font-medium">{invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-gray-500">{isAutoGenerated ? 'Billed To' : 'Service Type'}</span>
-                                <p className="font-medium capitalize">
-                                  {isAutoGenerated
-                                    ? (invoice.toBusiness?.name || '—')
-                                    : (invoice.serviceType?.replace(/_/g, ' ') || '—')}
-                                </p>
+                              {invoice.lineItems && invoice.lineItems.length > 0 && (
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Line Items:</span>
+                                  <span>{invoice.lineItems.length}</span>
+                                </div>
+                              )}
+                              {parseFloat(invoice.gstVatAmount || '0') > 0 && (
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">GST/VAT ({parseFloat(invoice.gstVatRate || '0').toFixed(0)}%):</span>
+                                  <span>{invoice.currency} {parseFloat(invoice.gstVatAmount).toFixed(2)}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between font-medium pt-2 border-t">
+                                <span>Total Amount:</span>
+                                <span className="text-primary-600">{invoice.currency} {parseFloat(invoice.totalAmount || '0').toFixed(2)}</span>
                               </div>
                             </div>
-                            {isAutoGenerated && invoice.suggestedMargin && parseFloat(invoice.suggestedMargin) > 0 && (
-                              <div className="mt-3 pt-3 border-t flex items-center gap-2 text-xs text-gray-500">
-                                <DollarSign className="h-3 w-3" />
-                                Suggested margin: <span className="font-semibold text-green-700">{invoice.currency} {parseFloat(invoice.suggestedMargin).toFixed(2)}</span>
+
+                            {invoice.description && (
+                              <div className="text-xs text-secondary-600 bg-secondary-50 rounded p-2">
+                                {invoice.description}
                               </div>
                             )}
+
+                            <div className="flex flex-wrap gap-1.5">
+                              {invoice.timesheetId && (
+                                <Badge variant="outline" className="text-xs">
+                                  <Clock className="h-3 w-3 mr-1" />From Timesheet
+                                </Badge>
+                              )}
+                              {invoice.contract?.billingMode && (
+                                <Badge variant="outline" className="text-xs capitalize">
+                                  {String(invoice.contract.billingMode).replace(/_/g, ' ')}
+                                </Badge>
+                              )}
+                              {isAutoGenerated && invoice.suggestedMargin && parseFloat(invoice.suggestedMargin) > 0 && (
+                                <Badge variant="outline" className="text-xs text-green-700 border-green-200">
+                                  <DollarSign className="h-3 w-3 mr-0.5" />
+                                  Margin: {invoice.currency} {parseFloat(invoice.suggestedMargin).toFixed(2)}
+                                </Badge>
+                              )}
+                            </div>
                           </CardContent>
                         </Card>
                       );
@@ -1016,7 +1173,7 @@ export default function Invoices() {
           ) : (
             // Non-business users see the original interface
             <>
-              {/* Available Timesheets for Invoice Creation */}
+              {/* Available Timesheets for Invoice Creation — hidden, kept for future use
               {canCreateInvoices && timesheets.length > 0 && (
             <Card className="mb-6">
               <CardHeader>
@@ -1056,6 +1213,7 @@ export default function Invoices() {
               </CardContent>
             </Card>
           )}
+          */}
             </>
           )}
 

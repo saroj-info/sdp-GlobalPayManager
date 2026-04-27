@@ -148,6 +148,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         paymentDaysAfterPeriod: existingContract.paymentDaysAfterPeriod || 3,
         paymentHolidayRule: existingContract.paymentHolidayRule !== undefined ? existingContract.paymentHolidayRule : true,
         noticePeriodDays: existingContract.noticePeriodDays || 30,
+        timesheetApproverRole: existingContract.timesheetApproverRole || 'business',
         remunerationLines: existingContract.remunerationLines || [{ type: 'base_salary', description: 'Base Salary', amount: '', frequency: 'annual' }],
         // Client details
         isForClient: existingContract.isForClient || false,
@@ -163,7 +164,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         customerBusinessId: existingContract.customerBusinessId || '',
         customerBillingRate: existingContract.customerBillingRate?.toString() || '',
         customerBillingRateType: existingContract.customerBillingRateType || 'hourly',
-        customerCurrency: existingContract.customerCurrency || 'USD',
+        customerCurrency: existingContract.customerCurrency || existingContract.currency || 'USD',
         invoicingFrequency: existingContract.invoicingFrequency || 'monthly',
         paymentTerms: existingContract.paymentTerms || '30',
         // 3rd party vendor
@@ -206,6 +207,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       paymentDaysAfterPeriod: 3,
       paymentHolidayRule: true,
       noticePeriodDays: 30,
+      timesheetApproverRole: 'business',
       remunerationLines: [{ type: 'base_salary', description: 'Base Salary', amount: '', frequency: 'annual' }],
       // Client details
       isForClient: false,
@@ -1202,10 +1204,16 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   value={formData.countryId}
                   onValueChange={(value) => {
                     const c = countries.find((x: any) => x.id === value);
+                    const newCurrency = c?.currency || formData.currency;
                     setFormData({
                       ...formData,
                       countryId: value,
-                      currency: c?.currency || formData.currency,
+                      currency: newCurrency,
+                      // If user hasn't manually changed customerCurrency away from the previous main currency,
+                      // keep them in sync so the client invoice defaults to the same currency as the contract.
+                      customerCurrency: (!formData.customerCurrency || formData.customerCurrency === formData.currency)
+                        ? newCurrency
+                        : formData.customerCurrency,
                     });
                   }}
                   className="grid grid-cols-2 md:grid-cols-4 gap-3"
@@ -1451,13 +1459,22 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                           value={formData.customerBusinessId}
                           onValueChange={(value) => {
                             if (value === '__create_new__') {
+                              // Clear any previously-selected host client so the auto-filled fields don't stick around
+                              setFormData({
+                                ...formData,
+                                customerBusinessId: '',
+                                clientName: '',
+                                clientContactEmail: '',
+                              });
                               setShowCreateHostClient(true);
                               return;
                             }
+                            // Picking an existing host client — close the inline create form if it was open
+                            setShowCreateHostClient(false);
                             const selectedBusiness = customerBusinessOptions.find((b: any) => b.id === value);
                             if (selectedBusiness) {
-                              setFormData({ 
-                                ...formData, 
+                              setFormData({
+                                ...formData,
                                 customerBusinessId: value,
                                 clientName: selectedBusiness.name,
                                 clientContactEmail: selectedBusiness.contactEmail || selectedBusiness.email || '',
@@ -1539,6 +1556,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                                     placeholder="e.g. billing@cxtech.com"
                                     className="bg-white"
                                   />
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    If provided, a login will be created for this contact and credentials emailed to them.
+                                  </p>
                                 </div>
                               </div>
                               <div className="flex gap-2 justify-end">
@@ -1560,10 +1580,25 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                                   size="sm"
                                   disabled={!newHostClientName.trim() || createHostClientMutation.isPending}
                                   onClick={() => {
+                                    // SDP users must supply a parentBusinessId. Use the on-behalf business if set,
+                                    // otherwise fall back to the selected worker's business.
+                                    const selectedWorker = workers.find((w: any) => w.id === formData.workerId);
+                                    const parentBusinessId = isSDPInternal
+                                      ? (formData.selectedBusinessId || selectedWorker?.businessId)
+                                      : undefined;
+                                    if (isSDPInternal && !parentBusinessId) {
+                                      toast({
+                                        title: 'Select a worker first',
+                                        description: 'Pick the worker (or business when creating on-behalf) before adding a new host client.',
+                                        variant: 'destructive',
+                                      });
+                                      return;
+                                    }
                                     createHostClientMutation.mutate({
                                       name: newHostClientName.trim(),
                                       contactEmail: newHostClientEmail.trim() || undefined,
                                       contactName: newHostClientContact.trim() || undefined,
+                                      parentBusinessId,
                                     });
                                   }}
                                 >
@@ -1575,29 +1610,31 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                         </Card>
                       )}
                       
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <Label htmlFor="clientName">Host Client Name (Auto-filled)</Label>
-                          <Input
-                            id="clientName"
-                            value={formData.clientName}
-                            readOnly
-                            placeholder="Select host client above"
-                            className="bg-secondary-100"
-                          />
+                      {!showCreateHostClient && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <Label htmlFor="clientName">Host Client Name (Auto-filled)</Label>
+                            <Input
+                              id="clientName"
+                              value={formData.clientName}
+                              readOnly
+                              placeholder="Select host client above"
+                              className="bg-secondary-100"
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="clientContactEmail">Contact Email (Auto-filled)</Label>
+                            <Input
+                              id="clientContactEmail"
+                              type="email"
+                              value={formData.clientContactEmail}
+                              readOnly
+                              placeholder="Select host client above"
+                              className="bg-secondary-100"
+                            />
+                          </div>
                         </div>
-                        <div>
-                          <Label htmlFor="clientContactEmail">Contact Email (Auto-filled)</Label>
-                          <Input
-                            id="clientContactEmail"
-                            type="email"
-                            value={formData.clientContactEmail}
-                            readOnly
-                            placeholder="Select host client above"
-                            className="bg-secondary-100"
-                          />
-                        </div>
-                      </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -2717,6 +2754,34 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Timesheet Approver — only relevant when timesheets are required */}
+              {formData.requiresTimesheet && (
+                <Card className="bg-secondary-50">
+                  <CardContent className="p-4">
+                    <h4 className="font-medium text-secondary-900 mb-4">Timesheet Approver</h4>
+                    <div>
+                      <Label htmlFor="timesheetApproverRole">Who approves submitted timesheets?</Label>
+                      <Select
+                        value={formData.timesheetApproverRole || 'business'}
+                        onValueChange={(v) => setFormData({ ...formData, timesheetApproverRole: v })}
+                      >
+                        <SelectTrigger id="timesheetApproverRole" data-testid="select-timesheet-approver" className="mt-1 bg-white">
+                          <SelectValue placeholder="Select approver" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="sdp">SDP (Service Delivery Provider)</SelectItem>
+                          <SelectItem value="business">Employing Business</SelectItem>
+                          {formData.isForClient && <SelectItem value="host_client">Host Client</SelectItem>}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-sm text-secondary-600 mt-2">
+                        Only the selected role will be able to approve or reject timesheets submitted on this contract.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               {/* Actions */}
               <div className="flex justify-between">
