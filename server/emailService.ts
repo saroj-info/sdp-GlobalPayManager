@@ -1160,19 +1160,7 @@ export function getBusinessRegistrationTemplate(firstName: string, accountType: 
 export function getEmailBaseUrl(): string {
   if (process.env.FRONTEND_URL) {
     return process.env.FRONTEND_URL;
-  }
-
-  if (process.env.REPLIT_DEPLOYMENT && process.env.REPLIT_DOMAINS) {
-    const domains = process.env.REPLIT_DOMAINS.split(',');
-    const primaryDomain = domains[0]?.trim();
-    if (primaryDomain) {
-      return `https://${primaryDomain}`;
-    }
-  }
-
-  if (process.env.REPLIT_DEV_DOMAIN) {
-    return `https://${process.env.REPLIT_DEV_DOMAIN}`;
-  }
+  } 
 
   return 'https://sdpglobalpay.com';
 }
