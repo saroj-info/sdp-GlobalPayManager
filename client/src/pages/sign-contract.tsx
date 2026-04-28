@@ -11,6 +11,7 @@ import { CheckCircle, Clock, FileText, User, Building, Calendar, DollarSign } fr
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
+import type { ContractWithDerived } from "@/types/api";
 
 export default function SignContract() {
   const [, params] = useRoute("/sign/:token");
@@ -38,7 +39,7 @@ export default function SignContract() {
   }, [isAuthenticated, isLoading, token, toast]);
 
   // Fetch contract details using the token
-  const { data: contract, isLoading: contractLoading, error } = useQuery({
+  const { data: contract, isLoading: contractLoading, error } = useQuery<ContractWithDerived>({
     queryKey: ["/api/contracts/sign", token],
     enabled: !!token && isAuthenticated,
   });
@@ -48,7 +49,7 @@ export default function SignContract() {
     if (contract && !isViewed) {
       setIsViewed(true);
       // Record contract view
-      apiRequest("POST", `/api/contracts/${(contract as any).id}/viewed`).catch(console.error);
+      apiRequest("POST", `/api/contracts/${contract.id}/viewed`).catch(console.error);
     }
   }, [contract, isViewed]);
 
@@ -59,7 +60,7 @@ export default function SignContract() {
         throw new Error("Please enter your full name as signature");
       }
 
-      return await apiRequest("POST", `/api/contracts/${(contract as any).id}/sign`, {
+      return await apiRequest("POST", `/api/contracts/${contract!.id}/sign`, {
         signature: signature.trim(),
         token
       });
@@ -142,7 +143,7 @@ export default function SignContract() {
               <div>
                 <p className="font-semibold text-green-800">Contract Already Signed</p>
                 <p className="text-green-700 text-sm">
-                  This contract was signed on {new Date(contract.signedAt).toLocaleDateString()} at {new Date(contract.signedAt).toLocaleTimeString()}
+                  This contract was signed on {new Date(contract.signedAt!).toLocaleDateString()} at {new Date(contract.signedAt!).toLocaleTimeString()}
                 </p>
               </div>
             </div>
@@ -264,7 +265,7 @@ export default function SignContract() {
                       <p className="text-green-700">{contract.signatureText}</p>
                     </div>
                     <div className="text-sm text-gray-600">
-                      <p>Signed: {new Date(contract.signedAt).toLocaleString()}</p>
+                      <p>Signed: {new Date(contract.signedAt!).toLocaleString()}</p>
                       {contract.signingLocation && (
                         <p>Location: {JSON.parse(contract.signingLocation).city}, {JSON.parse(contract.signingLocation).country}</p>
                       )}

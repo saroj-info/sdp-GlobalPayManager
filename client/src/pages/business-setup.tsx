@@ -13,7 +13,7 @@ export default function BusinessSetup() {
   const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
   const { toast } = useToast();
 
-  const { data: countries = [], isLoading: countriesLoading } = useQuery({
+  const { data: countries = [], isLoading: countriesLoading } = useQuery<any[]>({
     queryKey: ["/api/countries"],
     retry: false,
   });

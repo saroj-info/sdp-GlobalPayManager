@@ -931,7 +931,7 @@ export default function SdpInvoices() {
                         <div className="border-t pt-4">
                           <div className="text-sm font-medium text-secondary-900 mb-2">Line Items:</div>
                           <div className="space-y-2">
-                            {invoice.lineItems.map((item, index) => (
+                            {invoice.lineItems.map((item: any, index: number) => (
                               <div key={item.id || index} className="text-xs space-y-1 bg-gray-50 p-2 rounded">
                                 <div className="font-medium">{item.description}</div>
                                 <div className="flex justify-between text-secondary-600">
@@ -1183,7 +1183,7 @@ export default function SdpInvoices() {
 
       {showMarkAsPaidModal && selectedInvoiceForPayment && (
         <MarkAsPaidModal
-          invoice={selectedInvoiceForPayment}
+          invoice={selectedInvoiceForPayment as any}
           onClose={handleCloseMarkAsPaidModal}
           onSuccess={handleMarkAsPaidSuccess}
         />

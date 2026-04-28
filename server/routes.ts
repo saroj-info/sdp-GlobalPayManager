@@ -86,7 +86,7 @@ import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "./objectStorage";
-import { type ContractInstance, type Contract, type Worker, type Country, type RoleTitle } from "@shared/schema";
+import { type ContractInstance, type Contract, type Worker, type Country, type RoleTitle, type Business } from "@shared/schema";
 import { getDerivedContractStatus } from "@shared/contractHelpers";
 import { registerEmailTestRoutes } from "./routes/emailTestRoute";
 import { getBusinessInvitationTemplate, getWorkerApprovalRequestTemplate, getEmailBaseUrl } from "./emailService";
@@ -114,7 +114,7 @@ function normalizeDateFields(obj: Record<string, any>) {
 
 // Helper function to add remuneration lines to contracts
 // requesterUserType: if provided and is a business user, salary contracts in pending_sdp_review will have remuneration lines suppressed
-async function addRemunerationLinesToContracts<T extends { id: string; rateType?: string; status?: string }>(
+async function addRemunerationLinesToContracts<T extends { id: string; rateType?: string | null; status?: string | null }>(
   contracts: T[],
   requesterUserType?: string
 ): Promise<(T & { remunerationLines: any[] })[]> {
@@ -162,7 +162,7 @@ async function addBillingLinesToContracts<T extends { id: string }>(contracts: T
 }
 
 // Helper function to add derived status to contracts
-async function addDerivedStatusToContracts(contracts: (Contract & { worker: Worker; country: Country; roleTitle?: RoleTitle })[]) {
+async function addDerivedStatusToContracts<T extends Record<string, any>>(contracts: T[]) {
   // PERFORMANCE FIX: Fetch all contract instances once instead of in the loop (N+1 fix)
   const allInstances = await storage.getContractInstances();
   
@@ -187,7 +187,7 @@ async function addDerivedStatusToContracts(contracts: (Contract & { worker: Work
       const normalizedInstances = instances.map(normalizeDateFields);
       
       // Compute derived status using our helper
-      const derivedStatus = getDerivedContractStatus(normalizedContract, normalizedInstances);
+      const derivedStatus = getDerivedContractStatus(normalizedContract as any, normalizedInstances as any);
       
       return {
         ...contract,
@@ -195,7 +195,7 @@ async function addDerivedStatusToContracts(contracts: (Contract & { worker: Work
         termExpired: derivedStatus.termExpired,
         sourceInstance: derivedStatus.sourceInstance
       };
-    } catch (error) {
+    } catch (error: any) {
       console.error(`Error deriving status for contract ${contract.id}:`, error);
       // Return original contract if status derivation fails
       return {
@@ -231,7 +231,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   let stripe: Stripe | null = null;
   if (process.env.STRIPE_SECRET_KEY) {
     stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-      apiVersion: "2023-10-16",
+      apiVersion: "2023-10-16" as Stripe.LatestApiVersion,
     });
   }
 
@@ -281,7 +281,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (userData.userType === 'business_user' && userData.id) {
           try {
             business = await storage.getBusinessByOwnerId(userData.id);
-          } catch (error) {
+          } catch (error: any) {
             console.error('Error getting business for user:', error);
           }
         }
@@ -313,7 +313,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (userData.userType === 'business_user' && userData.id) {
         try {
           business = await storage.getBusinessByOwnerId(userData.id);
-        } catch (error) {
+        } catch (error: any) {
           console.error('Error getting business for user:', error);
         }
       }
@@ -364,7 +364,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         method: twoFactorAuth?.method || null,
         enabledAt: twoFactorAuth?.enabledAt || null,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error checking 2FA status:', error);
       res.status(500).json({ message: 'Failed to check 2FA status' });
     }
@@ -417,7 +417,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         qrCodeDataUrl,
         message: 'Scan QR code with your authenticator app',
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error starting 2FA enrollment:', error);
       res.status(500).json({ message: 'Failed to start 2FA enrollment' });
     }
@@ -479,7 +479,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: '2FA enabled successfully',
         backupCodes,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error verifying 2FA enrollment:', error);
       res.status(500).json({ message: 'Failed to verify 2FA enrollment' });
     }
@@ -610,7 +610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: '2FA verification successful',
         verified: true,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error verifying 2FA login:', error);
       res.status(500).json({ message: 'Failed to verify 2FA' });
     }
@@ -649,7 +649,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: 'Backup codes regenerated successfully',
         backupCodes,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error regenerating backup codes:', error);
       res.status(500).json({ message: 'Failed to regenerate backup codes' });
     }
@@ -703,7 +703,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ message: '2FA disabled successfully' });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error disabling 2FA:', error);
       res.status(500).json({ message: 'Failed to disable 2FA' });
     }
@@ -720,7 +720,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const logs = await getRecentAuditLogs(userId, 50);
       res.json(logs);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching 2FA audit logs:', error);
       res.status(500).json({ message: 'Failed to fetch audit logs' });
     }
@@ -743,7 +743,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const trusted = await isDeviceTrusted(userId, deviceFingerprint);
 
       res.json({ trusted });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error checking trusted device:', error);
       res.status(500).json({ message: 'Failed to check trusted device' });
     }
@@ -757,7 +757,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const definitions = await storage.getEmailTemplateDefinitions();
       res.json(definitions);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching email template definitions:', error);
       res.status(500).json({ error: 'Failed to fetch email template definitions' });
     }
@@ -771,7 +771,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: 'Email template definition not found' });
       }
       res.json(definition);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching email template definition:', error);
       res.status(500).json({ error: 'Failed to fetch email template definition' });
     }
@@ -782,7 +782,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const templates = await storage.getEmailTemplates();
       res.json(templates);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching email templates:', error);
       res.status(500).json({ error: 'Failed to fetch email templates' });
     }
@@ -796,7 +796,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const jurisdictions = await storage.getJurisdictions();
       res.json(jurisdictions);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching jurisdictions:', error);
       res.status(500).json({ error: 'Failed to fetch jurisdictions' });
     }
@@ -807,7 +807,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const jurisdictions = await storage.getJurisdictions();
       res.json(jurisdictions);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching all jurisdictions:', error);
       res.status(500).json({ error: 'Failed to fetch jurisdictions' });
     }
@@ -819,7 +819,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { countryId } = req.params;
       const jurisdictions = await storage.getJurisdictionsByCountry(countryId);
       res.json(jurisdictions);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching jurisdictions by country:', error);
       res.status(500).json({ error: 'Failed to fetch jurisdictions' });
     }
@@ -834,7 +834,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: 'Jurisdiction not found' });
       }
       res.json(jurisdiction);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching jurisdiction:', error);
       res.status(500).json({ error: 'Failed to fetch jurisdiction' });
     }
@@ -846,7 +846,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const jurisdictionData = req.body;
       const jurisdiction = await storage.createJurisdiction(jurisdictionData);
       res.status(201).json(jurisdiction);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating jurisdiction:', error);
       res.status(400).json({ error: 'Failed to create jurisdiction', details: error.message });
     }
@@ -859,7 +859,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updates = req.body;
       const jurisdiction = await storage.updateJurisdiction(id, updates);
       res.json(jurisdiction);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating jurisdiction:', error);
       res.status(400).json({ error: 'Failed to update jurisdiction', details: error.message });
     }
@@ -871,7 +871,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       await storage.deleteJurisdiction(id);
       res.json({ message: 'Jurisdiction deleted successfully' });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting jurisdiction:', error);
       res.status(400).json({ error: 'Failed to delete jurisdiction', details: error.message });
     }
@@ -948,7 +948,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json({ message: `Successfully seeded ${seedCount} jurisdiction rules` });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error seeding jurisdiction data:', error);
       res.status(500).json({ error: 'Failed to seed jurisdiction data', details: error.message });
     }
@@ -959,7 +959,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const templates = await storage.getEmailTemplatesByDefinition(req.params.definitionId);
       res.json(templates);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching email templates by definition:', error);
       res.status(500).json({ error: 'Failed to fetch email templates' });
     }
@@ -981,7 +981,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(template);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching published email template:', error);
       res.status(500).json({ error: 'Failed to fetch published email template' });
     }
@@ -1002,7 +1002,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const template = await storage.createEmailTemplate(templateData);
       res.status(201).json(template);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating email template:', error);
       res.status(500).json({ error: 'Failed to create email template' });
     }
@@ -1013,7 +1013,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const template = await storage.updateEmailTemplate(req.params.id, req.body);
       res.json(template);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating email template:', error);
       res.status(500).json({ error: 'Failed to update email template' });
     }
@@ -1029,7 +1029,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const template = await storage.publishEmailTemplate(req.params.id, user.id);
       res.json(template);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error publishing email template:', error);
       res.status(500).json({ error: 'Failed to publish email template' });
     }
@@ -1040,7 +1040,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const versions = await storage.getEmailTemplateVersions(req.params.id);
       res.json(versions);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching email template versions:', error);
       res.status(500).json({ error: 'Failed to fetch email template versions' });
     }
@@ -1062,7 +1062,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const version = await storage.createEmailTemplateVersion(versionData);
       res.status(201).json(version);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating email template version:', error);
       res.status(500).json({ error: 'Failed to create email template version' });
     }
@@ -1073,7 +1073,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const settings = await storage.getEmailSettings();
       res.json(settings || {});
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching email settings:', error);
       res.status(500).json({ error: 'Failed to fetch email settings' });
     }
@@ -1084,7 +1084,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const settings = await storage.updateEmailSettings(req.body);
       res.json(settings);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating email settings:', error);
       res.status(500).json({ error: 'Failed to update email settings' });
     }
@@ -1106,7 +1106,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(rendered);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error rendering email template:', error);
       res.status(500).json({ error: 'Failed to render email template' });
     }
@@ -1143,7 +1143,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ error: 'Failed to send test email' });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error sending test email:', error);
       res.status(500).json({ error: 'Failed to send test email' });
     }
@@ -1171,7 +1171,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         email: worker.email,
         phoneNumber: worker.phoneNumber || '',
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Worker invite lookup error:', error);
       res.status(500).json({ message: 'Internal server error' });
     }
@@ -1271,7 +1271,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         try {
           await emailService.sendEmailVerification(data.email, data.firstName, emailVerificationToken);
-        } catch (emailError) {
+        } catch (emailError: any) {
           console.error('Failed to send verification email after invite signup:', emailError);
         }
 
@@ -1337,7 +1337,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             countryId: countryId,
             workerType: 'contractor',
             personalDetailsCompleted: false,
-            taxDetailsCompleted: false,
             bankDetailsCompleted: false,
             onboardingCompleted: false
           });
@@ -1353,11 +1352,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
 
-      } catch (dbError) {
+      } catch (dbError: any) {
         console.error("Database error during signup:", dbError);
         try {
           if (user) await storage.upsertUser({ ...user, isActive: false });
-        } catch (cleanupError) {
+        } catch (cleanupError: any) {
           console.error("Error during signup cleanup:", cleanupError);
         }
         return res.status(500).json({
@@ -1373,7 +1372,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await emailService.sendBusinessRegistrationConfirmation(data.email, data.firstName, data.accountType);
         }
         await emailService.sendEmailVerification(data.email, data.firstName, emailVerificationToken);
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error('Failed to send welcome or verification email:', emailError);
       }
 
@@ -1389,7 +1388,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           userType: user.userType
         }
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Signup error:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({
@@ -1433,7 +1432,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.redirect(`${frontendUrl}/login?verified=true`);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Email verification error:", error);
       res.redirect(`${frontendUrl}/login?verification_error=error`);
     }
@@ -1496,17 +1495,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Send verification email (use plaintext token in email, not the hash)
       try {
         await emailService.sendEmailVerification(
-          user.email,
-          user.firstName,
+          user.email ?? '',
+          user.firstName ?? '',
           emailVerificationToken
         );
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error('Failed to send verification email:', emailError);
         // Still return success to prevent email enumeration
       }
 
       res.json(genericResponse);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Resend verification error:", error);
       res.status(500).json({ message: "Unable to process request. Please try again." });
     }
@@ -1610,12 +1609,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { createPending2FASession } = await import('./jwtAuth');
         const pendingToken = createPending2FASession({
           id: user.id,
-          email: user.email,
-          userType: user.userType,
+          email: user.email ?? '',
+          userType: user.userType ?? '',
           name: `${user.firstName} ${user.lastName}`,
           sdpRole: user.sdpRole,
-          accessibleCountries: user.accessibleCountries,
-          accessibleBusinessIds: user.accessibleBusinessIds,
+          accessibleCountries: user.accessibleCountries ?? undefined,
+          accessibleBusinessIds: user.accessibleBusinessIds ?? undefined,
         });
         
         return res.json({
@@ -1630,12 +1629,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { createAuthToken } = await import('./jwtAuth');
       const { token, userData } = createAuthToken({
         id: user.id,
-        email: user.email,
-        userType: user.userType,
+        email: user.email ?? '',
+        userType: user.userType ?? '',
         name: `${user.firstName} ${user.lastName}`,
         sdpRole: user.sdpRole,
-        accessibleCountries: user.accessibleCountries,
-        accessibleBusinessIds: user.accessibleBusinessIds,
+        accessibleCountries: user.accessibleCountries ?? undefined,
+        accessibleBusinessIds: user.accessibleBusinessIds ?? undefined,
       });
 
       // Return user info with token
@@ -1651,7 +1650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           emailVerified: user.emailVerified
         }
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Login error:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ 
@@ -1674,7 +1673,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.clearCookie('connect.sid'); // Clear session cookie
         res.json({ message: "Logout successful" });
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Logout error:", error);
       res.status(500).json({ message: "Unable to logout. Please try again." });
     }
@@ -1725,11 +1724,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         await emailService.sendPasswordResetEmail(
           user.email!,
-          user.firstName,
+          user.firstName ?? '',
           resetLink
         );
         console.log('Password reset email sent to:', user.email);
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error('Failed to send password reset email:', emailError);
         // Don't reveal to user that email failed - they'll retry if they don't receive it
       }
@@ -1737,7 +1736,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ 
         message: "If an account exists with this email, you will receive password reset instructions shortly." 
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Password reset request error:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ 
@@ -1772,7 +1771,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json({ message: "Password reset successful. You can now log in with your new password." });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Password reset error:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ 
@@ -1859,7 +1858,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       res.json(profileData);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching profile:", error);
       res.status(500).json({ message: "Failed to fetch profile" });
     }
@@ -1921,7 +1920,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 }
               );
               console.log("ACL policy set successfully, final normalized URL:", normalizedProfileImageUrl);
-            } catch (aclError) {
+            } catch (aclError: any) {
               console.log("File doesn't exist yet or ACL setting failed:", aclError.message);
               // File doesn't exist yet, but we can still store the normalized path
               // The ACL will be set when the file is actually uploaded or accessed
@@ -1933,7 +1932,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.log("Not an object storage URL, keeping as is:", data.profileImageUrl);
             normalizedProfileImageUrl = data.profileImageUrl;
           }
-        } catch (objectError) {
+        } catch (objectError: any) {
           console.error("Error processing profile image:", objectError);
           // If it's not a valid object storage URL, keep as is (might be external URL)
           normalizedProfileImageUrl = data.profileImageUrl;
@@ -1958,7 +1957,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: "Profile updated successfully",
         user: updatedUser
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating profile:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ 
@@ -1982,7 +1981,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const uploadUrl = await objectStorage.getProfilePictureUploadURL();
       
       res.json({ uploadUrl });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error generating profile picture upload URL:", error);
       res.status(500).json({ message: "Failed to generate upload URL" });
     }
@@ -2011,7 +2010,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: "Profile picture deleted permanently",
         user: updatedUser
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting profile picture:", error);
       res.status(500).json({ message: "Failed to delete profile picture" });
     }
@@ -2071,7 +2070,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         imageUrl: imageData,
         user: updatedUser
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error uploading profile picture:", error);
       res.status(500).json({ message: "Failed to upload profile picture" });
     }
@@ -2127,7 +2126,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           req.user.name,
           data.sdpRole
         );
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error('Failed to send invitation email:', emailError);
         // Continue anyway - they can copy the link
       }
@@ -2176,7 +2175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         phoneNumber: invite.phoneNumber,
         sdpRole: invite.sdpRole,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching invitation:", error);
       res.status(500).json({ message: "Failed to fetch invitation" });
     }
@@ -2297,7 +2296,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             'enterprise' // SDP internal users get business-style welcome
           );
           console.log('Registration confirmation email sent to SDP user:', user.email);
-        } catch (emailError) {
+        } catch (emailError: any) {
           console.error('Failed to send registration confirmation email to SDP user:', emailError);
           // Don't fail the registration if email sending fails
         }
@@ -2330,7 +2329,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : users;
       
       res.json(filteredUsers);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching SDP users:", error);
       res.status(500).json({ message: "Failed to fetch users" });
     }
@@ -2349,7 +2348,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : invites;
       
       res.json(filteredInvites);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching pending SDP user invitations:", error);
       res.status(500).json({ message: "Failed to fetch pending invitations" });
     }
@@ -2384,11 +2383,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           invite.sdpRole
         );
         res.json({ message: "Invitation resent successfully" });
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error('Failed to resend invitation email:', emailError);
         res.status(500).json({ message: "Failed to resend invitation email" });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error resending invitation:", error);
       res.status(400).json({ message: "Failed to resend invitation" });
     }
@@ -2419,7 +2418,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const updatedUser = await storage.updateSdpUser(id, updates);
       res.json(updatedUser);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating SDP user:", error);
       res.status(400).json({ message: "Failed to update user" });
     }
@@ -2433,7 +2432,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const users = await storage.getBusinessUsersByCountry(country);
       
       res.json(users);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching business users:', error);
       res.status(500).json({ message: "Failed to fetch business users" });
     }
@@ -2444,7 +2443,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const businessUsersByCountry = await storage.getBusinessUsersOverview();
       res.json(businessUsersByCountry);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching business users overview:', error);
       res.status(500).json({ message: "Failed to fetch business users overview" });
     }
@@ -2458,7 +2457,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const countries = await storage.getAllCountriesAdmin();
       res.json(countries);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching all countries:", error);
       res.status(500).json({ message: "Failed to fetch countries" });
     }
@@ -2485,7 +2484,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // If entities are provided, create them
       if (entities) {
         const user = req.user;
-        const createdEntities = {
+        const createdEntities: {
+          shareholders: any[];
+          directors: any[];
+          taxAdvisors: any[];
+          documents: any[];
+        } = {
           shareholders: [],
           directors: [],
           taxAdvisors: [],
@@ -2553,7 +2557,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ...country,
             entities: createdEntities
           });
-        } catch (entityError) {
+        } catch (entityError: any) {
           console.error("Error creating entities for country:", entityError);
           // Country was created but entities failed - log this but don't fail the request
           // In a production system, you might want to implement cleanup or transaction rollback
@@ -2566,7 +2570,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(201).json(country);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating country:", error);
       
       if (error instanceof z.ZodError) {
@@ -2594,7 +2598,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(country);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching country:", error);
       res.status(500).json({ message: "Failed to fetch country" });
     }
@@ -2616,7 +2620,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const updatedCountry = await storage.updateCountry(id, updateData);
       res.json(updatedCountry);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating country:", error);
       
       if (error instanceof z.ZodError) {
@@ -2654,7 +2658,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.deleteCountry(id);
       res.json({ message: "Country deactivated successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting country:", error);
       
       if (error.message?.includes('not found')) {
@@ -2682,7 +2686,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const reactivatedCountry = await storage.activateCountry(id);
       res.json(reactivatedCountry);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error reactivating country:", error);
       
       if (error.message?.includes('not found')) {
@@ -2706,7 +2710,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(countryWithEntities);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching country entities:", error);
       res.status(500).json({ message: "Failed to fetch country entities" });
     }
@@ -2727,7 +2731,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(parties);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching country parties:", error);
       res.status(500).json({ message: "Failed to fetch country parties" });
     }
@@ -2744,7 +2748,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const party = await storage.createCountryParty(data);
       res.status(201).json(party);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating country party:", error);
       if (error.name === 'ZodError') {
         return res.status(400).json({ message: "Invalid data format", errors: error.errors });
@@ -2764,7 +2768,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(party);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching country party:", error);
       res.status(500).json({ message: "Failed to fetch country party" });
     }
@@ -2778,7 +2782,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const party = await storage.updateCountryParty(id, updates);
       res.json(party);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating country party:", error);
       if (error.name === 'ZodError') {
         return res.status(400).json({ message: "Invalid data format", errors: error.errors });
@@ -2796,7 +2800,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       await storage.deleteCountryParty(id);
       res.status(204).send();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting country party:", error);
       res.status(500).json({ message: "Failed to delete country party" });
     }
@@ -2809,7 +2813,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { partyId } = req.params;
       const contacts = await storage.getCountryPartyContacts(partyId);
       res.json(contacts);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching party contacts:", error);
       res.status(500).json({ message: "Failed to fetch party contacts" });
     }
@@ -2826,7 +2830,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const contact = await storage.createCountryPartyContact(data);
       res.status(201).json(contact);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating party contact:", error);
       if (error.name === 'ZodError') {
         return res.status(400).json({ message: "Invalid data format", errors: error.errors });
@@ -2843,7 +2847,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const contact = await storage.updateCountryPartyContact(id, updates);
       res.json(contact);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating party contact:", error);
       if (error.name === 'ZodError') {
         return res.status(400).json({ message: "Invalid data format", errors: error.errors });
@@ -2861,7 +2865,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       await storage.deleteCountryPartyContact(id);
       res.status(204).send();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting party contact:", error);
       res.status(500).json({ message: "Failed to delete party contact" });
     }
@@ -2874,7 +2878,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { partyId } = req.params;
       const fees = await storage.getCountryAdvisorFees(partyId);
       res.json(fees);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching advisor fees:", error);
       res.status(500).json({ message: "Failed to fetch advisor fees" });
     }
@@ -2891,7 +2895,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const fee = await storage.createCountryAdvisorFee(data);
       res.status(201).json(fee);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating advisor fee:", error);
       if (error.name === 'ZodError') {
         return res.status(400).json({ message: "Invalid data format", errors: error.errors });
@@ -2908,7 +2912,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const fee = await storage.updateCountryAdvisorFee(id, updates);
       res.json(fee);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating advisor fee:", error);
       if (error.name === 'ZodError') {
         return res.status(400).json({ message: "Invalid data format", errors: error.errors });
@@ -2926,7 +2930,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       await storage.deleteCountryAdvisorFee(id);
       res.status(204).send();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting advisor fee:", error);
       res.status(500).json({ message: "Failed to delete advisor fee" });
     }
@@ -2947,7 +2951,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(documents);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching country documents:", error);
       res.status(500).json({ message: "Failed to fetch country documents" });
     }
@@ -2967,7 +2971,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const document = await storage.createCountryDocument(data);
       res.status(201).json(document);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating country document:", error);
       if (error.name === 'ZodError') {
         return res.status(400).json({ message: "Invalid data format", errors: error.errors });
@@ -2982,7 +2986,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       await storage.deleteCountryDocument(id);
       res.status(204).send();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting country document:", error);
       res.status(500).json({ message: "Failed to delete country document" });
     }
@@ -3001,7 +3005,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const country = await storage.updateCountryNotes(id, notes);
       res.json(country);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating country notes:", error);
       if (error.message?.includes('not found')) {
         return res.status(404).json({ message: "Country not found" });
@@ -3063,7 +3067,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           req.user.firstName || req.user.email,
           business.name
         );
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error('Failed to send invitation email:', emailError);
         // Continue anyway - they can copy the link
       }
@@ -3073,7 +3077,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         inviteId: invite.id,
         inviteLink: `${process.env.FRONTEND_URL || 'https://sdpglobalpay.com'}/invite/business/${token}`
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating business user invitation:", error);
       res.status(400).json({ message: "Failed to create invitation" });
     }
@@ -3102,7 +3106,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         email: invite.email,
         businessId: invite.businessId,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching business user invitation:", error);
       res.status(500).json({ message: "Failed to fetch invitation" });
     }
@@ -3206,12 +3210,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Create or update 2FA record
-      await storage.upsert2FA({
+      await storage.upsertUserTwoFactorAuth({
         userId: user.id,
+        method: 'totp',
         totpSecret: encryptedTotpSecret,
-        totpEnabled: true,
-        backupCodes: encryptedBackupCodes
+        isEnabled: true,
       });
+      await storage.enableUserTwoFactorAuth(user.id, encryptedBackupCodes);
       
       // Send registration confirmation email for new business users
       if (isNewUser && user.email) {
@@ -3222,7 +3227,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             'enterprise' // Business users get enterprise-style welcome
           );
           console.log('Registration confirmation email sent to business user:', user.email);
-        } catch (emailError) {
+        } catch (emailError: any) {
           console.error('Failed to send registration confirmation email to business user:', emailError);
           // Don't fail the registration if email sending fails
         }
@@ -3236,7 +3241,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userId: user.id,
         backupCodes // Return backup codes to display to the user
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error accepting business user invitation:", error);
       res.status(400).json({ message: "Failed to create account" });
     }
@@ -3262,7 +3267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const invites = await storage.getBusinessUserInvitesByBusiness(business.id);
       
       res.json(invites);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching business user invitations:", error);
       res.status(500).json({ message: "Failed to fetch invitations" });
     }
@@ -3302,7 +3307,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.updateBusinessUserInvite(id, { expiresAt: new Date() });
       
       res.json({ message: "Invitation cancelled successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error cancelling business user invitation:", error);
       res.status(500).json({ message: "Failed to cancel invitation" });
     }
@@ -3376,12 +3381,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ...getBusinessInvitationTemplate(
             `${worker.firstName} ${worker.lastName}`,
             data.businessName,
-            data.contractorMessage,
+            data.contractorMessage ?? null,
             token
           )
         });
         console.log('Business invitation email sent to:', data.businessEmail);
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error('Failed to send business invitation email:', emailError);
         // Continue anyway - they can share the link manually
       }
@@ -3391,7 +3396,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         invitationId: invitation.id,
         invitationLink: `${process.env.FRONTEND_URL || 'https://sdpglobalpay.com'}/invite/business/${token}`
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating business invitation:", error);
       res.status(400).json({ message: "Failed to create business invitation" });
     }
@@ -3417,7 +3422,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const invitations = await storage.getBusinessInvitationsByContractor(worker.id);
       res.json(invitations);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching business invitations:", error);
       res.status(500).json({ message: "Failed to fetch business invitations" });
     }
@@ -3447,7 +3452,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         contractorMessage: invitation.contractorMessage,
         expiresAt: invitation.expiresAt
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching business invitation:", error);
       res.status(500).json({ message: "Failed to fetch business invitation" });
     }
@@ -3482,7 +3487,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // IDEMPOTENCY: Prevent duplicate registrations
-      if (invitation.status === 'registered' && invitation.registeredBusinessId) {
+      if ((invitation.status as string) === 'registered' && invitation.registeredBusinessId) {
         return res.status(400).json({ message: "This invitation has already been processed" });
       }
       
@@ -3523,7 +3528,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             'enterprise'
           );
           console.log('Registration confirmation email sent to business:', businessEmail);
-        } catch (emailError) {
+        } catch (emailError: any) {
           console.error('Failed to send registration confirmation email:', emailError);
         }
       }
@@ -3562,7 +3567,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           console.log('Worker approval request email sent to contractor:', contractor.email);
         }
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error('Failed to send worker approval request email:', emailError);
       }
       
@@ -3571,7 +3576,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         businessId: business.id,
         userId: user.id
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error processing business registration:", error);
       res.status(400).json({ message: "Failed to process registration" });
     }
@@ -3630,7 +3635,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         return res.status(400).json({ message: "Invalid action. Use 'approve' or 'reject'" });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error processing worker approval:", error);
       res.status(500).json({ message: "Failed to process approval" });
     }
@@ -3752,7 +3757,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         success: true 
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error processing contact form:', error);
       res.status(500).json({ 
         message: 'Failed to process contact form submission',
@@ -3818,7 +3823,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const templates = await storage.getContractTemplates();
       res.json(templates);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching contract templates:', error);
       res.status(500).json({ message: 'Failed to fetch contract templates' });
     }
@@ -3834,7 +3839,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const templates = await storage.getContractTemplatesByCountry(countryId, employmentType as string);
       console.log(`[TEMPLATE FILTER] Found ${templates.length} templates:`, templates.map(t => ({ name: t.name, employmentType: t.employmentType, countryId: t.countryId })));
       res.json(templates);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching contract templates by country:', error);
       res.status(500).json({ message: 'Failed to fetch contract templates' });
     }
@@ -3851,7 +3856,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const template = await storage.createContractTemplate(data);
       res.json(template);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating contract template:', error);
       res.status(400).json({ message: 'Failed to create contract template' });
     }
@@ -3864,7 +3869,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = insertContractTemplateSchema.parse(req.body);
       const template = await storage.updateContractTemplate(id, data);
       res.json(template);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating contract template:', error);
       res.status(400).json({ message: 'Failed to update contract template' });
     }
@@ -3876,7 +3881,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.deleteContractTemplate(id);
       res.json({ message: 'Contract template deleted successfully' });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting contract template:', error);
       res.status(400).json({ message: 'Failed to delete contract template' });
     }
@@ -3896,7 +3901,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json(universalTemplate);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching universal contract template:', error);
       res.status(500).json({ message: 'Failed to fetch universal contract template' });
     }
@@ -3925,7 +3930,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         variables: result.variables,
         message: 'Contract preview generated successfully'
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating universal contract preview:', error);
       res.status(400).json({ message: 'Failed to generate contract preview', error: error.message });
     }
@@ -3979,7 +3984,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         templateId,
         businessId,
         workerId,
-        countryId: contractData.countryId || business.accessibleCountries[0] || 'us',
+        countryId: contractData.countryId || (business.accessibleCountries?.[0]) || 'us',
         contractTitle: `${template.name} - ${worker.firstName} ${worker.lastName}`,
         workerName: `${worker.firstName} ${worker.lastName}`,
         businessName: business.name,
@@ -3999,7 +4004,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         variables: result.variables,
         message: 'Universal contract generated and saved successfully'
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating universal contract:', error);
       res.status(400).json({ message: 'Failed to generate contract', error: error.message });
     }
@@ -4038,7 +4043,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json(contracts);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching contract instances:', error);
       res.status(500).json({ message: 'Failed to fetch contract instances' });
     }
@@ -4105,13 +4110,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           signatureStatus: 'sent_for_signature',
           sentAt: new Date(),
         });
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error("Failed to send contract email:", emailError);
         // Don't fail the request if email fails
       }
 
       res.json(contractInstance);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating contract instance:', error);
       res.status(400).json({ message: 'Failed to create contract instance' });
     }
@@ -4172,7 +4177,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json({ message: 'Contract signed successfully', status: updates.signatureStatus });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error signing contract:', error);
       res.status(400).json({ message: 'Failed to sign contract' });
     }
@@ -4196,7 +4201,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ message: 'Contract declined successfully' });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error declining contract:', error);
       res.status(400).json({ message: 'Failed to decline contract' });
     }
@@ -4244,7 +4249,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const analytics = await storage.getBusinessAnalytics(business.id);
       res.json(analytics);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching dashboard analytics:", error);
       res.status(500).json({ message: "Failed to fetch analytics" });
     }
@@ -4261,8 +4266,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      let contracts = [];
-      let insights = {};
+      let contracts: any[] = [];
+      let insights: any = {};
 
       if (userType === 'sdp_internal') {
         // SDP internal users see all contracts
@@ -4380,7 +4385,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         totalRecords: contracts.length
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching contract history:", error);
       res.status(500).json({ message: "Failed to fetch contract history" });
     }
@@ -4517,7 +4522,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         totalPaymentsValue,
         totalApprovedHours,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching SDP analytics:", error);
       res.status(500).json({ error: "Failed to fetch SDP analytics" });
     }
@@ -4534,7 +4539,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const business = await storage.createBusiness(data);
       res.json(business);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating business:", error);
       res.status(400).json({ message: "Failed to create business" });
     }
@@ -4568,7 +4573,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         return res.status(403).json({ message: "Access denied" });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching businesses:", error);
       res.status(500).json({ message: "Failed to fetch businesses" });
     }
@@ -4598,7 +4603,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         return res.status(403).json({ message: "Access denied" });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching host clients:", error);
       res.status(500).json({ message: "Failed to fetch host clients" });
     }
@@ -4672,19 +4677,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Make the new user the owner so getBusinessByOwnerId resolves on login
             try {
               await storage.updateBusiness(hostClient.id, { ownerId: newUser.id } as any);
-            } catch (ownerErr) {
+            } catch (ownerErr: any) {
               console.warn('Could not update host client ownerId to new user:', ownerErr);
             }
             await emailService.sendHostClientCredentialsEmail(cleanedEmail, firstName, hostClient.name, tempPassword);
             loginCreated = true;
           }
-        } catch (loginErr) {
+        } catch (loginErr: any) {
           console.error('Host client login provisioning failed (host client still created):', loginErr);
         }
       }
 
       res.status(201).json({ ...hostClient, loginCreated });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating host client:", error);
       res.status(500).json({ message: "Failed to create host client" });
     }
@@ -4700,7 +4705,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(business);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching business:", error);
       res.status(500).json({ message: "Failed to fetch business" });
     }
@@ -4717,7 +4722,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.updateBusinessCountryAccess(id, countryIds);
       res.json({ message: "Country access updated successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating country access:", error);
       res.status(400).json({ message: "Failed to update country access" });
     }
@@ -4728,7 +4733,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const countries = await storage.getAllCountries();
       res.json(countries);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching countries:", error);
       res.status(500).json({ message: "Failed to fetch countries" });
     }
@@ -4765,7 +4770,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const workers = await storage.getWorkersByBusiness(business.id);
       res.json(workers);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching workers:", error);
       res.status(500).json({ message: "Failed to fetch workers" });
     }
@@ -4785,7 +4790,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const workers = await storage.getWorkersByBusiness(businessId);
       res.json(workers);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching workers by business:", error);
       res.status(500).json({ message: "Failed to fetch workers" });
     }
@@ -4824,7 +4829,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json(Array.from(workerMap.values()));
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching provided workers:", error);
       res.status(500).json({ message: "Failed to fetch provided workers" });
     }
@@ -4862,11 +4867,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       let business;
       let targetBusinessId;
-      let auditFields = {
+      let auditFields: { createdByUserId: any; createdOnBehalfOfBusinessId: string | null } = {
         createdByUserId: userId,
         createdOnBehalfOfBusinessId: null,
       };
-      
+
       // Handle on-behalf creation for SDP internal users
       if (onBehalf && userType === 'sdp_internal') {
         if (!selectedBusinessId) {
@@ -4978,7 +4983,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               thirdPartyBusiness.name
             );
             console.log(`Third-party worker invitation sent to ${thirdPartyBusiness.email}`);
-          } catch (emailError) {
+          } catch (emailError: any) {
             console.error('Failed to send third-party worker invitation:', emailError);
             // Continue anyway - worker was created successfully
           }
@@ -5001,7 +5006,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Generate invite token and send onboarding link (only if sendInvitation is true)
         if (sendInvitation) {
           try {
-            const business = await storage.getBusinessById(worker.businessId);
+            const business = worker.businessId ? await storage.getBusinessById(worker.businessId) : undefined;
             const businessName = business?.name || 'SDP Global Pay';
 
             // Generate a secure invite token
@@ -5024,7 +5029,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               businessName
             );
             console.log(`Worker invitation email sent to ${worker.email}`);
-          } catch (emailError) {
+          } catch (emailError: any) {
             console.error('Failed to send worker invitation email:', emailError);
             // Continue anyway - worker was created successfully
           }
@@ -5034,7 +5039,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         res.json({ worker });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating worker:", error);
       
       // Handle Zod validation errors
@@ -5080,7 +5085,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(worker);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching worker profile:', error);
       res.status(500).json({ message: 'Failed to fetch worker profile' });
     }
@@ -5128,7 +5133,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updatedWorker = await storage.updateWorkerProfile(worker.id, updates);
       res.json(updatedWorker);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating worker profile:', error);
       res.status(500).json({ message: 'Failed to update worker profile' });
     }
@@ -5171,7 +5176,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedWorker = await storage.updateWorkerProfile(workerId, updates);
         res.json(updatedWorker);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating worker:', error);
       res.status(500).json({ message: 'Failed to update worker' });
     }
@@ -5203,7 +5208,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Resend the appropriate invitation email based on worker type
       try {
-        const business = await storage.getBusinessById(worker.businessId);
+        const business = worker.businessId ? await storage.getBusinessById(worker.businessId) : undefined;
         const businessName = business?.name || 'SDP Global Pay';
         const workerName = `${worker.firstName} ${worker.lastName}`;
         
@@ -5244,11 +5249,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           message: "Invitation email sent successfully",
           worker 
         });
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error('Failed to resend invitation email:', emailError);
         res.status(500).json({ message: "Failed to send invitation email" });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error resending invitation:', error);
       res.status(500).json({ message: 'Failed to resend invitation' });
     }
@@ -5322,7 +5327,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       res.json(enriched);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching contracts:", error);
       res.status(500).json({ message: "Failed to fetch contracts" });
     }
@@ -5345,7 +5350,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const contractsWithRemuneration = await addRemunerationLinesToContracts(contractsWithStatus, userType);
       const contractsWithBillingLines = await addBillingLinesToContracts(contractsWithRemuneration);
       res.json(contractsWithBillingLines);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching contracts by business:", error);
       res.status(500).json({ message: "Failed to fetch contracts" });
     }
@@ -5387,7 +5392,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const contractsWithStatus = await addDerivedStatusToContracts(contracts);
       const contractsWithRemuneration = await addRemunerationLinesToContracts(contractsWithStatus, userType);
       res.json(contractsWithRemuneration);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching contracts by worker:", error);
       res.status(500).json({ message: "Failed to fetch contracts" });
     }
@@ -5422,7 +5427,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       let business;
       let targetBusinessId;
-      let auditFields = {
+      let auditFields: { createdByUserId: any; createdOnBehalfOfBusinessId: string | null } = {
         createdByUserId: userId,
         createdOnBehalfOfBusinessId: null,
       };
@@ -5480,7 +5485,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Worker not found" });
         }
         
-        business = await storage.getBusinessById(worker.businessId);
+        business = worker.businessId ? await storage.getBusinessById(worker.businessId) : undefined;
         if (!business) {
           return res.status(404).json({ message: "Worker's business not found" });
         }
@@ -5571,13 +5576,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             finalContractData.roleTitleId = existingRole.id;
             finalContractData.customRoleTitle = null;
           }
-        } catch (roleError) {
+        } catch (roleError: any) {
           console.log("Could not create role title, proceeding with custom title:", roleError);
           // Continue with custom role title if creation fails
         }
       }
       
-      const contract = await storage.createContract(finalContractData);
+      const contract = await storage.createContract(finalContractData as any);
 
       // Handle remuneration lines if provided
       const remunerationLines = req.body.remunerationLines;
@@ -5594,7 +5599,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (validLines.length > 0) {
             await storage.createRemunerationLines(validLines);
           }
-        } catch (remunError) {
+        } catch (remunError: any) {
           console.error('Failed to create remuneration lines:', remunError);
         }
       }
@@ -5623,7 +5628,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           // Send email notification to all SDP users
           for (const sdpUser of sdpUsers) {
-            if (sdpUser.email && emailService) {
+            if (sdpUser.email && emailService && worker) {
               await emailService.sendContractRequestEmail(
                 sdpUser.email,
                 business.name,
@@ -5634,7 +5639,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               );
             }
           }
-        } catch (emailError) {
+        } catch (emailError: any) {
           console.error('Failed to send contract request notification email:', emailError);
           // Don't fail the contract creation if email fails
         }
@@ -5647,7 +5652,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (notifyWorker && emailService) {
             await emailService.sendSalaryContractNotification(contract, business, notifyWorker);
           }
-        } catch (salaryEmailError) {
+        } catch (salaryEmailError: any) {
           console.error('Failed to send salary contract notification email:', salaryEmailError);
         }
       }
@@ -5738,7 +5743,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }));
             await storage.createRemunerationLines(linesWithContractId);
           }
-        } catch (remunError) {
+        } catch (remunError: any) {
           console.error('Failed to update remuneration lines:', remunError);
         }
       }
@@ -5778,7 +5783,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.updateContractStatus(id, status);
       res.json({ message: "Contract status updated successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating contract status:", error);
       res.status(400).json({ message: "Failed to update contract status" });
     }
@@ -5807,7 +5812,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         business: business ? { id: business.id, name: business.name } : null,
         roleTitle: roleTitle ? { id: roleTitle.id, title: roleTitle.title } : null,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching contract for signing:", error);
       res.status(500).json({ message: "Failed to fetch contract" });
     }
@@ -5834,7 +5839,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error recording contract view:", error);
       res.status(500).json({ message: "Failed to record view" });
     }
@@ -5883,7 +5888,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // await sendContractSignedEmail(contract);
       
       res.json({ success: true, message: "Contract signed successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error signing contract:", error);
       res.status(500).json({ message: "Failed to sign contract" });
     }
@@ -5901,7 +5906,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const pendingContracts = await storage.getPendingSignatureContracts(userId);
       res.json(pendingContracts);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching pending signature contracts:", error);
       res.status(500).json({ message: "Failed to fetch pending contracts" });
     }
@@ -5962,7 +5967,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         success: true,
         message: "Contract sent for signing",
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error sending contract for signing:", error);
       res.status(500).json({ message: "Failed to send contract" });
     }
@@ -5976,7 +5981,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) return res.status(404).json({ message: "Contract not found" });
       const lines = await storage.getContractRateLines(id);
       res.json(lines);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching contract rate lines:", error);
       res.status(500).json({ message: "Failed to fetch rate lines" });
     }
@@ -5989,7 +5994,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) return res.status(404).json({ message: "Contract not found" });
       const line = await storage.createContractRateLine({ ...req.body, contractId: id });
       res.status(201).json(line);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating contract rate line:", error);
       res.status(500).json({ message: "Failed to create rate line" });
     }
@@ -6016,7 +6021,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }));
       const saved = await storage.replaceContractRateLines(id, lines);
       res.json(saved);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error replacing contract rate lines:", error);
       res.status(500).json({ message: "Failed to replace rate lines" });
     }
@@ -6027,7 +6032,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { lineId } = req.params;
       const line = await storage.updateContractRateLine(lineId, req.body);
       res.json(line);
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to update rate line" });
     }
   });
@@ -6037,7 +6042,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { lineId } = req.params;
       await storage.deleteContractRateLine(lineId);
       res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to delete rate line" });
     }
   });
@@ -6059,7 +6064,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) return res.status(404).json({ message: "Contract not found" });
       const lines = await storage.getContractBillingLines(id);
       res.json(lines);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching contract billing lines:", error);
       res.status(500).json({ message: "Failed to fetch billing lines" });
     }
@@ -6092,7 +6097,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notes: notes || null,
       });
       res.status(201).json(line);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating contract billing line:", error);
       res.status(500).json({ message: "Failed to create billing line" });
     }
@@ -6106,7 +6111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const lines = (req.body.lines || []).map((l: any, i: number) => ({ ...l, contractId: id, sortOrder: i }));
       const saved = await storage.replaceContractBillingLines(id, lines);
       res.json(saved);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error replacing contract billing lines:", error);
       res.status(500).json({ message: "Failed to replace billing lines" });
     }
@@ -6118,7 +6123,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id, contractId, createdAt, updatedAt, ...updates } = req.body;
       const line = await storage.updateContractBillingLine(lineId, updates);
       res.json(line);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating billing line:", error);
       res.status(500).json({ message: "Failed to update billing line" });
     }
@@ -6129,7 +6134,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { lineId } = req.params;
       await storage.deleteContractBillingLine(lineId);
       res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to delete billing line" });
     }
   });
@@ -6140,7 +6145,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const lines = await storage.getRemunerationLinesByContractId(id);
       res.json(lines);
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to fetch remuneration lines" });
     }
   });
@@ -6152,7 +6157,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) return res.status(404).json({ message: "Contract not found" });
       const line = await storage.createRemunerationLine({ ...req.body, contractId: id });
       res.json(line);
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to create remuneration line" });
     }
   });
@@ -6162,7 +6167,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { lineId } = req.params;
       const line = await storage.updateRemunerationLine(lineId, req.body);
       res.json(line);
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to update remuneration line" });
     }
   });
@@ -6172,7 +6177,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { lineId } = req.params;
       await storage.deleteRemunerationLine(lineId);
       res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to delete remuneration line" });
     }
   });
@@ -6207,7 +6212,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updated = await storage.getContract(id);
       res.json(updated);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error recalling contract:", error);
       res.status(500).json({ message: "Failed to recall contract" });
     }
@@ -6238,7 +6243,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!business) return res.json([]);
       const pos = await storage.getPurchaseOrdersForBusiness(business.id);
       res.json(pos);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching purchase orders:", error);
       res.status(500).json({ message: "Failed to fetch purchase orders" });
     }
@@ -6248,7 +6253,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const po = await storage.createPurchaseOrder(req.body);
       res.status(201).json(po);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating purchase order:", error);
       res.status(500).json({ message: "Failed to create purchase order" });
     }
@@ -6259,7 +6264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const po = await storage.updatePurchaseOrder(id, req.body);
       res.json(po);
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to update purchase order" });
     }
   });
@@ -6269,7 +6274,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       await storage.deletePurchaseOrder(id);
       res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to delete purchase order" });
     }
   });
@@ -6306,7 +6311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ]);
       
       res.json([...globalRoles, ...businessRoles]);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching role titles:", error);
       res.status(500).json({ message: "Failed to fetch role titles" });
     }
@@ -6328,7 +6333,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const roleTitle = await storage.createRoleTitle(data);
       res.json(roleTitle);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating role title:", error);
       res.status(400).json({ message: "Failed to create role title" });
     }
@@ -6339,7 +6344,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const templates = await storage.getContractTemplates();
       res.json(templates);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching contract templates:", error);
       res.status(500).json({ message: "Failed to fetch contract templates" });
     }
@@ -6350,7 +6355,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = insertContractTemplateSchema.parse(req.body);
       const template = await storage.createContractTemplate(data);
       res.json(template);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating contract template:", error);
       res.status(400).json({ message: "Failed to create contract template" });
     }
@@ -6417,7 +6422,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const providedTimesheetsWithFlag = await Promise.all(providedTimesheets.map(t => attachContractMeta({ ...t, isProvided: true })));
 
       res.json([...ownTimesheetsWithFlag, ...providedTimesheetsWithFlag]);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching timesheets:", error);
       res.status(500).json({ message: "Failed to fetch timesheets" });
     }
@@ -6428,7 +6433,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { workerId } = req.params;
       const timesheets = await storage.getTimesheetsByWorker(workerId);
       res.json(timesheets);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching worker timesheets:", error);
       res.status(500).json({ message: "Failed to fetch worker timesheets" });
     }
@@ -6516,7 +6521,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         return res.status(403).json({ message: "Unauthorized to create timesheets" });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating timesheet:", error);
       res.status(400).json({ message: "Failed to create timesheet" });
     }
@@ -6919,7 +6924,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json({ message: "Timesheet status updated successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating timesheet status:", error);
       res.status(400).json({ message: "Failed to update timesheet status" });
     }
@@ -6933,7 +6938,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.updateTimesheetStatus(id, 'submitted', userId);
       res.json({ message: "Timesheet submitted for approval" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error submitting timesheet:", error);
       res.status(400).json({ message: "Failed to submit timesheet" });
     }
@@ -6992,9 +6997,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       const validatedData = updateTimesheetSchema.parse(req.body);
-      const updatedTimesheet = await storage.updateTimesheet(id, validatedData);
+      const updatedTimesheet = await storage.updateTimesheet(id, validatedData as any);
       res.json(updatedTimesheet);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating timesheet:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: "Invalid input", errors: error.errors });
@@ -7042,7 +7047,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.deleteTimesheet(id);
       res.json({ message: "Timesheet deleted successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting timesheet:", error);
       res.status(400).json({ message: "Failed to delete timesheet" });
     }
@@ -7097,7 +7102,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       res.json(attachment);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating timesheet attachment:", error);
       res.status(400).json({ message: "Failed to create timesheet attachment" });
     }
@@ -7137,7 +7142,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const attachments = await storage.getTimesheetAttachments(timesheetId);
       res.json(attachments);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching timesheet attachments:", error);
       res.status(500).json({ message: "Failed to fetch timesheet attachments" });
     }
@@ -7177,7 +7182,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.deleteTimesheetAttachment(attachmentId);
       res.json({ message: "Attachment deleted successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting timesheet attachment:", error);
       res.status(400).json({ message: "Failed to delete timesheet attachment" });
     }
@@ -7188,7 +7193,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const expenses = await storage.getExpensesByTimesheetId(req.params.id);
       res.json(expenses);
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to fetch expenses" });
     }
   });
@@ -7210,7 +7215,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notes: notes || null,
       });
       res.json(expense);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating expense:", error);
       res.status(500).json({ message: "Failed to create expense" });
     }
@@ -7220,7 +7225,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const expense = await storage.updateTimesheetExpense(req.params.expenseId, req.body);
       res.json(expense);
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to update expense" });
     }
   });
@@ -7229,7 +7234,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       await storage.deleteTimesheetExpense(req.params.expenseId);
       res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: "Failed to delete expense" });
     }
   });
@@ -7269,7 +7274,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // they only manage leave for workers they hired directly (where they are the employer).
       const leaveRequests = await storage.getLeaveRequestsByBusiness(business.id);
       res.json(leaveRequests);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching leave requests:", error);
       res.status(500).json({ message: "Failed to fetch leave requests" });
     }
@@ -7300,7 +7305,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const leaveRequest = await storage.createLeaveRequest(req.body);
         res.json(leaveRequest);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating leave request:", error);
       res.status(400).json({ message: "Failed to create leave request" });
     }
@@ -7314,7 +7319,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.updateLeaveRequestStatus(id, status, userId, rejectionReason);
       res.json({ message: "Leave request status updated successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating leave request status:", error);
       res.status(400).json({ message: "Failed to update leave request status" });
     }
@@ -7325,7 +7330,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = insertTimesheetEntrySchema.parse(req.body);
       const entry = await storage.createTimesheetEntry(data);
       res.json(entry);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating timesheet entry:", error);
       res.status(400).json({ message: "Failed to create timesheet entry" });
     }
@@ -7338,7 +7343,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.updateTimesheetEntry(id, hoursWorked, description);
       res.json({ message: "Timesheet entry updated successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating timesheet entry:", error);
       res.status(400).json({ message: "Failed to update timesheet entry" });
     }
@@ -7349,7 +7354,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { workerId } = req.params;
       const leaveRequests = await storage.getLeaveRequestsByWorker(workerId);
       res.json(leaveRequests);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching worker leave requests:", error);
       res.status(500).json({ message: "Failed to fetch worker leave requests" });
     }
@@ -7360,7 +7365,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = insertLeaveRequestSchema.parse(req.body);
       const leaveRequest = await storage.createLeaveRequest(data);
       res.json(leaveRequest);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating leave request:", error);
       res.status(400).json({ message: "Failed to create leave request" });
     }
@@ -7374,7 +7379,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.updateLeaveRequestStatus(id, status, userId, rejectionReason);
       res.json({ message: "Leave request status updated successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating leave request status:", error);
       res.status(400).json({ message: "Failed to update leave request status" });
     }
@@ -7397,7 +7402,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const payslips = await storage.getPayslipsByCountries(user.accessibleCountries);
       res.json(payslips);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching payslips:", error);
       res.status(500).json({ message: "Failed to fetch payslips" });
     }
@@ -7415,7 +7420,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const payslips = await storage.getPayslipsByBusiness(businessId);
       res.json(payslips);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching business payslips:", error);
       res.status(500).json({ message: "Failed to fetch business payslips" });
     }
@@ -7426,7 +7431,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { workerId } = req.params;
       const payslips = await storage.getPayslipsByWorker(workerId);
       res.json(payslips);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching worker payslips:", error);
       res.status(500).json({ message: "Failed to fetch worker payslips" });
     }
@@ -7448,7 +7453,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const payslip = await storage.createPayslip(data);
       res.json(payslip);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating payslip:", error);
       res.status(400).json({ message: "Failed to create payslip" });
     }
@@ -7490,7 +7495,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json(invoices);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching invoices:', error);
       res.status(500).json({ message: 'Failed to fetch invoices' });
     }
@@ -7584,7 +7589,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const invoice = await storage.createInvoiceFromTimesheet(timesheetId, req.body);
       res.json(invoice);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating invoice from timesheet:', error);
       res.status(400).json({ message: 'Failed to create invoice from timesheet' });
     }
@@ -7633,13 +7638,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             );
           }
         }
-      } catch (emailError) {
+      } catch (emailError: any) {
         console.error("Failed to send invoice status email:", emailError);
         // Don't fail the request if email fails
       }
 
       res.json({ message: 'Invoice status updated successfully' });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating invoice status:', error);
       res.status(400).json({ message: 'Failed to update invoice status' });
     }
@@ -7709,7 +7714,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       res.json(enrichedInvoices);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching SDP invoices:', error);
       res.status(500).json({ message: 'Failed to fetch SDP invoices' });
     }
@@ -7801,7 +7806,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       res.json(enrichedInvoices);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching business SDP invoices:', error);
       res.status(500).json({ message: 'Failed to fetch SDP invoices' });
     }
@@ -7853,7 +7858,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fromCountry: fromCountry ? { id: fromCountry.id, name: fromCountry.name } : null,
         timesheetDetails,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching public invoice view:', error);
       res.status(500).json({ message: 'Failed to load invoice' });
     }
@@ -7966,7 +7971,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       const enriched = await Promise.all(clientInvoices.map(enrich));
       res.json(enriched);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching client invoices:', error);
       res.status(500).json({ message: 'Failed to fetch client invoices' });
     }
@@ -8039,7 +8044,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.status(201).json(invoice);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating client invoice:', error);
       res.status(500).json({ message: 'Failed to create client invoice' });
     }
@@ -8080,7 +8085,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Determine business country (use primary country or first accessible)
-      const businessCountry = toBusiness.countryId || toBusiness.accessibleCountries?.[0];
+      const businessCountry = (toBusiness as any).countryId || toBusiness.accessibleCountries?.[0];
       const isCrossBorder = businessCountry && businessCountry !== fromCountryId;
 
       // Server-side GST/VAT calculation
@@ -8144,7 +8149,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             await storage.updateSdpInvoice(invoice.id, { purchaseOrderId } as any);
             await storage.updatePurchaseOrderInvoicedAmount(purchaseOrderId, totalAmount);
           }
-        } catch (poErr) {
+        } catch (poErr: any) {
           console.error('Failed to link PO to invoice:', poErr);
         }
       }
@@ -8157,7 +8162,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       
       res.json(invoiceWithLineItems);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating SDP invoice:', error);
       res.status(400).json({ message: 'Failed to create SDP invoice' });
     }
@@ -8182,13 +8187,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             await storage.updateSdpInvoice(invoice.id, { purchaseOrderId } as any);
             await storage.updatePurchaseOrderInvoicedAmount(purchaseOrderId, parseFloat(invoice.totalAmount));
           }
-        } catch (poErr) {
+        } catch (poErr: any) {
           console.error('Failed to link PO on from-timesheet invoice:', poErr);
         }
       }
       
       res.json(invoice);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating SDP invoice from timesheet:', error);
       res.status(400).json({ message: 'Failed to create SDP invoice from timesheet' });
     }
@@ -8262,7 +8267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // GST/VAT calculation
-      const businessCountry = toBusiness.countryId || (toBusiness as any).accessibleCountries?.[0];
+      const businessCountry = (toBusiness as any).countryId || (toBusiness as any).accessibleCountries?.[0];
       const isCrossBorder = businessCountry && businessCountry !== fromCountryId;
       let gstVatRate = 0;
       let gstVatAmount = 0;
@@ -8304,7 +8309,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (po && po.status === 'open') {
             await storage.updatePurchaseOrderInvoicedAmount(purchaseOrderId, totalAmount);
           }
-        } catch (poErr) {
+        } catch (poErr: any) {
           console.error('Failed to link PO on consolidated invoice:', poErr);
         }
       }
@@ -8314,7 +8319,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         lineItems: await storage.getSdpInvoiceLineItems(invoice.id),
         timesheetIds,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating consolidated SDP invoice:', error);
       res.status(500).json({ message: 'Failed to create consolidated invoice' });
     }
@@ -8326,7 +8331,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const rows = await storage.getSdpInvoiceTimesheets(id);
       res.json(rows);
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ message: 'Failed to fetch invoice timesheets' });
     }
   });
@@ -8345,11 +8350,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if ((invoice as any).purchaseOrderId) {
         try {
           await storage.updatePurchaseOrderInvoicedAmount((invoice as any).purchaseOrderId, -parseFloat(invoice.totalAmount));
-        } catch (poErr) { console.error('PO reversal failed:', poErr); }
+        } catch (poErr: any) { console.error('PO reversal failed:', poErr); }
       }
       const updated = await storage.getSdpInvoiceById(id);
       res.json(updated);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error retracting SDP invoice:', error);
       res.status(500).json({ message: 'Failed to retract invoice' });
     }
@@ -8368,11 +8373,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if ((invoice as any).purchaseOrderId) {
         try {
           await storage.updatePurchaseOrderInvoicedAmount((invoice as any).purchaseOrderId, -parseFloat(invoice.totalAmount));
-        } catch (poErr) { console.error('PO reversal on delete failed:', poErr); }
+        } catch (poErr: any) { console.error('PO reversal on delete failed:', poErr); }
       }
       await storage.deleteSdpInvoiceById(id);
       res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting SDP invoice:', error);
       res.status(500).json({ message: 'Failed to delete invoice' });
     }
@@ -8388,7 +8393,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get updated invoice for response
       const updatedInvoice = await storage.getSdpInvoiceById(id);
       res.json(updatedInvoice);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating SDP invoice status:', error);
       res.status(500).json({ message: 'Failed to update SDP invoice status' });
     }
@@ -8404,7 +8409,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(invoice);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching SDP invoice:', error);
       res.status(500).json({ message: 'Failed to fetch SDP invoice' });
     }
@@ -8432,13 +8437,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Verify the user belongs to the business being invoiced
-      const userBusiness = await storage.getBusinessByUserId(userId);
+      const userBusiness = await storage.getBusinessByOwnerId(userId);
       if (!userBusiness || userBusiness.id !== invoice.toBusinessId) {
         return res.status(403).json({ message: 'You can only pay invoices for your own business' });
       }
 
       // Only allow payment creation for issued or overdue invoices
-      if (!['issued', 'overdue'].includes(invoice.status)) {
+      if (!['issued', 'overdue'].includes(invoice.status ?? '')) {
         return res.status(400).json({ message: 'Invoice cannot be paid in its current status' });
       }
 
@@ -8493,13 +8498,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Verify the user belongs to the business being invoiced
-      const userBusiness = await storage.getBusinessByUserId(userId);
+      const userBusiness = await storage.getBusinessByOwnerId(userId);
       if (!userBusiness || userBusiness.id !== invoice.toBusinessId) {
         return res.status(403).json({ message: 'You can only confirm payments for your own business invoices' });
       }
 
       // Only allow payment confirmation for issued or overdue invoices
-      if (!['issued', 'overdue'].includes(invoice.status)) {
+      if (!['issued', 'overdue'].includes(invoice.status ?? '')) {
         return res.status(400).json({ message: 'Invoice cannot be paid in its current status' });
       }
 
@@ -8565,7 +8570,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Only allow editing of draft and issued invoices
-      if (!['draft', 'issued'].includes(currentInvoice.status)) {
+      if (!['draft', 'issued'].includes(currentInvoice.status ?? '')) {
         return res.status(400).json({ 
           message: 'Can only edit invoices in draft or issued status' 
         });
@@ -8604,7 +8609,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       
       res.json(invoiceWithLineItems);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating SDP invoice:', error);
       res.status(500).json({ message: 'Failed to update SDP invoice' });
     }
@@ -8684,7 +8689,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Persist the payment link on the invoice record
           await storage.updateSdpInvoice(id, { stripePaymentLink } as any);
           console.log(`Generated Stripe Payment Link for unregistered host client invoice ${invoice.invoiceNumber}`);
-        } catch (stripeErr) {
+        } catch (stripeErr: any) {
           console.error('Failed to generate Stripe Payment Link:', stripeErr);
           // Don't block sending — payment link is optional
         }
@@ -8724,7 +8729,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ message: 'Failed to send invoice email' });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error sending SDP invoice:', error);
       res.status(500).json({ message: 'Failed to send SDP invoice' });
     }
@@ -8748,7 +8753,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Only allow marking as paid for sent, issued, or overdue invoices
-      if (!['sent', 'issued', 'overdue'].includes(invoice.status)) {
+      if (!['sent', 'issued', 'overdue'].includes(invoice.status ?? '')) {
         return res.status(400).json({ 
           message: 'Can only mark sent, issued, or overdue invoices as paid' 
         });
@@ -8765,7 +8770,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: 'Invoice marked as paid successfully',
         invoice: updatedInvoice
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error marking SDP invoice as paid:', error);
       res.status(500).json({ message: 'Failed to mark SDP invoice as paid' });
     }
@@ -8781,7 +8786,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'SDP invoice not found' });
       }
 
-      if (!['issued', 'sent', 'overdue'].includes(invoice.status)) {
+      if (!['issued', 'sent', 'overdue'].includes(invoice.status ?? '')) {
         return res.status(400).json({ message: 'Can only resend issued, sent, or overdue invoices' });
       }
 
@@ -8815,7 +8820,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           stripePaymentLink = paymentLink.url;
           await storage.updateSdpInvoice(id, { stripePaymentLink } as any);
-        } catch (stripeErr) {
+        } catch (stripeErr: any) {
           console.error('Failed to generate Stripe Payment Link on resend:', stripeErr);
         }
       }
@@ -8841,7 +8846,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ message: 'Failed to resend invoice email' });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error resending SDP invoice:', error);
       res.status(500).json({ message: 'Failed to resend SDP invoice' });
     }
@@ -8857,7 +8862,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'SDP invoice not found' });
       }
 
-      if (!['sent', 'overdue'].includes(invoice.status)) {
+      if (!['sent', 'overdue'].includes(invoice.status ?? '')) {
         return res.status(400).json({ message: 'Only sent or overdue invoices can be revised' });
       }
 
@@ -8869,7 +8874,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updatedInvoice = await storage.getSdpInvoiceById(id);
       res.json({ message: 'Invoice reset to draft for revision', invoice: updatedInvoice });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error revising SDP invoice:', error);
       res.status(500).json({ message: 'Failed to revise SDP invoice' });
     }
@@ -8890,7 +8895,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json(payments);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching margin payments:', error);
       res.status(500).json({ message: 'Failed to fetch margin payments' });
     }
@@ -8934,7 +8939,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         marginAmount,
         currency,
         status: status || 'pending',
-        paidDate: paidDate ? new Date(paidDate) : null,
+        paidDate: paidDate ? new Date(paidDate) : undefined,
         paidByUserId: status === 'paid' ? userId : null,
         referenceNumber: referenceNumber || null,
         suggestedMargin: suggestedMargin || null,
@@ -8942,7 +8947,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       res.json(payment);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating margin payment:', error);
       res.status(500).json({ message: 'Failed to create margin payment' });
     }
@@ -8995,7 +9000,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const payment = await storage.updateMarginPayment(id, updates);
       res.json(payment);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating margin payment:', error);
       res.status(500).json({ message: 'Failed to update margin payment' });
     }
@@ -9020,7 +9025,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.deleteMarginPayment(id);
       res.json({ message: 'Margin payment deleted successfully' });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting margin payment:', error);
       res.status(500).json({ message: 'Failed to delete margin payment' });
     }
@@ -9037,7 +9042,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json(worker);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching worker profile:', error);
       res.status(500).json({ message: 'Failed to fetch worker profile' });
     }
@@ -9056,7 +9061,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updatedWorker = await storage.updateWorkerProfile(worker.id, updates);
       
       res.json(updatedWorker);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating worker profile:', error);
       res.status(500).json({ message: 'Failed to update worker profile' });
     }
@@ -9075,7 +9080,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const filters = reportFiltersSchema.parse(req.query);
       const reportData = await storage.getSdpInvoiceReport(filters);
       res.json(reportData);
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: 'Invalid query parameters', errors: error.errors });
       }
@@ -9096,7 +9101,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const filters = reportFiltersSchema.parse(req.query);
       const reportData = await storage.getTimesheetReport(filters);
       res.json(reportData);
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: 'Invalid query parameters', errors: error.errors });
       }
@@ -9117,7 +9122,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const filters = reportFiltersSchema.parse(req.query);
       const reportData = await storage.getPayslipReport(filters);
       res.json(reportData);
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: 'Invalid query parameters', errors: error.errors });
       }
@@ -9178,7 +9183,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ message: 'Report sent successfully' });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error sending report via email:', error);
       res.status(500).json({ message: 'Failed to send report via email' });
     }
@@ -9220,7 +9225,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               visibility: 'public'
             }));
           }
-        } catch (aclError) {
+        } catch (aclError: any) {
           console.log("Could not set ACL for profile picture:", aclError.message);
           // Continue anyway - maybe it's already public or access will be checked below
         }
@@ -9235,7 +9240,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.sendStatus(403);
       }
       objectStorageService.downloadObject(objectFile, res);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error checking object access:", error);
       if (error instanceof ObjectNotFoundError) {
         return res.sendStatus(404);
@@ -9250,8 +9255,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
     const user = await storage.getUser(userId);
-    
+
     if (!user || user.userType !== 'sdp_internal') {
       return res.status(403).json({ message: "Access denied. SDP internal users only." });
     }
@@ -9269,7 +9277,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(200).json({
         objectPath: objectPath,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error setting payslip document:", error);
       res.status(500).json({ error: "Internal server error" });
     }
@@ -9286,7 +9294,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     try {
       // Verify country exists
-      const country = await storage.getCountry(countryId);
+      const country = await storage.getCountryById(countryId);
       if (!country) {
         return res.status(404).json({ error: "Country not found" });
       }
@@ -9295,7 +9303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const uploadURL = await objectStorageService.getCountryDocumentUploadURL(countryId, documentType);
 
       res.json({ uploadURL });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error generating country document upload URL:", error);
       res.status(500).json({ error: "Internal server error" });
     }
@@ -9314,23 +9322,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     try {
       // Verify country exists
-      const country = await storage.getCountry(countryId);
+      const country = await storage.getCountryById(countryId);
       if (!country) {
         return res.status(404).json({ error: "Country not found" });
       }
 
       const objectStorageService = new ObjectStorageService();
-      
+
       // Set ACL policy for the uploaded document (private, only accessible to SDP users)
       const objectPath = await objectStorageService.trySetObjectEntityAclPolicy(
         documentURL,
         {
-          owner: userId,
+          owner: userId ?? '',
           visibility: "private", // Country documents are private
           aclRules: [
             {
-              group: { type: "user_type", values: ["sdp_internal"] },
-              permission: "readwrite"
+              group: { type: "user_type", values: ["sdp_internal"] } as any,
+              permission: "readwrite" as any
             }
           ]
         }
@@ -9339,18 +9347,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Save document metadata to database
       const document = await storage.createCountryDocument({
         countryId,
-        documentType: documentType as any,
-        fileName,
-        filePath: objectPath,
-        description: description || null,
-        uploadedBy: userId
-      });
+        category: documentType,
+        name: fileName,
+        objectKey: objectPath,
+      } as any);
 
       res.status(200).json({
         document,
         objectPath
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error setting country document ACL:", error);
       res.status(500).json({ error: "Internal server error" });
     }
@@ -9362,14 +9368,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     try {
       // Verify country exists
-      const country = await storage.getCountry(countryId);
+      const country = await storage.getCountryById(countryId);
       if (!country) {
         return res.status(404).json({ error: "Country not found" });
       }
 
       const documents = await storage.getCountryDocuments(countryId);
       res.json({ documents });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching country documents:", error);
       res.status(500).json({ error: "Internal server error" });
     }
@@ -9382,25 +9388,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     try {
       // Verify country exists
-      const country = await storage.getCountry(countryId);
+      const country = await storage.getCountryById(countryId);
       if (!country) {
         return res.status(404).json({ error: "Country not found" });
       }
 
       // Get document metadata
-      const document = await storage.getCountryDocument(documentId);
+      const allDocs = await storage.getCountryDocuments(countryId);
+      const document = (allDocs as any[]).find((d) => d.id === documentId);
       if (!document || document.countryId !== countryId) {
         return res.status(404).json({ error: "Document not found" });
       }
 
       const objectStorageService = new ObjectStorageService();
-      const objectFile = await objectStorageService.getObjectEntityFile(document.filePath);
+      const objectFile = await objectStorageService.getObjectEntityFile(document.objectKey);
 
       // Check if user can access this document
       const canAccess = await objectStorageService.canAccessObjectEntity({
         userId,
         objectFile,
-        requestedPermission: ObjectPermission.READ,
+        requestedPermission: 'read' as any,
       });
 
       if (!canAccess) {
@@ -9409,13 +9416,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Set appropriate headers for file download
       res.set({
-        'Content-Disposition': `attachment; filename="${document.fileName}"`,
-        'X-Document-Type': document.documentType,
-        'X-Document-Description': document.description || ''
+        'Content-Disposition': `attachment; filename="${document.name}"`,
+        'X-Document-Type': document.category,
       });
 
       await objectStorageService.downloadObject(objectFile, res);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error downloading country document:", error);
       if (error instanceof ObjectNotFoundError) {
         return res.status(404).json({ error: "Document not found" });
@@ -9440,13 +9446,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
 
       // Verify country exists
-      const country = await storage.getCountry(countryId);
+      const country = await storage.getCountryById(countryId);
       if (!country) {
         return res.status(404).json({ error: "Country not found" });
       }
 
       // Get sender information
-      const sender = await storage.getUser(userId);
+      const sender = userId ? await storage.getUser(userId) : undefined;
       if (!sender) {
         return res.status(404).json({ error: "Sender not found" });
       }
@@ -9456,16 +9462,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const documents = await storage.getCountryDocuments(countryId);
 
       // Format party information by type
-      const shareholders = parties.filter(p => p.partyType === 'shareholder')
-        .map(p => `${p.firstName} ${p.lastName} (${p.equityPercentage || 0}%)`)
+      const shareholders = (parties as any[]).filter(p => p.type === 'shareholder')
+        .map((p: any) => `${p.name} (${p.ownershipPercent || 0}%)`)
         .join(', ') || 'None listed';
 
-      const directors = parties.filter(p => p.partyType === 'director')
-        .map(p => `${p.firstName} ${p.lastName} (${p.role || 'Director'})`)
+      const directors = (parties as any[]).filter(p => p.type === 'director')
+        .map((p: any) => `${p.name} (${p.titleOrRole || 'Director'})`)
         .join(', ') || 'None listed';
 
-      const taxAdvisors = parties.filter(p => p.partyType === 'tax_advisor')
-        .map(p => `${p.firstName} ${p.lastName} (${p.role || 'Tax Advisor'})`)
+      const taxAdvisors = (parties as any[]).filter(p => p.type === 'tax_advisor')
+        .map((p: any) => `${p.name} (${p.titleOrRole || 'Tax Advisor'})`)
         .join(', ') || 'None listed';
 
       // Prepare email variables
@@ -9474,7 +9480,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         senderName: `${sender.firstName} ${sender.lastName}`,
         countryName: country.name,
         countryCode: country.code,
-        entityName: country.entityName || `${country.name} SDP Entity`,
+        entityName: (country as any).entityName || `${country.name} SDP Entity`,
         shareholders,
         directors,
         taxAdvisors,
@@ -9486,8 +9492,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       // Send email using EmailService
-      const emailService = new EmailService();
-      
       await emailService.sendEmail({
         to: recipientEmail,
         templateKey: 'entity_information_sharing',
@@ -9496,7 +9500,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           locale: 'en',
           scopeType: 'global'
         }
-      });
+      } as any);
 
       // Log the activity
       console.log(`📧 Entity information email sent for ${country.name} (${country.code}) to ${recipientEmail} by ${sender.email}`);
@@ -9511,7 +9515,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error sending entity information email:", error);
       
       // Handle Zod validation errors
@@ -9544,7 +9548,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const analytics = await storage.getSDPInternalAnalytics(countries);
       res.json(analytics);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching SDP internal analytics:", error);
       res.status(500).json({ message: "Failed to fetch analytics" });
     }
@@ -9602,7 +9606,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       
       res.json(mockBenefitsPackage);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching benefits package:", error);
       res.status(500).json({ message: "Failed to fetch benefits package" });
     }

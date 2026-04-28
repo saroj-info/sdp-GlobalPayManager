@@ -71,6 +71,7 @@ interface SdpInvoice {
   isCrossBorder: boolean;
   createdAt: string;
   issuerName?: string;
+  paidAt?: string | Date | null;
 }
 
 const statusColors = {
@@ -202,7 +203,7 @@ export default function Invoices() {
     }).format(parseFloat(amount));
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString: string | Date) => {
     return new Date(dateString).toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",

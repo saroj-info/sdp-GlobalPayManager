@@ -402,8 +402,8 @@ export interface IStorage {
   
   // SDP Invoice Line Items operations
   getSdpInvoiceLineItems(invoiceId: string): Promise<SelectSdpInvoiceLineItemType[]>;
-  createSdpInvoiceLineItems(invoiceId: string, lineItems: InsertSdpInvoiceLineItemType[]): Promise<SelectSdpInvoiceLineItemType[]>;
-  updateSdpInvoiceLineItems(invoiceId: string, lineItems: InsertSdpInvoiceLineItemType[]): Promise<SelectSdpInvoiceLineItemType[]>;
+  createSdpInvoiceLineItems(invoiceId: string, lineItems: Omit<InsertSdpInvoiceLineItemType, 'invoiceId'>[]): Promise<SelectSdpInvoiceLineItemType[]>;
+  updateSdpInvoiceLineItems(invoiceId: string, lineItems: Omit<InsertSdpInvoiceLineItemType, 'invoiceId'>[]): Promise<SelectSdpInvoiceLineItemType[]>;
   deleteSdpInvoiceLineItems(invoiceId: string): Promise<void>;
 
   // SDP Invoice Timesheets junction (consolidated invoices)
@@ -491,7 +491,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUsersByType(userType: string): Promise<User[]> {
-    return await db.select().from(users).where(eq(users.userType, userType));
+    return await db.select().from(users).where(eq(users.userType, userType as any));
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
@@ -785,9 +785,9 @@ export class DatabaseStorage implements IStorage {
     
     return result.map(row => ({
       ...row.user,
-      country: row.country || undefined,
+      country: (row.country || undefined) as any,
       business: row.business || undefined
-    }));
+    })) as any;
   }
 
   async getBusinessUsersOverview(): Promise<any[]> {
@@ -1144,8 +1144,7 @@ export class DatabaseStorage implements IStorage {
   async createCountryDocument(document: InsertCountryDocumentType): Promise<SelectCountryDocumentType> {
     const [newDocument] = await db.insert(countryDocuments).values({
       ...document,
-      createdAt: new Date(),
-    }).returning();
+    } as any).returning();
     return newDocument;
   }
 
@@ -1402,6 +1401,14 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(thirdPartyBusinesses)
       .where(eq(thirdPartyBusinesses.employingBusinessId, employingBusinessId));
+  }
+
+  async getThirdPartyBusinessById(id: string): Promise<ThirdPartyBusiness | undefined> {
+    const [business] = await db
+      .select()
+      .from(thirdPartyBusinesses)
+      .where(eq(thirdPartyBusinesses.id, id));
+    return business;
   }
 
   // Worker operations
@@ -2567,15 +2574,16 @@ export class DatabaseStorage implements IStorage {
     const rateType = contract.rateType || 'hourly';
     const rate = parseFloat(contract.rate) || 0;
     let subtotal = 0;
+    const totalHours = entries.reduce((sum, entry) => sum + (parseFloat(entry.hoursWorked || '0') || 0), 0);
+    const hourlyRate = rate;
 
     if (rateType === 'daily') {
       const totalDays = entries.reduce((sum, entry) => sum + (parseFloat(entry.daysWorked || '0') || 0), 0);
       subtotal = totalDays * rate;
     } else if (rateType === 'annual') {
-      const daysPresent = entries.filter((e) => e.isPresent).length;
+      const daysPresent = entries.filter((e: any) => e.isPresent || (parseFloat(e.daysWorked || '0') > 0)).length;
       subtotal = daysPresent * (rate / 260);
     } else {
-      const totalHours = entries.reduce((sum, entry) => sum + (parseFloat(entry.hoursWorked || '0') || 0), 0);
       subtotal = totalHours * rate;
     }
 
@@ -2843,7 +2851,7 @@ export class DatabaseStorage implements IStorage {
 ${lines.map(line => `    <tr>
       <td>${this.formatRemunerationType(line.type)}</td>
       <td>${line.description}</td>
-      <td>${line.currency} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      <td>${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
       <td>${this.formatRemunerationFrequency(line.frequency)}</td>
     </tr>`).join('\n')}
   </tbody>
@@ -2851,12 +2859,12 @@ ${lines.map(line => `    <tr>
 
         // Format as simple text list for non-HTML templates
         remunerationLines = lines.map(line => 
-          `• ${this.formatRemunerationType(line.type)}: ${line.description} - ${line.currency} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${this.formatRemunerationFrequency(line.frequency)})`
+          `• ${this.formatRemunerationType(line.type)}: ${line.description} - ${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${this.formatRemunerationFrequency(line.frequency)})`
         ).join('\n');
 
         // Extract individual common remuneration types for easy template access
         lines.forEach(line => {
-          const formattedAmount = `${line.currency} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${this.formatRemunerationFrequency(line.frequency)}`;
+          const formattedAmount = `${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${this.formatRemunerationFrequency(line.frequency)}`;
           
           switch (line.type) {
             case 'base_salary':
@@ -3346,7 +3354,7 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
       }
       subtotal = totalDays * rate;
     } else if (rateType === 'annual') {
-      const daysPresent = entries.filter((e) => e.isPresent).length;
+      const daysPresent = entries.filter((e: any) => e.isPresent || (parseFloat(e.daysWorked || '0') > 0)).length;
       subtotal = daysPresent * (rate / 260);
     } else {
       const totalHours = entries.reduce((sum, entry) => {
@@ -3535,7 +3543,7 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
       .orderBy(sdpInvoiceLineItems.sortOrder);
   }
 
-  async createSdpInvoiceLineItems(invoiceId: string, lineItems: InsertSdpInvoiceLineItemType[]): Promise<SelectSdpInvoiceLineItemType[]> {
+  async createSdpInvoiceLineItems(invoiceId: string, lineItems: Omit<InsertSdpInvoiceLineItemType, 'invoiceId'>[]): Promise<SelectSdpInvoiceLineItemType[]> {
     if (lineItems.length === 0) return [];
     
     const itemsWithInvoiceId = lineItems.map((item, index) => ({
@@ -3550,7 +3558,7 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
       .returning();
   }
 
-  async updateSdpInvoiceLineItems(invoiceId: string, lineItems: InsertSdpInvoiceLineItemType[]): Promise<SelectSdpInvoiceLineItemType[]> {
+  async updateSdpInvoiceLineItems(invoiceId: string, lineItems: Omit<InsertSdpInvoiceLineItemType, 'invoiceId'>[]): Promise<SelectSdpInvoiceLineItemType[]> {
     // Delete existing line items and insert new ones (atomic operation)
     await db.delete(sdpInvoiceLineItems).where(eq(sdpInvoiceLineItems.invoiceId, invoiceId));
     return await this.createSdpInvoiceLineItems(invoiceId, lineItems);

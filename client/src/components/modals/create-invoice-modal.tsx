@@ -75,18 +75,18 @@ export function CreateInvoiceModal({ onClose, onSuccess }: CreateInvoiceModalPro
     },
   });
 
-  const { data: user } = useQuery({
+  const { data: user } = useQuery<{ userType?: string } & Record<string, any>>({
     queryKey: ["/api/auth/user"],
   });
 
   // Fetch businesses if user is business_user or sdp_internal
-  const { data: businesses } = useQuery({
+  const { data: businesses } = useQuery<any[]>({
     queryKey: ["/api/businesses"],
     enabled: user?.userType === "business_user" || user?.userType === "sdp_internal",
   });
 
   // Fetch workers for selected business
-  const { data: workers } = useQuery({
+  const { data: workers } = useQuery<any[]>({
     queryKey: ["/api/workers"],
     enabled: !!selectedBusinessId && (user?.userType === "business_user" || user?.userType === "sdp_internal"),
   });

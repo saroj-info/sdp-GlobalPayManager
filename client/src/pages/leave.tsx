@@ -48,12 +48,12 @@ export default function LeavePage() {
 
   usePageHeader("Leave Requests", "Manage your leave requests and time off");
 
-  const { data: workerProfile, isLoading: profileLoading } = useQuery({
+  const { data: workerProfile, isLoading: profileLoading } = useQuery<any>({
     queryKey: ["/api/workers/profile"],
     enabled: isAuthenticated && (user as any)?.userType === 'worker',
   });
 
-  const { data: leaveRequests = [], isLoading: requestsLoading } = useQuery({
+  const { data: leaveRequests = [], isLoading: requestsLoading } = useQuery<any[]>({
     queryKey: ["/api/leave-requests"],
     enabled: isAuthenticated && (user as any)?.userType === 'worker',
   });
@@ -70,12 +70,9 @@ export default function LeavePage() {
   const createLeaveRequestMutation = useMutation({
     mutationFn: async (data: LeaveRequestData) => {
       const totalDays = Math.ceil((data.endDate.getTime() - data.startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-      return await apiRequest('/api/leave-requests', {
-        method: 'POST',
-        body: JSON.stringify({
-          ...data,
-          totalDays,
-        }),
+      return await apiRequest('POST', '/api/leave-requests', {
+        ...data,
+        totalDays,
       });
     },
     onSuccess: () => {

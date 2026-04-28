@@ -116,7 +116,8 @@ export default function PayslipsPage() {
   });
 
   const handleGetUploadParameters = async () => {
-    const response = await apiRequest("/api/objects/upload", "POST") as { uploadURL: string };
+    const res = await apiRequest("POST", "/api/objects/upload");
+    const response = (await res.json()) as { uploadURL: string };
     return {
       method: "PUT" as const,
       url: response.uploadURL,
@@ -168,7 +169,7 @@ export default function PayslipsPage() {
     }).format(num);
   };
 
-  const formatDate = (dateStr: string) => {
+  const formatDate = (dateStr: string | Date) => {
     return new Date(dateStr).toLocaleDateString();
   };
 

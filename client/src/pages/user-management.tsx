@@ -141,7 +141,7 @@ export default function UserManagement() {
   const countries = Array.isArray(countriesData) ? countriesData : [];
 
   // Fetch businesses for scope selection
-  const { data: businesses, isLoading: businessesLoading } = useQuery({
+  const { data: businesses, isLoading: businessesLoading } = useQuery<any[]>({
     queryKey: ["/api/businesses"],
     enabled: !!(currentUser as any)?.sdpRole,
   });

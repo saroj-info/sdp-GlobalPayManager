@@ -427,8 +427,8 @@ function EmploymentCostCalculator() {
   const [employmentType, setEmploymentType] = usePersistent("tcoe_employment_type", "Employee");
   const [country, setCountry] = usePersistent("tcoe_country", "Australia");
   const [salary, setSalary] = usePersistent("tcoe_salary", 120000);
-  const [assumptionsEmployee, setAssumptionsEmployee] = usePersistent("tcoe_emp_defaults_v2", DEFAULT_EMPLOYEE);
-  const [assumptionsContractor, setAssumptionsContractor] = usePersistent("tcoe_con_defaults_v1", DEFAULT_CONTRACTOR);
+  const [assumptionsEmployee, setAssumptionsEmployee] = usePersistent<Record<string, any[]>>("tcoe_emp_defaults_v2", DEFAULT_EMPLOYEE as Record<string, any[]>);
+  const [assumptionsContractor, setAssumptionsContractor] = usePersistent<Record<string, any[]>>("tcoe_con_defaults_v1", DEFAULT_CONTRACTOR as Record<string, any[]>);
   // Fetch jurisdiction data from database instead of hardcoded constants - NOTE: Now using layout context for authenticated users
   const { data: countriesData = [] } = useQuery<any[]>({
     queryKey: ['/api/countries'],
@@ -471,8 +471,8 @@ function EmploymentCostCalculator() {
     return transformed;
   }, [dbJurisdictions]);
 
-  const [jurisdictions, setJurisdictions] = useState(transformedJurisdictions);
-  const [jurisdictionKey, setJurisdictionKey] = usePersistent("tcoe_selected_juris", { Australia: "New South Wales", USA: "California" });
+  const [jurisdictions, setJurisdictions] = useState<Record<string, Record<string, any[]>>>(transformedJurisdictions as Record<string, Record<string, any[]>>);
+  const [jurisdictionKey, setJurisdictionKey] = usePersistent<Record<string, string>>("tcoe_selected_juris", { Australia: "New South Wales", USA: "California" });
   const [showEditor, setShowEditor] = useState(false);
   const [editScope, setEditScope] = useState({ level: "country" }); // { level: 'country' | 'jurisdiction', name?: string }
 
@@ -1346,7 +1346,7 @@ export default function Resources() {
         <Header 
           title="Resources" 
           description="Powerful tools and resources to help you navigate global employment and contracting decisions with confidence."
-          accessibleCountries={countries}
+          accessibleCountries={countries as any[]}
         />
         <main className="flex-1 overflow-y-auto">
           <div className="container mx-auto px-4 py-8">

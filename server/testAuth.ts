@@ -319,22 +319,23 @@ export const getTestUser: RequestHandler = async (req, res) => {
 };
 
 // Role-based middleware for SDP internal users
-export const requireSdpRole = (allowedRoles: string[]): RequestHandler => {
+export const requireSdpRole = (allowedRoles: string | string[]): RequestHandler => {
+  const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
   return (req: any, res, next) => {
     const user = req.user;
-    
+
     if (!user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    
+
     if (user.userType !== 'sdp_internal') {
       return res.status(403).json({ message: "Access denied - SDP internal users only" });
     }
-    
-    if (!allowedRoles.includes(user.sdpRole)) {
+
+    if (!roles.includes(user.sdpRole)) {
       return res.status(403).json({ message: "Access denied - Insufficient role permissions" });
     }
-    
+
     next();
   };
 };

@@ -12,75 +12,84 @@ import worldMapImage from "@assets/generated_images/Uniform_blue_world_map_b8ed3
 import { useLocation } from "wouter";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { useAuth } from "@/hooks/useAuth";
+import type {
+  AuthUser,
+  Worker,
+  ContractWithDerived,
+  TimesheetWithContract,
+  LeaveRequest,
+  InvoiceWithContext,
+  Payslip,
+  BusinessInvitation,
+  DashboardStats,
+} from "@/types/api";
 
 // Worker Dashboard Component
 function WorkerDashboard() {
   const [, setLocation] = useLocation();
   
-  const { data: user } = useQuery({
+  const { data: user } = useQuery<AuthUser>({
     queryKey: ["/api/auth/user"],
     retry: false,
   });
 
-  const { data: workerProfile } = useQuery({
+  const { data: workerProfile } = useQuery<Worker>({
     queryKey: ["/api/workers/profile"],
-    enabled: (user as any)?.userType === 'worker',
+    enabled: user?.userType === 'worker',
   });
 
-  const { data: contracts = [] } = useQuery({
+  const { data: contracts = [] } = useQuery<ContractWithDerived[]>({
     queryKey: ["/api/contracts"],
-    enabled: (user as any)?.userType === 'worker',
+    enabled: user?.userType === 'worker',
   });
 
-  const { data: timesheets = [] } = useQuery({
+  const { data: timesheets = [] } = useQuery<TimesheetWithContract[]>({
     queryKey: ["/api/timesheets"],
-    enabled: (user as any)?.userType === 'worker',
+    enabled: user?.userType === 'worker',
   });
 
-  const { data: leaveRequests = [] } = useQuery({
+  const { data: leaveRequests = [] } = useQuery<LeaveRequest[]>({
     queryKey: ["/api/leave-requests"],
-    enabled: (user as any)?.userType === 'worker' && 
-      (workerProfile as any)?.workerType === 'employee',
+    enabled: user?.userType === 'worker' &&
+      workerProfile?.workerType === 'employee',
   });
 
-  const { data: invoices = [] } = useQuery({
+  const { data: invoices = [] } = useQuery<InvoiceWithContext[]>({
     queryKey: ["/api/invoices"],
-    enabled: (user as any)?.userType === 'worker' && 
-      (workerProfile as any)?.workerType === 'contractor',
+    enabled: user?.userType === 'worker' &&
+      workerProfile?.workerType === 'contractor',
   });
 
-  const { data: payslips = [] } = useQuery({
+  const { data: payslips = [] } = useQuery<Payslip[]>({
     queryKey: ["/api/payslips/worker", workerProfile?.id],
-    enabled: (user as any)?.userType === 'worker' && 
-      (workerProfile as any)?.workerType === 'employee' && 
+    enabled: user?.userType === 'worker' &&
+      workerProfile?.workerType === 'employee' &&
       Boolean(workerProfile?.id),
   });
 
   // Fetch business invitations for all workers
-  const { data: businessInvitations = [] } = useQuery({
+  const { data: businessInvitations = [] } = useQuery<BusinessInvitation[]>({
     queryKey: ["/api/business-invitations"],
-    enabled: (user as any)?.userType === 'worker',
+    enabled: user?.userType === 'worker',
   });
 
   // Check eligibility for features
-  const isEligibleForLeave = (workerProfile as any)?.workerType === 'employee';
-  
-  const isEligibleForInvoices = (workerProfile as any)?.workerType === 'contractor';
-  
-  const isEligibleForPayslips = (workerProfile as any)?.workerType === 'employee';
+  const isEligibleForLeave = workerProfile?.workerType === 'employee';
 
-  const activeContracts = (contracts as any[]).filter((c: any) => c.status === 'active');
-  const pendingTimesheets = (timesheets as any[]).filter((t: any) => t.status === 'draft' || t.status === 'submitted');
-  const pendingLeave = (leaveRequests as any[]).filter((l: any) => l.status === 'pending');
-  const pendingInvoices = (invoices as any[]).filter((i: any) => i.status === 'pending');
-  const recentPayslips = (payslips as any[]).slice(0, 3);
-  const sentInvitations = (businessInvitations as any[]).filter((i: any) => i.status === 'sent');
-  const registeredInvitations = (businessInvitations as any[]).filter((i: any) => i.status === 'registered');
-  
+  const isEligibleForInvoices = workerProfile?.workerType === 'contractor';
+
+  const isEligibleForPayslips = workerProfile?.workerType === 'employee';
+
+  const activeContracts = contracts.filter((c) => c.status === 'active');
+  const pendingTimesheets = timesheets.filter((t) => t.status === 'draft' || t.status === 'submitted');
+  const pendingLeave = leaveRequests.filter((l) => l.status === 'pending');
+  const pendingInvoices = invoices.filter((i) => (i.status as string) === 'pending');
+  const recentPayslips = payslips.slice(0, 3);
+  const sentInvitations = businessInvitations.filter((i) => i.status === 'sent');
+  const registeredInvitations = businessInvitations.filter((i) => i.status === 'registered');
+
   const getWelcomeMessage = () => {
-    const firstName = (workerProfile as any)?.firstName || (user as any)?.firstName || 'Worker';
-    const workerType = (workerProfile as any)?.workerType || 'worker';
-    const typeText = workerType === 'employee' ? 'Employee' : 'Contractor';
+    const firstName = workerProfile?.firstName || user?.firstName || 'Worker';
     return `Welcome back, ${firstName}!`;
   };
 
@@ -331,7 +340,7 @@ function BusinessDashboard() {
   const [showContractWizard, setShowContractWizard] = useState(false);
   const [, setLocation] = useLocation();
 
-  const { data: user } = useQuery({
+  const { data: user } = useQuery<AuthUser>({
     queryKey: ["/api/auth/user"],
     retry: false,
   });
@@ -340,7 +349,7 @@ function BusinessDashboard() {
   const getDashboardTitle = () => {
     if (!user) return "Dashboard";
     const userData = user as any;
-    
+
     if (userData.userType === 'sdp_internal') {
       return "SDP Global Pay Management";
     } else if (userData.userType === 'business') {
@@ -400,7 +409,7 @@ function BusinessDashboard() {
   });
 
   // Fetch pending signature requests for workers
-  const { data: pendingSignatures = [] } = useQuery({
+  const { data: pendingSignatures = [] } = useQuery<any[]>({
     queryKey: ["/api/contracts/pending-signatures"],
     enabled: (user as any)?.userType === 'worker',
   });
@@ -412,17 +421,12 @@ function BusinessDashboard() {
       userType: 'business',
       totalActiveWorkers: 0,
       totalActiveContracts: 0,
-      pendingTimesheets: 0
-    }
+      pendingTimesheets: 0,
+    } as DashboardStats,
   } } = useQuery<{
     contracts: Array<any>;
     totalRecords: number;
-    insights: {
-      userType: string;
-      totalActiveWorkers: number;
-      totalActiveContracts: number;
-      pendingTimesheets: number;
-    };
+    insights: DashboardStats;
   }>({
     queryKey: ["/api/dashboard/contract-history"],
   });
@@ -1329,7 +1333,7 @@ function BusinessDashboard() {
                 )}
 
                 {/* Contract Status Distribution Chart */}
-                {contractHistory?.insights && (contractHistory.insights.totalContracts > 0) && (
+                {contractHistory?.insights && ((contractHistory.insights.totalContracts ?? 0) > 0) && (
                   <div className="border-t pt-4">
                     <h4 className="font-medium text-sm text-gray-700 mb-4">Contract Status Distribution</h4>
                     <div className="h-48">

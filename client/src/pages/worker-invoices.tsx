@@ -52,13 +52,13 @@ export default function WorkerInvoicesPage() {
   const { user, isAuthenticated, isLoading } = useAuth();
 
   // Fetch worker profile to check eligibility
-  const { data: workerProfile, isLoading: profileLoading } = useQuery({
+  const { data: workerProfile, isLoading: profileLoading } = useQuery<any>({
     queryKey: ["/api/workers/profile"],
     enabled: isAuthenticated && (user as any)?.userType === 'worker',
   });
 
   // Fetch invoices
-  const { data: invoices = [], isLoading: invoicesLoading } = useQuery({
+  const { data: invoices = [], isLoading: invoicesLoading } = useQuery<any[]>({
     queryKey: ["/api/invoices"],
     enabled: isAuthenticated && (user as any)?.userType === 'worker',
   });

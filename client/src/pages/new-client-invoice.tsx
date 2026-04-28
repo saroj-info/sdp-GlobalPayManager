@@ -161,7 +161,7 @@ export default function NewClientInvoicePage() {
         fromCountryId: selectedContract.countryId,
       };
 
-      return apiRequest("/api/client-invoices", { method: "POST", body: JSON.stringify(payload) });
+      return apiRequest("POST", "/api/client-invoices", payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/client-invoices"] });

@@ -656,13 +656,13 @@ export default function ContractsPage() {
   }, [isOnContractsPage]);
 
   // Fetch businesses for SDP internal filtering - only when on contracts page
-  const { data: businesses = [] } = useQuery({
+  const { data: businesses = [] } = useQuery<any[]>({
     queryKey: ["/api/businesses"],
     enabled: (user as any)?.userType === 'sdp_internal' && isOnContractsPage,
   });
 
   // Fetch contract instances - only when on contracts page
-  const { data: allContracts, isLoading: isLoadingContracts } = useQuery({
+  const { data: allContracts, isLoading: isLoadingContracts } = useQuery<any[]>({
     queryKey: filterBusiness && filterBusiness !== "all" ? ['/api/contracts/business', filterBusiness] : ['/api/contracts'],
     enabled: isAuthenticated && isOnContractsPage,
   });
@@ -717,12 +717,12 @@ export default function ContractsPage() {
   }, [allContracts, filterStatus, sortBy]);
 
   // Fetch workers and countries for contract wizard - only when on contracts page
-  const { data: workers = [] } = useQuery({
+  const { data: workers = [] } = useQuery<any[]>({
     queryKey: ['/api/workers'],
     enabled: isAuthenticated && isOnContractsPage,
   });
 
-  const { data: countries = [] } = useQuery({
+  const { data: countries = [] } = useQuery<any[]>({
     queryKey: ['/api/countries'],
     enabled: isAuthenticated && isOnContractsPage,
   });
@@ -930,7 +930,7 @@ export default function ContractsPage() {
                 <CardContent className="space-y-3">
                   <div className="flex items-center text-sm text-muted-foreground">
                     <Building2 className="mr-2 h-4 w-4" />
-                    {contract.employmentType?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                    {contract.employmentType?.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
                   </div>
                   
                   <div className="flex items-center text-sm text-muted-foreground">
@@ -1052,7 +1052,7 @@ export default function ContractsPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          {contract.employmentType?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                          {contract.employmentType?.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center">
@@ -1159,7 +1159,7 @@ export default function ContractsPage() {
               <div className="grid grid-cols-2 gap-4 p-4 bg-secondary-50 rounded-lg">
                 <div className="text-center">
                   <p className="text-sm text-muted-foreground">Employment Type</p>
-                  <p className="font-semibold">{selectedContract.employmentType?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</p>
+                  <p className="font-semibold">{selectedContract.employmentType?.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}</p>
                 </div>
                 <div className="text-center">
                   <p className="text-sm text-muted-foreground">Country</p>

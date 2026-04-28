@@ -195,11 +195,11 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
     };
   };
 
-  const { data: countries = [] } = useQuery({
+  const { data: countries = [] } = useQuery<any[]>({
     queryKey: ["/api/countries"],
   });
 
-  const { data: businesses = [] } = useQuery({
+  const { data: businesses = [] } = useQuery<any[]>({
     queryKey: ["/api/businesses"],
   });
 

@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type Dispatch, type SetStateAction } from "react";
 
-export function usePersistent<T>(key: string, fallback: T): [T, (value: T) => void] {
+export function usePersistent<T>(key: string, fallback: T): [T, Dispatch<SetStateAction<T>>] {
   const [val, setVal] = useState<T>(() => {
     try {
       const saved = localStorage.getItem(key);

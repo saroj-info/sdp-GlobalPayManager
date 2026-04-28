@@ -30,6 +30,7 @@ import { SDPLogo } from "@/components/ui/logo";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { CheckCircle, User, Building, CreditCard, FileText, Phone, Mail, MapPin, Calendar } from "lucide-react";
+import type { Worker, Country } from "@/types/api";
 
 // Step schemas
 const personalDetailsSchema = z.object({
@@ -90,18 +91,18 @@ export default function WorkerOnboarding() {
   const queryClient = useQueryClient();
 
   // Get worker profile to pre-populate forms
-  const { data: worker } = useQuery({
+  const { data: worker } = useQuery<Worker>({
     queryKey: ["/api/worker-profile"],
   });
 
-  const { data: countries = [] } = useQuery({
+  const { data: countries = [] } = useQuery<Country[]>({
     queryKey: ["/api/countries"],
   });
 
   // Update worker profile mutation
   const updateWorkerMutation = useMutation({
     mutationFn: async (data: any) => {
-      await apiRequest("/api/worker-profile", "PATCH", data);
+      await apiRequest("PATCH", "/api/worker-profile", data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/worker-profile"] });

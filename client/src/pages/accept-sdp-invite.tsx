@@ -145,7 +145,8 @@ export default function AcceptSdpInvite() {
         totpVerificationCode: verificationCode,
       });
 
-      setBackupCodes(data.backupCodes || []);
+      const json = await data.json() as { backupCodes?: string[] };
+      setBackupCodes(json.backupCodes || []);
       setSuccess(true);
     } catch (err: any) {
       setError(err.message || "Failed to accept invitation");

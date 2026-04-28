@@ -30,12 +30,12 @@ export default function InviteBusiness() {
 
   usePageHeader("Invite Business", "Invite new businesses to join SDP Global Pay and expand your network");
 
-  const { data: user } = useQuery({
+  const { data: user } = useQuery<any>({
     queryKey: ["/api/auth/user"],
     retry: false,
   });
 
-  const { data: businessInvitations = [] } = useQuery({
+  const { data: businessInvitations = [] } = useQuery<any[]>({
     queryKey: ["/api/business-invitations"],
     enabled: (user as any)?.userType === 'worker',
   });

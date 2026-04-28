@@ -538,22 +538,22 @@ export default function AdminPage() {
   });
 
   // Fetch contract templates
-  const { data: templates, isLoading: isLoadingTemplates } = useQuery({
+  const { data: templates, isLoading: isLoadingTemplates } = useQuery<any[]>({
     queryKey: ['/api/contract-templates'],
   });
 
   // Fetch countries
-  const { data: countries, isLoading: isLoadingCountries } = useQuery({
+  const { data: countries, isLoading: isLoadingCountries } = useQuery<any[]>({
     queryKey: ['/api/countries'],
   });
 
   // Fetch email template definitions
-  const { data: emailDefinitions, isLoading: isLoadingEmailDefinitions } = useQuery({
+  const { data: emailDefinitions, isLoading: isLoadingEmailDefinitions } = useQuery<any[]>({
     queryKey: ['/api/admin/email-template-definitions'],
   });
 
   // Fetch jurisdictions
-  const { data: jurisdictions, isLoading: isLoadingJurisdictions } = useQuery({
+  const { data: jurisdictions, isLoading: isLoadingJurisdictions } = useQuery<any[]>({
     queryKey: ['/api/admin/jurisdictions'],
   });
 
@@ -1097,9 +1097,9 @@ Use variables from the helper panel on the right to customize your template.`}
                     ))}
                   </div>
                 </div>
-              ) : emailDefinitions?.length > 0 ? (
+              ) : (emailDefinitions?.length ?? 0) > 0 ? (
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {emailDefinitions.map((definition: any) => (
+                  {emailDefinitions!.map((definition: any) => (
                     <Card key={definition.key} className="hover:shadow-md transition-shadow">
                       <CardHeader className="pb-3">
                         <CardTitle className="text-base leading-tight">
@@ -1414,9 +1414,9 @@ Use variables from the helper panel on the right to customize your template.`}
                     <div key={i} className="h-16 bg-gray-200 rounded"></div>
                   ))}
                 </div>
-              ) : jurisdictions?.length > 0 ? (
+              ) : (jurisdictions?.length ?? 0) > 0 ? (
                 (() => {
-                  const filteredJurisdictions = jurisdictions.filter((j: any) => 
+                  const filteredJurisdictions = jurisdictions!.filter((j: any) =>
                     jurisdictionCountryFilter === 'all' || j.countryId === jurisdictionCountryFilter
                   );
                   
