@@ -439,6 +439,7 @@ export const billingModeEnum = pgEnum('billing_mode', ['direct', 'invoice_throug
 
 export const contracts = pgTable("contracts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractName: varchar("contract_name"), // human-friendly name shown in dropdowns/lists (nullable)
   businessId: varchar("business_id").references(() => businesses.id).notNull(),
   workerId: varchar("worker_id").references(() => workers.id).notNull(),
   countryId: varchar("country_id").references(() => countries.id).notNull(),

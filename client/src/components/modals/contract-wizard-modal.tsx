@@ -128,6 +128,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     if (editMode && existingContract) {
       return {
         workerId: existingContract.workerId || '',
+        contractName: existingContract.contractName || '',
         countryId: existingContract.countryId || '',
         employmentType: existingContract.employmentType || 'contractor',
         roleTitleId: existingContract.roleTitleId || '',
@@ -187,6 +188,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     }
     return {
       workerId: preselectedWorkerId || '',
+      contractName: '',
       countryId: '',
       employmentType: 'contractor',
       roleTitleId: '',
@@ -970,6 +972,18 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         <form onSubmit={handleSubmit} className="space-y-6">
           {step === 1 && (
             <>
+              {/* Contract Name */}
+              <div className="mb-6">
+                <Label htmlFor="contractName">Contract Name</Label>
+                <Input
+                  id="contractName"
+                  value={formData.contractName}
+                  onChange={(e) => setFormData({ ...formData, contractName: e.target.value })}
+                  placeholder="e.g. Q1 2026 Engineering Engagement"
+                  data-testid="input-contract-name"
+                />
+              </div>
+
               {/* On-behalf section for SDP Internal users */}
               {isSDPInternal && (
                 <div className="p-4 bg-primary-50 border border-primary-200 rounded-lg space-y-4 mb-6">

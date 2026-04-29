@@ -697,8 +697,8 @@ export default function ContractsPage() {
           const bWorkerName = `${b.worker?.firstName} ${b.worker?.lastName}`;
           return aWorkerName.localeCompare(bWorkerName);
         case 'role':
-          const aRole = a.customRoleTitle || a.roleTitle?.name || '';
-          const bRole = b.customRoleTitle || b.roleTitle?.name || '';
+          const aRole = a.contractName || a.customRoleTitle || a.roleTitle?.name || '';
+          const bRole = b.contractName || b.customRoleTitle || b.roleTitle?.name || '';
           return aRole.localeCompare(bRole);
         case 'country':
           return (a.country?.name || '').localeCompare(b.country?.name || '');
@@ -918,7 +918,7 @@ export default function ContractsPage() {
                   <div className="flex items-start justify-between">
                     <div className="space-y-1">
                       <CardTitle className="text-lg leading-none">
-                        {contract.customRoleTitle || contract.roleTitle?.name || 'Contract'}
+                        {contract.contractName || contract.customRoleTitle || contract.roleTitle?.name || 'Contract'}
                       </CardTitle>
                       <CardDescription className="text-sm">
                         {contract.worker?.firstName} {contract.worker?.lastName}
@@ -1043,7 +1043,7 @@ export default function ContractsPage() {
                           {contract.worker?.firstName} {contract.worker?.lastName}
                         </TableCell>
                         <TableCell>
-                          {contract.customRoleTitle || contract.roleTitle?.name || 'Contract'}
+                          {contract.contractName || contract.customRoleTitle || contract.roleTitle?.name || 'Contract'}
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center">
@@ -1145,7 +1145,7 @@ export default function ContractsPage() {
               {/* Main Contract Info */}
               <div className="text-center space-y-2">
                 <h3 className="text-xl font-semibold">
-                  {selectedContract.customRoleTitle || selectedContract.roleTitle?.title || 'Contract Role'}
+                  {selectedContract.contractName || selectedContract.customRoleTitle || selectedContract.roleTitle?.title || 'Contract Role'}
                 </h3>
                 {selectedContract.worker && (
                   <p className="text-lg text-muted-foreground">
@@ -1618,7 +1618,7 @@ export default function ContractsPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
-              Contract Document - {selectedContract?.customRoleTitle || selectedContract?.roleTitle?.title || 'Contract'}
+              Contract Document - {selectedContract?.contractName || selectedContract?.customRoleTitle || selectedContract?.roleTitle?.title || 'Contract'}
             </DialogTitle>
           </DialogHeader>
           
@@ -1655,7 +1655,7 @@ export default function ContractsPage() {
                       printWindow.document.write(`
                         <html>
                           <head>
-                            <title>Contract - ${selectedContract.customRoleTitle || selectedContract.roleTitle?.title || 'Contract'}</title>
+                            <title>Contract - ${selectedContract.contractName || selectedContract.customRoleTitle || selectedContract.roleTitle?.title || 'Contract'}</title>
                             <style>
                               body { font-family: Arial, sans-serif; padding: 40px; line-height: 1.6; }
                               h1 { color: #333; }
@@ -1664,7 +1664,7 @@ export default function ContractsPage() {
                             </style>
                           </head>
                           <body>
-                            <h1>${selectedContract.customRoleTitle || selectedContract.roleTitle?.title || 'Contract'}</h1>
+                            <h1>${selectedContract.contractName || selectedContract.customRoleTitle || selectedContract.roleTitle?.title || 'Contract'}</h1>
                             <div class="metadata">
                               <p><strong>Worker:</strong> ${selectedContract.worker?.firstName} ${selectedContract.worker?.lastName}</p>
                               <p><strong>Business:</strong> ${selectedContract.business?.name}</p>
@@ -1711,7 +1711,7 @@ export default function ContractsPage() {
               Recalling this contract will cancel the signature request. The worker will need to sign again after edits are made.
             </p>
             <p className="text-sm font-medium text-secondary-800">
-              Contract: {contractToRecall?.customRoleTitle || contractToRecall?.roleTitle?.title || 'Contract'} — {contractToRecall?.worker?.firstName} {contractToRecall?.worker?.lastName}
+              Contract: {contractToRecall?.contractName || contractToRecall?.customRoleTitle || contractToRecall?.roleTitle?.title || 'Contract'} — {contractToRecall?.worker?.firstName} {contractToRecall?.worker?.lastName}
             </p>
             <div className="flex justify-end gap-3">
               <Button variant="outline" onClick={() => { setShowRecallDialog(false); setContractToRecall(null); }}>

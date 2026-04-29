@@ -1025,7 +1025,7 @@ export default function Timesheets() {
                 <SelectContent>
                   {workerTimesheetContracts.map((c: any) => (
                     <SelectItem key={c.id} value={c.id}>
-                      {c.customRoleTitle || c.employmentType} · {c.country?.name || c.countryId} · {c.rateType} · {c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A'}
+                      {c.customRoleTitle || c.roleTitle?.name || c.roleTitle?.title || c.employmentType} · {c.country?.name || c.countryId} · {c.rateType} · {c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A'} – {c.endDate ? format(new Date(c.endDate), 'MMM yyyy') : 'Ongoing'}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1281,7 +1281,7 @@ export default function Timesheets() {
                         <SelectContent>
                           {selectedWorkerContracts.filter((c: any) => c.requiresTimesheet).map((c: any) => (
                             <SelectItem key={c.id} value={c.id}>
-                              {c.country?.name} · {c.rateType} · {c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A'}
+                              {c.customRoleTitle || c.roleTitle?.name || c.roleTitle?.title || c.employmentType} · {c.country?.name} · {c.rateType} · {c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A'} – {c.endDate ? format(new Date(c.endDate), 'MMM yyyy') : 'Ongoing'}
                             </SelectItem>
                           ))}
                         </SelectContent>
