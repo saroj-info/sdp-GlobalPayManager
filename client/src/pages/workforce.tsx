@@ -260,14 +260,16 @@ export default function Workforce() {
                         >
                           View Details
                         </Button>
-                        <Button 
-                          size="sm" 
-                          className="flex-1"
-                          onClick={() => setLocation(`/contracts?workerId=${worker.id}`)}
-                          data-testid={`button-create-contract-${worker.id}`}
-                        >
-                          Create Contract
-                        </Button>
+                        {worker.userId && (
+                          <Button
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => setLocation(`/contracts?workerId=${worker.id}`)}
+                            data-testid={`button-create-contract-${worker.id}`}
+                          >
+                            Create Contract
+                          </Button>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
