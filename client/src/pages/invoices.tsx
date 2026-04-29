@@ -83,6 +83,92 @@ const statusColors = {
   paid: "bg-purple-100 text-purple-800",
 };
 
+type InvoiceSource = 'contractor' | 'sdp_services' | 'customer_billing' | 'business_to_client';
+
+function getContractLabel(invoice: any): string | null {
+  const c = invoice?.contract;
+  if (!c) return null;
+  return (
+    c.contractName ||
+    c.customRoleTitle ||
+    c.roleTitle?.title ||
+    c.roleTitle?.name ||
+    c.jobTitle ||
+    null
+  );
+}
+
+function formatPeriod(start: string | Date, end: string | Date): string {
+  const fmt = (d: string | Date) => new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
+/**
+ * Single source of truth for "who raised / who pays / which contract / which timesheet"
+ * across all 7 invoice tabs in the app.
+ */
+function InvoiceParties({ invoice, source }: { invoice: any; source: InvoiceSource }) {
+  const fromCountryName = invoice.fromCountry?.name || invoice.fromCountryName || '';
+  const toBusinessName = invoice.toBusiness?.name || invoice.toBusinessName || '';
+  const fromBusinessName = invoice.fromBusiness?.name || invoice.fromBusinessName || '';
+
+  let raisedBy: React.ReactNode = '—';
+  let payableBy: React.ReactNode = '—';
+
+  if (source === 'contractor') {
+    const c = invoice.contractor;
+    raisedBy = c ? `${c.firstName ?? ''} ${c.lastName ?? ''}`.trim() : '—';
+    payableBy = invoice.business?.name || '—';
+  } else if (source === 'sdp_services') {
+    raisedBy = fromCountryName ? `SDP ${fromCountryName}` : 'SDP Global Pay';
+    payableBy = toBusinessName || '—';
+  } else if (source === 'customer_billing') {
+    raisedBy = (
+      <span>
+        {fromCountryName ? `SDP ${fromCountryName}` : 'SDP Global Pay'}
+        {fromBusinessName && (
+          <span className="text-xs text-secondary-500"> · on behalf of {fromBusinessName}</span>
+        )}
+      </span>
+    );
+    payableBy = toBusinessName || '—';
+  } else if (source === 'business_to_client') {
+    raisedBy = fromBusinessName || '—';
+    payableBy = toBusinessName || '—';
+  }
+
+  const contractLabel = getContractLabel(invoice);
+  const ts = invoice.timesheet;
+  const periodStart = ts?.periodStart || invoice.periodStart;
+  const periodEnd = ts?.periodEnd || invoice.periodEnd;
+  const showPeriod = !!(periodStart && periodEnd);
+
+  return (
+    <div className="rounded-md border border-secondary-200 bg-secondary-50/50 p-3 space-y-1.5">
+      <div className="flex justify-between text-sm">
+        <span className="text-secondary-600">Raised by</span>
+        <span className="font-medium text-secondary-900 text-right truncate max-w-[60%]">{raisedBy}</span>
+      </div>
+      <div className="flex justify-between text-sm">
+        <span className="text-secondary-600">Payable by</span>
+        <span className="font-semibold text-orange-700 text-right truncate max-w-[60%]">{payableBy}</span>
+      </div>
+      {contractLabel && (
+        <div className="flex justify-between text-sm">
+          <span className="text-secondary-600">Contract</span>
+          <span className="text-secondary-900 text-right truncate max-w-[60%]">{contractLabel}</span>
+        </div>
+      )}
+      {showPeriod && (
+        <div className="flex justify-between text-sm">
+          <span className="text-secondary-600">Timesheet</span>
+          <span className="text-secondary-900 text-right">{formatPeriod(periodStart, periodEnd)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const statusIcons = {
   draft: Clock,
   submitted: FileText,
@@ -289,6 +375,10 @@ export default function Invoices() {
               </TabsList>
               
               <TabsContent value="contractor" className="mt-6">
+                <div className="rounded-md border border-blue-200 bg-blue-50/60 px-3 py-2 mb-4 text-sm text-blue-900">
+                  <span className="font-medium">Bills from your contractors.</span>{' '}
+                  Each invoice is raised by the contractor and is payable by your business.
+                </div>
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
                   <div className="text-sm text-gray-600">
                     Invoices from your contractors for services rendered
@@ -488,13 +578,10 @@ export default function Invoices() {
                                     {invoice.status.replace('_', ' ')}
                                   </Badge>
                                 </div>
-                                <CardDescription>
-                                  {user?.userType === 'worker' ? invoice.business.name : 
-                                   `${invoice.contractor.firstName} ${invoice.contractor.lastName}`}
-                                </CardDescription>
                               </CardHeader>
-                              
+
                               <CardContent className="space-y-4">
+                                <InvoiceParties invoice={invoice} source="contractor" />
                                 <div className="space-y-2">
                                   <div className="flex justify-between text-sm">
                                     <span className="text-secondary-600">Period:</span>
@@ -593,6 +680,10 @@ export default function Invoices() {
               </TabsContent>
               
               <TabsContent value="sdp" className="mt-6">
+                <div className="rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2 mb-4 text-sm text-amber-900">
+                  <span className="font-medium">Bills you owe.</span>{' '}
+                  Invoices addressed to your business — typically raised by an SDP Global Pay entity for employment services. Your business is the payer.
+                </div>
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
                   <div className="text-sm text-gray-600">
                     Invoices from SDP Global Pay for employment services
@@ -730,13 +821,13 @@ export default function Invoices() {
                                   {invoice.status.replace('_', ' ')}
                                 </Badge>
                               </div>
-                              <CardDescription className="flex items-center gap-1">
-                                <Globe className="h-3 w-3" />
-                                {(invoice as any).fromCountryName}
-                              </CardDescription>
                             </CardHeader>
 
                             <CardContent className="space-y-4">
+                              <InvoiceParties
+                                invoice={invoice}
+                                source={((invoice as any).invoiceCategory as InvoiceSource) || 'sdp_services'}
+                              />
                               <div className="space-y-2">
                                 {(invoice as any).worker && (
                                   <div className="flex justify-between text-sm">
@@ -770,11 +861,11 @@ export default function Invoices() {
                                 {(invoice as any).contract?.rateType && (
                                   isHostClientBusiness
                                     ? (
-                                      // Host clients only see the rate they're being billed (their cost per worker hour/day),
-                                      // labelled as "Worker Rate" — they should not know the worker's actual pay.
+                                      // Host clients see only the rate they are billed at — never the worker's actual pay.
+                                      // Labelled "Billing Rate" so the same label is never overloaded with two meanings.
                                       (invoice as any).contract.customerBillingRate && (
                                         <div className="flex justify-between text-sm">
-                                          <span className="text-secondary-600">Worker Rate:</span>
+                                          <span className="text-secondary-600">Billing Rate:</span>
                                           <span>{(invoice as any).contract.customerCurrency || (invoice as any).contract.currency} {parseFloat((invoice as any).contract.customerBillingRate).toFixed(2)}/{(invoice as any).contract.customerBillingRateType || ((invoice as any).contract.rateType === 'daily' ? 'day' : 'hr')}</span>
                                         </div>
                                       )
@@ -1065,17 +1156,26 @@ export default function Invoices() {
                               </Badge>
                             </div>
                             <CardDescription className="flex items-center gap-2 mt-1">
-                              <Globe className="h-3.5 w-3.5 text-indigo-500 flex-shrink-0" />
-                              <span className="truncate">{invoice.toBusiness?.name || 'Host Client'}</span>
                               {isAutoGenerated ? (
-                                <Badge className="bg-purple-100 text-purple-700 text-[10px] py-0 ml-auto">Auto</Badge>
+                                <Badge className="bg-purple-100 text-purple-700 text-[10px] py-0">Auto-generated</Badge>
                               ) : (
-                                <Badge className="bg-indigo-100 text-indigo-700 text-[10px] py-0 ml-auto">Manual</Badge>
+                                <Badge className="bg-indigo-100 text-indigo-700 text-[10px] py-0">Manual</Badge>
                               )}
+                              <span className="text-xs text-secondary-500">{formatDate(invoice.invoiceDate)}</span>
                             </CardDescription>
                           </CardHeader>
 
                           <CardContent className="space-y-4">
+                            <InvoiceParties
+                              invoice={invoice}
+                              source={(invoice.invoiceCategory as InvoiceSource) || 'business_to_client'}
+                            />
+                            {isAutoGenerated && (
+                              <div className="rounded-md border border-purple-200 bg-purple-50/70 px-3 py-2 text-xs text-purple-900">
+                                <span className="font-semibold">Collected by SDP</span> from {invoice.toBusiness?.name || 'the host client'}.
+                                Your margin will be settled with you separately.
+                              </div>
+                            )}
                             <div className="space-y-2">
                               {invoice.worker && (
                                 <div className="flex justify-between text-sm">

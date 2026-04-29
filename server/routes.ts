@@ -7780,7 +7780,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }
               contract = {
                 id: c.id,
+                contractName: c.contractName || null,
                 jobTitle: resolvedTitle || c.jobDescription || '',
+                customRoleTitle: c.customRoleTitle || null,
                 employmentType: c.employmentType || '',
                 rateType: c.rateType || '',
                 rate: c.rate || '',
@@ -7911,7 +7913,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }
               contract = {
                 id: c.id,
+                contractName: c.contractName || null,
                 jobTitle: title || c.jobDescription || '',
+                customRoleTitle: c.customRoleTitle || null,
                 employmentType: c.employmentType,
                 rateType: c.rateType,
                 rate: c.rate,

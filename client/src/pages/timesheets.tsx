@@ -26,6 +26,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Clock, CheckCircle, XCircle, Calendar, User, Plus, Edit, Save, X,
   CalendarDays, DollarSign, Info, Upload, FileText, Trash2, Building2,
@@ -126,6 +127,7 @@ export default function Timesheets() {
   const [attachments, setAttachments] = useState<File[]>([]);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'submitted' | 'approved' | 'rejected'>('all');
+  const [timesheetTab, setTimesheetTab] = useState<'own' | 'provided'>('own');
   const [expandedTimesheetId, setExpandedTimesheetId] = useState<string | null>(null);
   const [expenseLines, setExpenseLines] = useState<ExpenseLine[]>([]);
   const [showExpenses, setShowExpenses] = useState(false);
@@ -1483,63 +1485,93 @@ export default function Timesheets() {
           )}
         </div>
 
-        {/* Timesheet list */}
-        {filteredTimesheets.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="py-16 text-center">
-              <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-primary-50 flex items-center justify-center">
-                <Clock className="w-8 h-8 text-primary-500" />
+        {/* Own timesheets list (extracted so it can be used inside the tab and standalone) */}
+        {(() => {
+          const ownList = filteredTimesheets.length === 0 ? (
+            <Card className="border-dashed">
+              <CardContent className="py-16 text-center">
+                <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-primary-50 flex items-center justify-center">
+                  <Clock className="w-8 h-8 text-primary-500" />
+                </div>
+                <h3 className="text-lg font-semibold text-foreground mb-1">
+                  {statusFilter === 'all'
+                    ? isWorker
+                      ? "No timesheets yet"
+                      : providedTimesheets.length > 0
+                        ? "No timesheets from your own workers"
+                        : "No timesheets submitted"
+                    : `No ${statusFilter} timesheets`}
+                </h3>
+                <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                  {statusFilter === 'all' && isWorker
+                    ? "Create your first timesheet to start tracking your work hours and submit them for approval."
+                    : statusFilter !== 'all'
+                    ? `Try selecting a different status filter or clearing your filters to see other timesheets.`
+                    : providedTimesheets.length > 0
+                    ? "Your own workers haven't submitted any timesheets yet. Switch to the \"Workers Provided to You\" tab to review timesheets from workers placed at your site."
+                    : "Workers haven't submitted any timesheets yet."}
+                </p>
+                {isWorker && activeTimesheetContract && statusFilter === 'all' && (
+                  <Button className="mt-4 gap-2" onClick={() => setShowCreateTimesheet(true)}>
+                    <Plus className="h-4 w-4" />Create Timesheet
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          ) : viewMode === 'list' ? (
+            <Card className="overflow-hidden shadow-sm">
+              {/* List header */}
+              <div className="flex items-center gap-3 px-4 py-2.5 bg-muted/40 border-b text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                <div className="flex-1">Period{!isWorker && ' / Worker'}</div>
+                <div className="w-20 text-right">Hours</div>
+                {!isWorker && <div className="w-32">Business</div>}
+                <div className="w-24 text-center">Status</div>
+                <div className="w-28 text-right">Actions</div>
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-1">
-                {statusFilter === 'all'
-                  ? isWorker ? "No timesheets yet" : "No timesheets submitted"
-                  : `No ${statusFilter} timesheets`}
-              </h3>
-              <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                {statusFilter === 'all' && isWorker
-                  ? "Create your first timesheet to start tracking your work hours and submit them for approval."
-                  : statusFilter !== 'all'
-                  ? `Try selecting a different status filter or clearing your filters to see other timesheets.`
-                  : "Workers haven't submitted any timesheets yet."}
-              </p>
-              {isWorker && activeTimesheetContract && statusFilter === 'all' && (
-                <Button className="mt-4 gap-2" onClick={() => setShowCreateTimesheet(true)}>
-                  <Plus className="h-4 w-4" />Create Timesheet
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        ) : viewMode === 'list' ? (
-          <Card className="overflow-hidden shadow-sm">
-            {/* List header */}
-            <div className="flex items-center gap-3 px-4 py-2.5 bg-muted/40 border-b text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              <div className="flex-1">Period{!isWorker && ' / Worker'}</div>
-              <div className="w-20 text-right">Hours</div>
-              {!isWorker && <div className="w-32">Business</div>}
-              <div className="w-24 text-center">Status</div>
-              <div className="w-28 text-right">Actions</div>
+              {filteredTimesheets.map((t: any) => <TimesheetRow key={t.id} timesheet={t} />)}
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {filteredTimesheets.map((t: any) => <TimesheetCard key={t.id} timesheet={t} />)}
             </div>
-            {filteredTimesheets.map((t: any) => <TimesheetRow key={t.id} timesheet={t} />)}
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {filteredTimesheets.map((t: any) => <TimesheetCard key={t.id} timesheet={t} />)}
-          </div>
-        )}
+          );
 
-        {/* Provided timesheets section for business host clients */}
-        {isBusiness && providedTimesheets.length > 0 && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 pt-2 border-t">
-              <Building2 className="h-4 w-4 text-blue-600" />
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Workers Provided to You</h3>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Timesheets from workers placed at your organisation by a business partner. Approve to confirm hours worked at your site.
-            </p>
-            {providedTimesheets.map((t: any) => <TimesheetCard key={`provided-${t.id}`} timesheet={t} provided />)}
-          </div>
-        )}
+          // When this is a business and there ARE provided timesheets, show the two lists in tabs.
+          if (isBusiness && providedTimesheets.length > 0) {
+            return (
+              <Tabs value={timesheetTab} onValueChange={(v) => setTimesheetTab(v as 'own' | 'provided')} className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="own" className="flex items-center gap-2" data-testid="tab-own-timesheets">
+                    <Clock className="h-4 w-4" />
+                    Your Workers' Timesheets
+                    <span className="ml-1 text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">{filteredTimesheets.length}</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="provided" className="flex items-center gap-2" data-testid="tab-provided-timesheets">
+                    <Building2 className="h-4 w-4" />
+                    Workers Provided to You
+                    <span className="ml-1 text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{providedTimesheets.length}</span>
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="own" className="mt-4">
+                  {ownList}
+                </TabsContent>
+
+                <TabsContent value="provided" className="mt-4 space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Timesheets from workers placed at your organisation by a business partner. Approve to confirm hours worked at your site.
+                  </p>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {providedTimesheets.map((t: any) => <TimesheetCard key={`provided-${t.id}`} timesheet={t} provided />)}
+                  </div>
+                </TabsContent>
+              </Tabs>
+            );
+          }
+
+          // No provided timesheets (or not a business) — just render the own list directly.
+          return ownList;
+        })()}
       </div>
     </div>
   );
