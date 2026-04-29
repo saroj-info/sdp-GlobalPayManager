@@ -260,6 +260,14 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     setProjectRateLines([]);
   }, [editMode, existingContract]);
 
+  // Sync preselectedWorkerId into form whenever it is provided (the modal may already be mounted
+  // when the parent sets preselectedWorkerId, so useState's lazy initializer won't capture it)
+  useEffect(() => {
+    if (preselectedWorkerId && !editMode) {
+      setFormData(prev => ({ ...prev, workerId: preselectedWorkerId }));
+    }
+  }, [preselectedWorkerId, editMode]);
+
   // Load existing project rate lines when editing a contract with multiple rate structure
   useEffect(() => {
     if (!editMode || !existingContract?.id || existingContract?.rateStructure !== 'multiple') return;
