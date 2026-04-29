@@ -690,15 +690,18 @@ export default function Timesheets() {
 
         <div className="flex justify-end flex-wrap gap-2 pt-2">
           <Button type="button" variant="outline" onClick={() => setShowCreateTimesheet(false)}>Cancel</Button>
-          <Button
-            type="submit"
-            variant="outline"
-            disabled={createTimesheetMutation.isPending}
-            onClick={() => { submitAfterCreateRef.current = false; }}
-          >
-            <Save className="mr-2 h-4 w-4" />
-            {createTimesheetMutation.isPending && !submitAfterCreateRef.current ? 'Saving...' : 'Save as Draft'}
-          </Button>
+          {/* Workers can save as draft and submit later; business/SDP creating on behalf always submits */}
+          {isWorker && (
+            <Button
+              type="submit"
+              variant="outline"
+              disabled={createTimesheetMutation.isPending}
+              onClick={() => { submitAfterCreateRef.current = false; }}
+            >
+              <Save className="mr-2 h-4 w-4" />
+              {createTimesheetMutation.isPending && !submitAfterCreateRef.current ? 'Saving...' : 'Save as Draft'}
+            </Button>
+          )}
           <Button
             type="submit"
             disabled={createTimesheetMutation.isPending}
@@ -706,7 +709,9 @@ export default function Timesheets() {
             className="bg-green-600 hover:bg-green-700"
           >
             <CheckCircle className="mr-2 h-4 w-4" />
-            {createTimesheetMutation.isPending && submitAfterCreateRef.current ? 'Submitting...' : 'Submit for Approval'}
+            {createTimesheetMutation.isPending && submitAfterCreateRef.current
+              ? (isWorker ? 'Submitting...' : 'Creating...')
+              : (isWorker ? 'Submit for Approval' : 'Create & Submit')}
           </Button>
         </div>
       </form>
@@ -718,8 +723,18 @@ export default function Timesheets() {
   const TimesheetCard = ({ timesheet, provided = false }: { timesheet: any; provided?: boolean }) => {
     const expanded = expandedTimesheetId === timesheet.id;
     const s = timesheet.status;
-    const pStart = new Date(timesheet.periodStart).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+    const pStart = new Date(timesheet.periodStart).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
     const pEnd = new Date(timesheet.periodEnd).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+
+    // Contract identification (added so users can see which contract a timesheet belongs to)
+    const contractLabel: string =
+      timesheet.contractName
+      || timesheet.contractCustomRoleTitle
+      || timesheet.contract?.contractName
+      || timesheet.contract?.customRoleTitle
+      || timesheet.contract?.roleTitle?.title
+      || timesheet.contract?.roleTitle?.name
+      || 'Contract';
 
     // Per-contract timesheet approver gating
     const approverRole: string | null = timesheet.timesheetApproverRole || null;
@@ -877,6 +892,46 @@ export default function Timesheets() {
                   <XCircle className="h-3 w-3" />Rejection Reason
                 </div>
                 <div className="text-sm text-red-900">{timesheet.rejectionReason}</div>
+              </div>
+            )}
+
+            {/* Contract & period summary */}
+            <div className="rounded-lg border border-secondary-200 bg-white p-3">
+              <div className="text-[11px] font-semibold text-secondary-600 uppercase tracking-wide mb-2">Contract & Period</div>
+              <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <FileText className="h-3 w-3 text-secondary-500" />
+                  <span className="text-secondary-600">Contract</span>
+                  <span className="font-medium text-secondary-900">{contractLabel}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <CalendarDays className="h-3 w-3 text-secondary-500" />
+                  <span className="text-secondary-600">Period</span>
+                  <span className="font-medium text-secondary-900">{pStart} – {pEnd}</span>
+                </div>
+                {(timesheet.contractStartDate || timesheet.contractEndDate) && (
+                  <div className="flex items-center gap-1.5">
+                    <CalendarDays className="h-3 w-3 text-secondary-500" />
+                    <span className="text-secondary-600">Contract dates</span>
+                    <span className="font-medium text-secondary-900">
+                      {timesheet.contractStartDate
+                        ? new Date(timesheet.contractStartDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
+                        : '—'}
+                      {' – '}
+                      {timesheet.contractEndDate
+                        ? new Date(timesheet.contractEndDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
+                        : 'Ongoing'}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Approval status hint when current user can't approve */}
+            {!isWorker && s === 'submitted' && !canApproveByRole && approverRole === 'host_client' && !provided && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-sm text-amber-900 flex items-center gap-2">
+                <Clock className="h-4 w-4 text-amber-600" />
+                Waiting for approval by host client
               </div>
             )}
 

@@ -6394,7 +6394,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
       
-      // Helper to attach the contract's approver role and customerBusinessId so the UI can gate buttons
+      // Helper to attach the contract's approver role, identifying info and customerBusinessId
+      // so the UI can both gate action buttons and show which contract a timesheet belongs to.
       const attachContractMeta = async (ts: any) => {
         if (!ts.contractId) return ts;
         try {
@@ -6404,6 +6405,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             timesheetApproverRole: c?.timesheetApproverRole || null,
             contractEmployingBusinessId: c?.businessId || null,
             contractCustomerBusinessId: c?.customerBusinessId || null,
+            contractName: c?.contractName || null,
+            contractCustomRoleTitle: c?.customRoleTitle || null,
+            contractRoleTitleId: c?.roleTitleId || null,
+            contractStartDate: c?.startDate || null,
+            contractEndDate: c?.endDate || null,
+            contractRateType: c?.rateType || null,
           };
         } catch {
           return ts;
