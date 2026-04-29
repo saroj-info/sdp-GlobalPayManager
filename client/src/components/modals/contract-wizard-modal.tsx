@@ -321,7 +321,11 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   // Filter and search workers
   const filteredWorkers = useMemo(() => {
     let filtered = workers.filter((worker: any) => worker.id && worker.id.trim() !== '');
-    
+
+    // Only workers who have accepted their invitation (i.e. have a linked user account)
+    // can have a contract created — exclude Pending/Invited workers.
+    filtered = filtered.filter((worker: any) => !!worker.userId);
+
     // Filter by business if SDP user is creating on behalf
     if (isSDPInternal && formData.onBehalf && formData.selectedBusinessId) {
       filtered = filtered.filter((worker: any) => worker.businessId === formData.selectedBusinessId);
