@@ -1368,9 +1368,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         if (data.accountType === 'contractor') {
           await emailService.sendContractorRegistrationConfirmation(data.email, data.firstName);
-        } else {
-          await emailService.sendBusinessRegistrationConfirmation(data.email, data.firstName, data.accountType);
         }
+        // For business signups (enterprise/agency) the welcome email is sent
+        // after the user verifies their email — see /api/verify-email/:token below.
         await emailService.sendEmailVerification(data.email, data.firstName, emailVerificationToken);
       } catch (emailError: any) {
         console.error('Failed to send welcome or verification email:', emailError);
@@ -1430,6 +1430,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...user,
         emailVerified: true,
       });
+
+      // Send the "Welcome to SDP Global Pay" email AFTER verification for business users.
+      // (Contractors get their welcome email at signup; business users get it here
+      //  so they don't receive a welcome before they've actually confirmed the address.)
+      if (user.userType === 'business_user' && user.email && user.firstName) {
+        try {
+          await emailService.sendBusinessRegistrationConfirmation(
+            user.email,
+            user.firstName,
+            'enterprise'
+          );
+        } catch (welcomeEmailError: any) {
+          console.error('Failed to send post-verification welcome email:', welcomeEmailError);
+          // Don't fail verification if the welcome email fails to send
+        }
+      }
 
       res.redirect(`${frontendUrl}/login?verified=true`);
     } catch (error: any) {
