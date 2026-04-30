@@ -123,15 +123,15 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="w-64 bg-white dark:bg-gray-900 shadow-lg border-r border-secondary-100 dark:border-gray-800">
-      <div className="p-6">
-        <div className="mb-8">
+    <aside className="w-64 h-screen flex flex-col bg-white dark:bg-gray-900 shadow-lg border-r border-secondary-100 dark:border-gray-800">
+      {/* Top: logo + user info — does not scroll */}
+      <div className="px-6 pt-6 pb-4">
+        <div className="mb-6">
           <SDPLogo size="lg" variant="horizontal" theme="light" />
         </div>
-        
-        {/* User Info */}
+
         {user && (user as any) && (
-          <div className="mb-6 p-4 bg-gradient-to-r from-primary-50 to-blue-50 dark:from-gray-800 dark:to-gray-700 rounded-xl border border-primary-100 dark:border-gray-600">
+          <div className="p-4 bg-gradient-to-r from-primary-50 to-blue-50 dark:from-gray-800 dark:to-gray-700 rounded-xl border border-primary-100 dark:border-gray-600">
             <div>
               <p className="text-sm font-semibold text-secondary-900 dark:text-white">
                 {(user as any)?.business?.name || (user as any)?.name || 'Personal Account'}
@@ -140,7 +140,6 @@ export function Sidebar() {
                 {(() => {
                   const userData = user as any;
                   if (userData?.userType === 'sdp_internal') {
-                    // Map sdpRole to proper role descriptions
                     switch (userData.sdpRole) {
                       case 'sdp_super_admin':
                         return 'Super Admin';
@@ -161,34 +160,34 @@ export function Sidebar() {
             </div>
           </div>
         )}
+      </div>
 
-        {/* Navigation Menu */}
-        <nav className="space-y-1">
-          {navigation.map((item) => (
-            <Link key={item.name} href={item.href}>
-              <div className={`flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200 cursor-pointer ${
-                isActive(item.href)
-                  ? 'bg-blue-600 text-white shadow-lg'
-                  : 'text-secondary-600 dark:text-gray-300 hover:bg-primary-50 dark:hover:bg-gray-800 hover:text-primary-700 dark:hover:text-primary-400'
-              }`}>
-                <i className={`${item.icon} w-5 ${isActive(item.href) ? 'text-white' : 'text-secondary-500 dark:text-gray-400'}`}></i>
-                <span className={`ml-3 ${isActive(item.href) ? 'text-white font-bold' : ''}`}>{item.name}</span>
-              </div>
-            </Link>
-          ))}
-        </nav>
+      {/* Middle: scrollable nav — takes the remaining height so the footer stays pinned */}
+      <nav className="flex-1 overflow-y-auto px-6 pb-2 space-y-1">
+        {navigation.map((item) => (
+          <Link key={item.name} href={item.href}>
+            <div className={`flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200 cursor-pointer ${
+              isActive(item.href)
+                ? 'bg-blue-600 text-white shadow-lg'
+                : 'text-secondary-600 dark:text-gray-300 hover:bg-primary-50 dark:hover:bg-gray-800 hover:text-primary-700 dark:hover:text-primary-400'
+            }`}>
+              <i className={`${item.icon} w-5 ${isActive(item.href) ? 'text-white' : 'text-secondary-500 dark:text-gray-400'}`}></i>
+              <span className={`ml-3 ${isActive(item.href) ? 'text-white font-bold' : ''}`}>{item.name}</span>
+            </div>
+          </Link>
+        ))}
+      </nav>
 
-        {/* Logout Section */}
-        <div className="mt-auto pt-6 border-t border-secondary-100 dark:border-gray-700">
-          <button 
-            onClick={handleLogout}
-            className="w-full flex items-center px-4 py-3 text-sm font-medium text-secondary-600 dark:text-gray-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 rounded-xl transition-all duration-200"
-            data-testid="button-logout-sidebar"
-          >
-            <i className="fas fa-sign-out-alt w-5 text-secondary-500 dark:text-gray-400"></i>
-            <span className="ml-3">Logout</span>
-          </button>
-        </div>
+      {/* Bottom: logout — pinned, on the same white sidebar background */}
+      <div className="px-6 py-4 border-t border-secondary-100 dark:border-gray-700 bg-white dark:bg-gray-900">
+        <button
+          onClick={handleLogout}
+          className="w-full flex items-center px-4 py-3 text-sm font-medium text-secondary-600 dark:text-gray-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 rounded-xl transition-all duration-200"
+          data-testid="button-logout-sidebar"
+        >
+          <i className="fas fa-sign-out-alt w-5 text-secondary-500 dark:text-gray-400"></i>
+          <span className="ml-3">Logout</span>
+        </button>
       </div>
     </aside>
   );

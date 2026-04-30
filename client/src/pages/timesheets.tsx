@@ -128,7 +128,16 @@ export default function Timesheets() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'submitted' | 'approved' | 'rejected'>('all');
   const [timesheetTab, setTimesheetTab] = useState<'own' | 'provided'>('own');
-  const [expandedTimesheetId, setExpandedTimesheetId] = useState<string | null>(null);
+  // Track expanded timesheets as a Set so multiple cards can be expanded independently.
+  const [expandedTimesheetIds, setExpandedTimesheetIds] = useState<Set<string>>(new Set());
+  const toggleTimesheetExpanded = (id: string) => {
+    setExpandedTimesheetIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const [expenseLines, setExpenseLines] = useState<ExpenseLine[]>([]);
   const [showExpenses, setShowExpenses] = useState(false);
   // Search & filter state
@@ -723,7 +732,7 @@ export default function Timesheets() {
   // ── Timesheet Card (grid mode) ─────────────────────────────────────────────
 
   const TimesheetCard = ({ timesheet, provided = false }: { timesheet: any; provided?: boolean }) => {
-    const expanded = expandedTimesheetId === timesheet.id;
+    const expanded = expandedTimesheetIds.has(timesheet.id);
     const s = timesheet.status;
     const pStart = new Date(timesheet.periodStart).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
     const pEnd = new Date(timesheet.periodEnd).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -770,7 +779,7 @@ export default function Timesheets() {
       : `${totalHours > 0 ? totalHours.toFixed(1) : '0'}h`;
 
     return (
-      <Card className={`border-l-4 ${STATUS_LEFT[s] || 'border-l-gray-300'} ${provided ? 'bg-blue-50/30' : ''} hover:shadow-md transition-shadow`}>
+      <Card className={`flex flex-col h-full border-l-4 ${STATUS_LEFT[s] || 'border-l-gray-300'} ${provided ? 'bg-blue-50/30' : ''} hover:shadow-md transition-shadow`}>
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-3 flex-1 min-w-0">
@@ -813,7 +822,7 @@ export default function Timesheets() {
                 variant="ghost"
                 size="sm"
                 className="h-8 w-8 p-0 rounded-full"
-                onClick={() => setExpandedTimesheetId(expanded ? null : timesheet.id)}
+                onClick={() => toggleTimesheetExpanded(timesheet.id)}
               >
                 {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </Button>
@@ -822,7 +831,7 @@ export default function Timesheets() {
         </CardHeader>
 
         {expanded && (
-          <CardContent className="pt-0 space-y-4">
+          <CardContent className="pt-0 space-y-4 flex-1">
             {/* Entries summary */}
             {timesheet.entries && timesheet.entries.length > 0 && (
               <div className="rounded-lg border bg-secondary-50/40">
@@ -835,7 +844,7 @@ export default function Timesheets() {
                     {timesheet.entries.length} {timesheet.entries.length === 1 ? 'entry' : 'entries'} · <span className="text-primary-700 font-semibold">{totalDisplay}</span>
                   </span>
                 </div>
-                <div className="divide-y divide-secondary-200/60 max-h-56 overflow-y-auto">
+                <div className="divide-y divide-secondary-200/60">
                   {timesheet.entries.map((entry: any, i: number) => {
                     const dt = new Date(entry.date);
                     const dayShort = dt.toLocaleDateString('en-AU', { weekday: 'short' });
