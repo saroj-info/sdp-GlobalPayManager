@@ -6523,20 +6523,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userType = req.user?.userType;
       
       if (userType === 'worker') {
-        // Workers can create their own timesheets
+        // Workers can create their own timesheets — but only against signed contracts.
         const worker = await storage.getWorkerByUserId(userId);
         if (!worker) {
           return res.status(404).json({ message: "Worker profile not found" });
         }
-        
-        // Get an active contract for the worker to associate the timesheet with
+
         const contracts = await storage.getContractsByWorker(worker.id);
-        const activeContract = contracts.find(c => c.status === 'active');
-        
+        const { contractId: requestedContractId } = req.body || {};
+        const candidates = requestedContractId
+          ? contracts.filter(c => c.id === requestedContractId)
+          : contracts.filter(c => c.status === 'active');
+        const activeContract = candidates.find(c => c.status === 'active' && !!c.signedAt);
+
         if (!activeContract) {
-          return res.status(400).json({ message: "No active contract found for worker" });
+          // Surface the right reason: unsigned vs missing-active.
+          const hasUnsignedActive = candidates.some(c => c.status === 'active' && !c.signedAt);
+          if (hasUnsignedActive) {
+            return res.status(400).json({ message: "Cannot create a timesheet for an unsigned contract. Please sign the contract first." });
+          }
+          return res.status(400).json({ message: "No active signed contract found for worker" });
         }
-        
+
         const timesheetData = {
           ...req.body,
           contractId: activeContract.id,
@@ -6544,7 +6552,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           businessId: worker.businessId,
           createdBy: userId,
         };
-        
+
         const timesheet = await storage.createTimesheetWithEntries(timesheetData);
         res.json(timesheet);
       } else if (userType === 'sdp_internal' || userType === 'business_user') {
@@ -6587,13 +6595,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!contract.requiresTimesheet) {
           return res.status(400).json({ message: "Contract does not require timesheets" });
         }
-        
+
+        if (!contract.signedAt) {
+          return res.status(400).json({ message: "Cannot create a timesheet for an unsigned contract. Please sign the contract first." });
+        }
+
         const timesheetData = {
           ...req.body,
           businessId: worker.businessId,
           createdBy: userId,
         };
-        
+
         const timesheet = await storage.createTimesheetWithEntries(timesheetData);
         res.json(timesheet);
       } else {

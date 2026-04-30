@@ -208,12 +208,15 @@ export default function Timesheets() {
     }
   }, [periodStart, periodEnd]);
 
-  // Worker's eligible timesheet contracts
+  // Worker's eligible timesheet contracts — only contracts that have actually been signed
+  // (a contract may be 'active' on the server but still awaiting worker/business signature).
+  const isContractSigned = (c: any) => !!c?.signedAt || c?.derivedSignatureStatus === 'signed';
   const workerTimesheetContracts = useMemo(() => {
     if (!isWorker) return [];
     return workerContracts.filter((c: any) =>
       c.requiresTimesheet && c.status === 'active' &&
-      c.firstTimesheetStartDate && c.timesheetFrequency
+      c.firstTimesheetStartDate && c.timesheetFrequency &&
+      isContractSigned(c)
     );
   }, [isWorker, workerContracts]);
 
@@ -728,6 +731,96 @@ export default function Timesheets() {
       </form>
     </Form>
   );
+
+  // ── Contract Summary Panel (shown above the suggested periods in create dialogs) ──
+  const ContractSummaryPanel = ({ contract }: { contract: any }) => {
+    if (!contract) return null;
+    const titleCase = (s?: string | null) =>
+      s ? String(s).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : '—';
+    const contractLabel = contract.contractName
+      || contract.customRoleTitle
+      || contract.roleTitle?.title
+      || contract.roleTitle?.name
+      || 'Contract';
+    const roleLabel = contract.customRoleTitle || contract.roleTitle?.title || contract.roleTitle?.name || titleCase(contract.employmentType);
+    const fmt = (d: string | Date | null | undefined) =>
+      d ? new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+    const startEnd = `${fmt(contract.startDate)} – ${contract.endDate ? fmt(contract.endDate) : 'Ongoing'}`;
+    const paymentSchedule = contract.paymentScheduleType === 'days_after'
+      ? `${contract.paymentDaysAfterPeriod ?? '—'} day${contract.paymentDaysAfterPeriod === 1 ? '' : 's'} after period end`
+      : contract.paymentDay
+        ? `On ${contract.paymentDay}`
+        : '—';
+    const customerName = contract.customerBusiness?.name || contract.clientName || null;
+
+    return (
+      <div className="rounded-lg border border-primary-100 bg-primary-50/40 p-4 mb-4">
+        <div className="flex items-start justify-between gap-3 pb-3 border-b border-primary-100/60">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-primary-700/80">Contract</div>
+            <div className="text-sm font-semibold text-secondary-900 truncate" title={contractLabel}>{contractLabel}</div>
+            <div className="text-xs text-secondary-600 truncate">{roleLabel} · {titleCase(contract.employmentType)}</div>
+          </div>
+          {contract.country?.name && (
+            <span className="text-[11px] font-medium text-secondary-700 bg-white border border-secondary-200 rounded-full px-2 py-0.5 inline-flex items-center gap-1 flex-shrink-0">
+              <Globe className="h-3 w-3" />{contract.country.name}
+            </span>
+          )}
+        </div>
+
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3 text-xs">
+          <div>
+            <dt className="text-secondary-500 uppercase tracking-wide text-[10px]">Worker Rate</dt>
+            <dd className="font-medium text-secondary-900">
+              {contract.rateStructure === 'multiple'
+                ? `Multiple rates`
+                : `${contract.currency || ''} ${contract.rate ? parseFloat(contract.rate).toLocaleString() : '—'} / ${contract.rateType || ''}`}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-secondary-500 uppercase tracking-wide text-[10px]">Contract Dates</dt>
+            <dd className="font-medium text-secondary-900">{startEnd}</dd>
+          </div>
+          {contract.timesheetFrequency && (
+            <div>
+              <dt className="text-secondary-500 uppercase tracking-wide text-[10px]">Timesheet Frequency</dt>
+              <dd className="font-medium text-secondary-900">{titleCase(contract.timesheetFrequency)}</dd>
+            </div>
+          )}
+          {contract.timesheetCalculationMethod && (
+            <div>
+              <dt className="text-secondary-500 uppercase tracking-wide text-[10px]">Calculation Method</dt>
+              <dd className="font-medium text-secondary-900">{titleCase(contract.timesheetCalculationMethod)}</dd>
+            </div>
+          )}
+          {contract.paymentScheduleType && (
+            <div>
+              <dt className="text-secondary-500 uppercase tracking-wide text-[10px]">Payment Schedule</dt>
+              <dd className="font-medium text-secondary-900">{paymentSchedule}</dd>
+            </div>
+          )}
+          {contract.timesheetApproverRole && (
+            <div>
+              <dt className="text-secondary-500 uppercase tracking-wide text-[10px]">Approved By</dt>
+              <dd className="font-medium text-secondary-900">{titleCase(contract.timesheetApproverRole)}</dd>
+            </div>
+          )}
+          {contract.noticePeriodDays != null && (
+            <div>
+              <dt className="text-secondary-500 uppercase tracking-wide text-[10px]">Notice Period</dt>
+              <dd className="font-medium text-secondary-900">{contract.noticePeriodDays} day{contract.noticePeriodDays === 1 ? '' : 's'}</dd>
+            </div>
+          )}
+          {customerName && (
+            <div className="col-span-2">
+              <dt className="text-secondary-500 uppercase tracking-wide text-[10px]">Host / Customer</dt>
+              <dd className="font-medium text-secondary-900 truncate">{customerName}</dd>
+            </div>
+          )}
+        </dl>
+      </div>
+    );
+  };
 
   // ── Timesheet Card (grid mode) ─────────────────────────────────────────────
 
@@ -1294,6 +1387,8 @@ export default function Timesheets() {
                   <DialogDescription>Select a suggested period or enter dates manually, then log your time entries below.</DialogDescription>
                 </DialogHeader>
 
+                <ContractSummaryPanel contract={activeTimesheetContract} />
+
                 {suggestedPeriods.length > 0 && (
                   <div className="space-y-2 mb-4">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Suggested Periods</p>
@@ -1361,7 +1456,7 @@ export default function Timesheets() {
                       <Select value={selectedContractId} onValueChange={setSelectedContractId}>
                         <SelectTrigger className="max-w-full"><SelectValue placeholder="Choose a contract..." className="truncate" /></SelectTrigger>
                         <SelectContent className="max-w-[min(90vw,32rem)]">
-                          {selectedWorkerContracts.filter((c: any) => c.requiresTimesheet).map((c: any) => {
+                          {selectedWorkerContracts.filter((c: any) => c.requiresTimesheet && isContractSigned(c)).map((c: any) => {
                             const role = c.customRoleTitle || c.roleTitle?.name || c.roleTitle?.title || c.employmentType;
                             const start = c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A';
                             const end = c.endDate ? format(new Date(c.endDate), 'MMM yyyy') : 'Ongoing';
@@ -1389,6 +1484,7 @@ export default function Timesheets() {
 
                 {selectedWorkerId && selectedContractId && activeTimesheetContract && (
                   <>
+                    <ContractSummaryPanel contract={activeTimesheetContract} />
                     {suggestedPeriods.length > 0 && (
                       <div className="space-y-2 mb-4">
                         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Suggested Periods</p>
