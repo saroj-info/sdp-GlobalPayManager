@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -53,14 +53,14 @@ function ContractStatusBadge({ contract }: { contract: any }) {
   const label = getContractStatusLabel(derivedStatus);
 
   return (
-    <div className="flex gap-2">
-      <Badge variant={variant} className="gap-1">
-        <Icon className="h-3 w-3" />
+    <div className="flex gap-2 flex-shrink-0">
+      <Badge variant={variant} className="gap-1 whitespace-nowrap">
+        <Icon className="h-3 w-3 flex-shrink-0" />
         {label}
       </Badge>
       {termExpired && (
-        <Badge variant="destructive" className="gap-1">
-          <AlertCircle className="h-3 w-3" />
+        <Badge variant="destructive" className="gap-1 whitespace-nowrap">
+          <AlertCircle className="h-3 w-3 flex-shrink-0" />
           Term Expired
         </Badge>
       )}
@@ -83,6 +83,14 @@ function SdpBillingLinesPanel({ contractId }: { contractId: string }) {
     enabled: isOpen,
   });
 
+  // After any billing-line mutation, also invalidate the contracts list so the
+  // billing-lines indicator on each card refreshes without a manual page reload.
+  const invalidateBillingLineCaches = () => {
+    queryClient.invalidateQueries({ queryKey: ['/api/contracts', contractId, 'billing-lines'] });
+    queryClient.invalidateQueries({ queryKey: ['/api/contracts'] });
+    queryClient.invalidateQueries({ queryKey: ['/api/contracts/business'] });
+  };
+
   const saveMutation = useMutation({
     mutationFn: async (line: any) => {
       if (line.id) {
@@ -93,7 +101,7 @@ function SdpBillingLinesPanel({ contractId }: { contractId: string }) {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/contracts', contractId, 'billing-lines'] });
+      invalidateBillingLineCaches();
       setEditingLine(null);
       setNewLine(null);
       toast({ title: "Saved", description: "Billing line updated." });
@@ -106,7 +114,7 @@ function SdpBillingLinesPanel({ contractId }: { contractId: string }) {
       await apiRequest('DELETE', `/api/contracts/${contractId}/billing-lines/${lineId}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/contracts', contractId, 'billing-lines'] });
+      invalidateBillingLineCaches();
       toast({ title: "Deleted", description: "Billing line removed." });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -911,91 +919,147 @@ export default function ContractsPage() {
 
           {/* Contracts Display - Card or List View */}
           {viewMode === 'card' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredAndSortedContracts.map((contract) => (
-              <Card key={contract.id} className="hover:shadow-md transition-shadow" data-testid={`card-contract-${contract.id}`}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="space-y-1">
-                      <CardTitle className="text-lg leading-none">
-                        {contract.contractName || contract.customRoleTitle || contract.roleTitle?.name || 'Contract'}
-                      </CardTitle>
-                      <CardDescription className="text-sm">
-                        {contract.worker?.firstName} {contract.worker?.lastName}
-                      </CardDescription>
-                    </div>
-                    <ContractStatusBadge contract={contract} />
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex items-center text-sm text-muted-foreground">
-                    <Building2 className="mr-2 h-4 w-4" />
-                    {contract.employmentType?.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
-                  </div>
-                  
-                  <div className="flex items-center text-sm text-muted-foreground">
-                    <MapPin className="mr-2 h-4 w-4" />
-                    {contract.country?.name}
-                  </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-fr">
+              {filteredAndSortedContracts.map((contract) => {
+                const employmentLabel = contract.employmentType?.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
+                const isMultiRate = contract.rateStructure === 'multiple' && Array.isArray((contract as any).rateLines) && (contract as any).rateLines.length > 0;
+                const fmt = (d: string | Date) => new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' });
+                return (
+                  <Card
+                    key={contract.id}
+                    className="flex flex-col hover:shadow-md hover:border-primary/30 transition-all overflow-hidden"
+                    data-testid={`card-contract-${contract.id}`}
+                  >
+                    <CardHeader className="pb-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1 flex-1 min-w-0">
+                          <CardTitle
+                            className="text-lg leading-snug line-clamp-2 break-words"
+                            title={contract.contractName || contract.customRoleTitle || contract.roleTitle?.name || 'Contract'}
+                          >
+                            {contract.contractName || contract.customRoleTitle || contract.roleTitle?.name || 'Contract'}
+                          </CardTitle>
+                          <CardDescription className="text-sm truncate">
+                            {contract.worker?.firstName} {contract.worker?.lastName}
+                          </CardDescription>
+                        </div>
+                        <div className="flex-shrink-0">
+                          <ContractStatusBadge contract={contract} />
+                        </div>
+                      </div>
 
-                  <div className="flex items-center text-sm text-muted-foreground">
-                    <DollarSign className="mr-2 h-4 w-4" />
-                    {contract.currency} {contract.rate} / {contract.rateType}
-                  </div>
+                      {/* Inline meta-pills — uniform height regardless of content */}
+                      <div className="flex flex-wrap gap-1.5 pt-2">
+                        {employmentLabel && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-secondary-700 bg-secondary-100 rounded-full px-2 py-0.5">
+                            <Building2 className="h-3 w-3" />{employmentLabel}
+                          </span>
+                        )}
+                        {contract.country?.name && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-secondary-700 bg-secondary-100 rounded-full px-2 py-0.5">
+                            <MapPin className="h-3 w-3" />{contract.country.name}
+                          </span>
+                        )}
+                        {(contract as any).thirdPartyBusinessName && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                            <Building2 className="h-3 w-3" />3rd Party
+                          </span>
+                        )}
+                      </div>
+                    </CardHeader>
 
-                  <div className="text-xs text-muted-foreground">
-                    Created: {new Date(contract.createdAt).toLocaleDateString()}
-                  </div>
+                    <CardContent className="flex flex-col gap-3 flex-1">
+                      {/* Compensation block — visually distinct */}
+                      <div className="rounded-lg border border-emerald-100 bg-emerald-50/40 px-3 py-2.5">
+                        {isMultiRate ? (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                                <DollarSign className="h-3.5 w-3.5" />Multiple Rates
+                              </span>
+                              <span className="text-[11px] font-medium text-emerald-700/80">
+                                {(contract as any).rateLines.length} project{(contract as any).rateLines.length === 1 ? '' : 's'}
+                              </span>
+                            </div>
+                            <div className="mt-2 divide-y divide-emerald-100">
+                              {(contract as any).rateLines.map((rl: any) => (
+                                <div key={rl.id} className="flex items-center justify-between py-1 text-xs">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className="font-medium truncate text-secondary-900">{rl.projectName || rl.description || 'Rate line'}</span>
+                                    {rl.isDefault && <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">Default</Badge>}
+                                  </div>
+                                  <span className="font-semibold tabular-nums whitespace-nowrap text-secondary-900">
+                                    {rl.currency || contract.currency} {parseFloat(rl.rate || '0').toLocaleString()}/{(rl.rateType || contract.rateType) === 'daily' ? 'day' : (rl.rateType || contract.rateType) === 'hourly' ? 'hr' : (rl.rateType || contract.rateType)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex items-center justify-between">
+                            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                              <DollarSign className="h-3.5 w-3.5" />Worker Rate
+                            </span>
+                            <span className="text-sm font-semibold tabular-nums text-secondary-900">
+                              {contract.currency} {contract.rate} <span className="text-secondary-500 font-normal">/ {contract.rateType}</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
 
-                  <div className="text-xs text-muted-foreground">
-                    Start Date: {new Date(contract.startDate).toLocaleDateString()}
-                  </div>
+                      {/* Optional SDP-only billing-lines indicator */}
+                      {((user as any)?.userType === 'sdp_internal' || (user as any)?.userType === 'sdp_super_admin') && (
+                        <div className={`flex items-center text-xs font-medium rounded-md px-2.5 py-1.5 border ${
+                          (contract as any).billingLines?.length > 0
+                            ? 'text-blue-700 bg-blue-50 border-blue-200'
+                            : 'text-gray-500 bg-gray-50 border-gray-200'
+                        }`}>
+                          <DollarSign className={`mr-1.5 h-3.5 w-3.5 flex-shrink-0 ${
+                            (contract as any).billingLines?.length > 0 ? 'text-blue-600' : 'text-gray-400'
+                          }`} />
+                          {(contract as any).billingLines?.length > 0
+                            ? `${(contract as any).billingLines.length} Billing Line${(contract as any).billingLines.length > 1 ? 's' : ''}`
+                            : 'No Billing Lines'}
+                        </div>
+                      )}
 
-                  {contract.endDate && (
-                    <div className="text-xs text-muted-foreground">
-                      End Date: {new Date(contract.endDate).toLocaleDateString()}
-                    </div>
-                  )}
+                      {/* Spacer pushes the dates block to the bottom of the content area */}
+                      <div className="flex-1" />
 
-                  {(contract as any).thirdPartyBusinessName && (
-                    <div className="flex items-center text-xs font-medium text-amber-700 bg-amber-50 rounded px-2 py-1 border border-amber-200">
-                      <Building2 className="mr-1.5 h-3 w-3 text-amber-600 flex-shrink-0" />
-                      3rd Party Vendor: {(contract as any).thirdPartyBusinessName}
-                    </div>
-                  )}
+                      {/* Compact dates block — same shape on every card */}
+                      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] pt-3 border-t border-secondary-100">
+                        <div>
+                          <dt className="text-secondary-500 uppercase tracking-wide">Start</dt>
+                          <dd className="font-medium text-secondary-900">{fmt(contract.startDate)}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-secondary-500 uppercase tracking-wide">End</dt>
+                          <dd className="font-medium text-secondary-900">{contract.endDate ? fmt(contract.endDate) : 'Ongoing'}</dd>
+                        </div>
+                        <div className="col-span-2">
+                          <dt className="text-secondary-500 uppercase tracking-wide">Created</dt>
+                          <dd className="font-medium text-secondary-900">{fmt(contract.createdAt)}</dd>
+                        </div>
+                      </dl>
+                    </CardContent>
 
-                  {((user as any)?.userType === 'sdp_internal' || (user as any)?.userType === 'sdp_super_admin') && (
-                    <div className={`flex items-center text-xs font-medium rounded px-2 py-1 border ${
-                      (contract as any).billingLines?.length > 0
-                        ? 'text-blue-700 bg-blue-50 border-blue-200'
-                        : 'text-gray-500 bg-gray-50 border-gray-200'
-                    }`}>
-                      <DollarSign className={`mr-1.5 h-3 w-3 flex-shrink-0 ${
-                        (contract as any).billingLines?.length > 0 ? 'text-blue-600' : 'text-gray-400'
-                      }`} />
-                      {(contract as any).billingLines?.length > 0
-                        ? `${(contract as any).billingLines.length} Billing Line${(contract as any).billingLines.length > 1 ? 's' : ''}`
-                        : 'No Billing Lines'}
-                    </div>
-                  )}
-
-                  <div className="pt-3 mt-3 border-t border-secondary-200">
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      className="w-full"
-                      onClick={() => {
-                        setSelectedContract(contract);
-                        setShowContractDetails(true);
-                      }}
-                    >
-                      <FileText className="mr-2 h-4 w-4" />
-                      View Details
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                    <CardFooter className="border-t border-secondary-100 bg-secondary-50/40 px-4 py-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => {
+                          setSelectedContract(contract);
+                          setShowContractDetails(true);
+                        }}
+                      >
+                        <FileText className="mr-2 h-4 w-4" />
+                        View Details
+                      </Button>
+                    </CardFooter>
+                  </Card>
+                );
+              })}
             {filteredAndSortedContracts.length === 0 && (
               <div className="col-span-full">
                 <Card className="text-center py-12">

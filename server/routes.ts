@@ -144,6 +144,24 @@ async function addRemunerationLinesToContracts<T extends { id: string; rateType?
   });
 }
 
+// Helper to attach per-project rate lines to multi-rate contracts so the listing UI
+// can show the actual prices instead of the placeholder top-level rate.
+async function addRateLinesToContracts<T extends { id: string; rateStructure?: string | null }>(
+  contracts: T[]
+): Promise<(T & { rateLines: any[] })[]> {
+  if (contracts.length === 0) return [];
+  const multiRateIds = contracts.filter(c => c.rateStructure === 'multiple').map(c => c.id);
+  if (multiRateIds.length === 0) {
+    return contracts.map(c => ({ ...c, rateLines: [] }));
+  }
+  const rateLineLookups = await Promise.all(
+    multiRateIds.map(id => storage.getContractRateLines(id).catch(() => []))
+  );
+  const byContractId = new Map<string, any[]>();
+  multiRateIds.forEach((id, i) => byContractId.set(id, rateLineLookups[i]));
+  return contracts.map(c => ({ ...c, rateLines: byContractId.get(c.id) || [] }));
+}
+
 // Helper to add SDP billing lines to contracts — SDP internal users only
 async function addBillingLinesToContracts<T extends { id: string }>(contracts: T[]): Promise<(T & { billingLines: any[] })[]> {
   if (contracts.length === 0) return [];
@@ -5289,20 +5307,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Worker profile not found" });
         }
         const contracts = await storage.getContractsByWorker(worker.id);
-  
+
         const contractsWithStatus = await addDerivedStatusToContracts(contracts);
         const contractsWithRemuneration = await addRemunerationLinesToContracts(contractsWithStatus, userType);
-        res.json(contractsWithRemuneration);
+        const contractsWithRateLines = await addRateLinesToContracts(contractsWithRemuneration);
+        res.json(contractsWithRateLines);
         return;
       }
-      
+
       if (userType === 'sdp_internal') {
         // SDP internal users can see all contracts including billing lines
         const allContracts = await storage.getAllContracts();
         const contractsWithStatus = await addDerivedStatusToContracts(allContracts);
         const contractsWithRemuneration = await addRemunerationLinesToContracts(contractsWithStatus, userType);
         const contractsWithBillingLines = await addBillingLinesToContracts(contractsWithRemuneration);
-        res.json(contractsWithBillingLines);
+        const contractsWithRateLines = await addRateLinesToContracts(contractsWithBillingLines);
+        res.json(contractsWithRateLines);
         return;
       }
       
@@ -5342,7 +5362,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
       );
 
-      res.json(enriched);
+      const enrichedWithRateLines = await addRateLinesToContracts(enriched);
+      res.json(enrichedWithRateLines);
     } catch (error: any) {
       console.error("Error fetching contracts:", error);
       res.status(500).json({ message: "Failed to fetch contracts" });
@@ -5365,7 +5386,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const contractsWithStatus = await addDerivedStatusToContracts(contracts);
       const contractsWithRemuneration = await addRemunerationLinesToContracts(contractsWithStatus, userType);
       const contractsWithBillingLines = await addBillingLinesToContracts(contractsWithRemuneration);
-      res.json(contractsWithBillingLines);
+      const contractsWithRateLines = await addRateLinesToContracts(contractsWithBillingLines);
+      res.json(contractsWithRateLines);
     } catch (error: any) {
       console.error("Error fetching contracts by business:", error);
       res.status(500).json({ message: "Failed to fetch contracts" });
@@ -5809,24 +5831,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/contracts/sign/:token', authMiddleware, async (req: any, res) => {
     try {
       const { token } = req.params;
-      const contract = await storage.getContractBySigningToken(token);
+      const contract: any = await storage.getContractBySigningToken(token);
 
       if (!contract) {
         return res.status(404).json({ message: "Contract not found or link expired" });
       }
 
-      // Enrich response with worker, business, country and role title so the signing page can display them
-      const [worker, business, roleTitle] = await Promise.all([
+      // Enrich response with worker, business, country, role, customer business, third-party
+      // vendor, sdp entity, remuneration lines, rate lines and billing lines so the signing
+      // page can display the full picture.
+      const [
+        worker,
+        business,
+        roleTitle,
+        country,
+        customerBusiness,
+        sdpEntity,
+        thirdPartyBusiness,
+        remunerationLinesData,
+        rateLinesData,
+        billingLinesData,
+      ] = await Promise.all([
         storage.getWorkerById(contract.workerId),
         storage.getBusinessById(contract.businessId),
         contract.roleTitleId ? storage.getRoleTitle(contract.roleTitleId) : Promise.resolve(null),
+        contract.countryId ? storage.getCountryById(contract.countryId) : Promise.resolve(null),
+        contract.customerBusinessId ? storage.getBusinessById(contract.customerBusinessId) : Promise.resolve(null),
+        contract.sdpEntityId ? storage.getCountryById(contract.sdpEntityId) : Promise.resolve(null),
+        contract.thirdPartyBusinessId ? storage.getThirdPartyBusinessById(contract.thirdPartyBusinessId) : Promise.resolve(null),
+        storage.getRemunerationLinesByContractId(contract.id).catch(() => []),
+        storage.getContractRateLines(contract.id).catch(() => []),
+        storage.getContractBillingLines(contract.id).catch(() => []),
       ]);
 
       res.json({
         ...contract,
-        worker: worker ? { id: worker.id, firstName: worker.firstName, lastName: worker.lastName, email: worker.email } : null,
+        worker: worker ? {
+          id: worker.id,
+          firstName: worker.firstName,
+          lastName: worker.lastName,
+          email: worker.email,
+          phoneNumber: (worker as any).phoneNumber || null,
+        } : null,
         business: business ? { id: business.id, name: business.name } : null,
         roleTitle: roleTitle ? { id: roleTitle.id, title: roleTitle.title } : null,
+        country: country ? { id: country.id, name: country.name, code: (country as any).code || null } : null,
+        customerBusiness: customerBusiness ? { id: customerBusiness.id, name: customerBusiness.name } : null,
+        sdpEntity: sdpEntity ? { id: sdpEntity.id, name: sdpEntity.name, companyName: (sdpEntity as any).companyName || null } : null,
+        thirdPartyBusiness: thirdPartyBusiness ? { id: (thirdPartyBusiness as any).id, name: (thirdPartyBusiness as any).name } : null,
+        remunerationLines: remunerationLinesData,
+        rateLines: rateLinesData,
+        billingLines: billingLinesData,
       });
     } catch (error: any) {
       console.error("Error fetching contract for signing:", error);

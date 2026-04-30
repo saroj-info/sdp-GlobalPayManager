@@ -1062,8 +1062,8 @@ export default function Timesheets() {
     <div className="p-6">
       <div className="max-w-7xl mx-auto space-y-6">
 
-        {/* Contract selector — at the top for workers with multiple contracts */}
-        {isWorker && workerTimesheetContracts.length > 1 && (
+        {/* Contract selector — shown for workers with at least one timesheet-required contract */}
+        {isWorker && workerTimesheetContracts.length >= 1 && (
           <div className="rounded-xl border bg-white shadow-sm p-4 flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
             <div className="flex items-center gap-2.5">
               <div className="h-8 w-8 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
@@ -1076,15 +1076,31 @@ export default function Timesheets() {
             </div>
             <div className="flex-1 md:max-w-md">
               <Select value={workerSelectedContractId} onValueChange={setWorkerSelectedContractId}>
-                <SelectTrigger className="bg-white">
-                  <SelectValue placeholder="Choose a contract..." />
+                <SelectTrigger className="bg-white max-w-full">
+                  <SelectValue placeholder="Choose a contract..." className="truncate" />
                 </SelectTrigger>
-                <SelectContent>
-                  {workerTimesheetContracts.map((c: any) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.customRoleTitle || c.roleTitle?.name || c.roleTitle?.title || c.employmentType} · {c.country?.name || c.countryId} · {c.rateType} · {c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A'} – {c.endDate ? format(new Date(c.endDate), 'MMM yyyy') : 'Ongoing'}
-                    </SelectItem>
-                  ))}
+                <SelectContent className="max-w-[min(90vw,32rem)]">
+                  {workerTimesheetContracts.map((c: any) => {
+                    const role = c.customRoleTitle || c.roleTitle?.name || c.roleTitle?.title || c.employmentType;
+                    const country = c.country?.name || c.countryId;
+                    const start = c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A';
+                    const end = c.endDate ? format(new Date(c.endDate), 'MMM yyyy') : 'Ongoing';
+                    const meta = `${role} · ${country} · ${c.rateType} · ${start} – ${end}`;
+                    return (
+                      <SelectItem key={c.id} value={c.id} className="py-2">
+                        <div className="flex flex-col min-w-0 max-w-full">
+                          {c.contractName && (
+                            <span className="font-medium truncate" title={c.contractName}>
+                              {c.contractName}
+                            </span>
+                          )}
+                          <span className={`text-xs truncate ${c.contractName ? 'opacity-70' : 'font-medium'}`} title={meta}>
+                            {meta}
+                          </span>
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -1151,7 +1167,7 @@ export default function Timesheets() {
         )}
 
         {/* Payment schedule for workers */}
-        {isWorker && activeTimesheetContract && (
+        {/* {isWorker && activeTimesheetContract && (
           <Card className="bg-primary-50 border-primary-200">
             <CardHeader>
               <CardTitle className="flex items-center text-primary-900 text-base">
@@ -1186,10 +1202,10 @@ export default function Timesheets() {
               </div>
             </CardContent>
           </Card>
-        )}
+        )} */}
 
         {/* No active contract notice — shown when worker has contracts but hasn't selected one */}
-        {isWorker && workerTimesheetContracts.length > 0 && !activeTimesheetContract && (
+        {/* {isWorker && workerTimesheetContracts.length > 0 && !activeTimesheetContract && (
           <Card className="bg-yellow-50 border-yellow-200">
             <CardContent className="py-5 flex items-start gap-3">
               <Info className="w-5 h-5 text-yellow-600 mt-0.5" />
@@ -1199,7 +1215,7 @@ export default function Timesheets() {
               </div>
             </CardContent>
           </Card>
-        )}
+        )} */}
 
         {/* Top bar: view + search controls (status filtering happens via the hero stat tiles above) */}
         <div className="rounded-xl border bg-white p-3 shadow-sm space-y-2">
@@ -1334,13 +1350,28 @@ export default function Timesheets() {
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">Contract</label>
                       <Select value={selectedContractId} onValueChange={setSelectedContractId}>
-                        <SelectTrigger><SelectValue placeholder="Choose a contract..." /></SelectTrigger>
-                        <SelectContent>
-                          {selectedWorkerContracts.filter((c: any) => c.requiresTimesheet).map((c: any) => (
-                            <SelectItem key={c.id} value={c.id}>
-                              {c.customRoleTitle || c.roleTitle?.name || c.roleTitle?.title || c.employmentType} · {c.country?.name} · {c.rateType} · {c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A'} – {c.endDate ? format(new Date(c.endDate), 'MMM yyyy') : 'Ongoing'}
-                            </SelectItem>
-                          ))}
+                        <SelectTrigger className="max-w-full"><SelectValue placeholder="Choose a contract..." className="truncate" /></SelectTrigger>
+                        <SelectContent className="max-w-[min(90vw,32rem)]">
+                          {selectedWorkerContracts.filter((c: any) => c.requiresTimesheet).map((c: any) => {
+                            const role = c.customRoleTitle || c.roleTitle?.name || c.roleTitle?.title || c.employmentType;
+                            const start = c.startDate ? format(new Date(c.startDate), 'MMM yyyy') : 'N/A';
+                            const end = c.endDate ? format(new Date(c.endDate), 'MMM yyyy') : 'Ongoing';
+                            const meta = `${role} · ${c.country?.name} · ${c.rateType} · ${start} – ${end}`;
+                            return (
+                              <SelectItem key={c.id} value={c.id} className="py-2">
+                                <div className="flex flex-col min-w-0 max-w-full">
+                                  {c.contractName && (
+                                    <span className="font-medium truncate" title={c.contractName}>
+                                      {c.contractName}
+                                    </span>
+                                  )}
+                                  <span className={`text-xs text-muted-foreground truncate ${c.contractName ? '' : 'font-medium text-foreground'}`} title={meta}>
+                                    {meta}
+                                  </span>
+                                </div>
+                              </SelectItem>
+                            );
+                          })}
                         </SelectContent>
                       </Select>
                     </div>
