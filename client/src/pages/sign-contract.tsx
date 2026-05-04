@@ -523,7 +523,7 @@ export default function SignContract() {
                 {/* ── Workplace / Client (only when work is for a host client) ──
                     NOTE: customer billing rate, fixed billing amount, and customer currency are
                     deliberately NOT shown — workers should not see what the client is charged. */}
-                {c.isForClient && (c.clientName || c.clientCity || c.clientCountry) && (
+                {c.isForClient && (c.clientName || c.customerBusiness?.name || c.clientCity || c.clientCountry || c.customerBusiness?.address || c.clientAddress) && (
                   <>
                     <Separator />
                     <section>
@@ -531,10 +531,10 @@ export default function SignContract() {
                         <Building className="h-3.5 w-3.5" /> Workplace / Client
                       </h3>
                       <div className="grid gap-4 md:grid-cols-2">
-                        {c.clientName && (
+                        {(c.customerBusiness?.name || c.clientName) && (
                           <div>
                             <Label className="text-sm font-medium text-gray-500">Client</Label>
-                            <p className="font-medium mt-1">{c.clientName}</p>
+                            <p className="font-medium mt-1">{c.customerBusiness?.name || c.clientName}</p>
                           </div>
                         )}
                         {(c.clientCity || c.clientCountry) && (
@@ -545,10 +545,10 @@ export default function SignContract() {
                             </p>
                           </div>
                         )}
-                        {c.clientAddress && (
+                        {(c.customerBusiness?.address || c.clientAddress) && (
                           <div className="md:col-span-2">
                             <Label className="text-sm font-medium text-gray-500">Address</Label>
-                            <p className="text-sm mt-1 whitespace-pre-wrap">{c.clientAddress}</p>
+                            <p className="text-sm mt-1 whitespace-pre-wrap">{c.customerBusiness?.address || c.clientAddress}</p>
                           </div>
                         )}
                       </div>

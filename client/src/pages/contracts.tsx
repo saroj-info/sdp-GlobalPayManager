@@ -1432,15 +1432,22 @@ export default function ContractsPage() {
                   </div>
                 )}
 
-                {/* Client / Project info — only when isForClient */}
-                {selectedContract.isForClient && ((selectedContract as any).clientName || (selectedContract as any).clientAddress || (selectedContract as any).customerBusinessName) && (
+                {/* Client / Project info — only when isForClient. Prefer the linked host-client
+                    business record's fields (customerBusiness.*); fall back to legacy contract fields. */}
+                {selectedContract.isForClient && (
+                  (selectedContract as any).clientName ||
+                  (selectedContract as any).clientAddress ||
+                  (selectedContract as any).customerBusinessName ||
+                  (selectedContract as any).customerBusiness?.name ||
+                  (selectedContract as any).customerBusiness?.address
+                ) && (
                   <div className="border rounded-lg overflow-hidden">
                     <div className="px-4 py-2 bg-secondary-50 border-b">
                       <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Client / Project</p>
                     </div>
                     <div className="grid grid-cols-2 gap-4 p-4 text-sm">
-                      {(selectedContract as any).customerBusinessName && (
-                        <div><span className="text-xs text-muted-foreground">Host Client: </span><span className="font-medium">{(selectedContract as any).customerBusinessName}</span></div>
+                      {((selectedContract as any).customerBusiness?.name || (selectedContract as any).customerBusinessName) && (
+                        <div><span className="text-xs text-muted-foreground">Host Client: </span><span className="font-medium">{(selectedContract as any).customerBusiness?.name || (selectedContract as any).customerBusinessName}</span></div>
                       )}
                       {(selectedContract as any).clientName && (
                         <div><span className="text-xs text-muted-foreground">Client Name: </span><span className="font-medium">{(selectedContract as any).clientName}</span></div>
@@ -1451,14 +1458,14 @@ export default function ContractsPage() {
                       {(selectedContract as any).clientCity && (
                         <div><span className="text-xs text-muted-foreground">City: </span><span className="font-medium">{(selectedContract as any).clientCity}</span></div>
                       )}
-                      {(selectedContract as any).clientContactEmail && (
-                        <div><span className="text-xs text-muted-foreground">Contact Email: </span><span className="font-medium">{(selectedContract as any).clientContactEmail}</span></div>
+                      {((selectedContract as any).customerBusiness?.contactEmail || (selectedContract as any).clientContactEmail) && (
+                        <div><span className="text-xs text-muted-foreground">Contact Email: </span><span className="font-medium">{(selectedContract as any).customerBusiness?.contactEmail || (selectedContract as any).clientContactEmail}</span></div>
                       )}
                       {(selectedContract as any).clientContactPhone && (
                         <div><span className="text-xs text-muted-foreground">Contact Phone: </span><span className="font-medium">{(selectedContract as any).clientContactPhone}</span></div>
                       )}
-                      {(selectedContract as any).clientAddress && (
-                        <div className="col-span-2"><span className="text-xs text-muted-foreground">Address: </span><span className="font-medium">{(selectedContract as any).clientAddress}</span></div>
+                      {((selectedContract as any).customerBusiness?.address || (selectedContract as any).clientAddress) && (
+                        <div className="col-span-2"><span className="text-xs text-muted-foreground">Address: </span><span className="font-medium whitespace-pre-wrap">{(selectedContract as any).customerBusiness?.address || (selectedContract as any).clientAddress}</span></div>
                       )}
                     </div>
                   </div>

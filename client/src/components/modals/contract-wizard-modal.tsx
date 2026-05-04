@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -90,9 +91,10 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   const [newHostClientName, setNewHostClientName] = useState('');
   const [newHostClientEmail, setNewHostClientEmail] = useState('');
   const [newHostClientContact, setNewHostClientContact] = useState('');
+  const [newHostClientAddress, setNewHostClientAddress] = useState('');
 
   const createHostClientMutation = useMutation({
-    mutationFn: async (data: { name: string; contactEmail?: string; contactName?: string; parentBusinessId?: string }) => {
+    mutationFn: async (data: { name: string; contactEmail?: string; contactName?: string; address?: string; parentBusinessId?: string }) => {
       const response = await apiRequest("POST", "/api/businesses/host-clients", data);
       return await response.json();
     },
@@ -108,11 +110,13 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         customerBusinessId: newClient.id,
         clientName: newClient.name,
         clientContactEmail: newClient.contactEmail || '',
+        clientAddress: newClient.address || '',
       });
       setShowCreateHostClient(false);
       setNewHostClientName('');
       setNewHostClientEmail('');
       setNewHostClientContact('');
+      setNewHostClientAddress('');
     },
     onError: (error: any) => {
       toast({
@@ -1587,6 +1591,19 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                                   </p>
                                 </div>
                               </div>
+                              <div>
+                                <Label htmlFor="newHostClientAddress">Address</Label>
+                                <Textarea
+                                  id="newHostClientAddress"
+                                  value={newHostClientAddress}
+                                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setNewHostClientAddress(e.target.value)}
+                                  placeholder="e.g. Level 5, 123 Smith Street, Sydney NSW 2000, Australia"
+                                  className="bg-white min-h-[60px]"
+                                />
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  Shown on contracts and invoices issued to this host client.
+                                </p>
+                              </div>
                               <div className="flex gap-2 justify-end">
                                 <Button
                                   type="button"
@@ -1597,6 +1614,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                                     setNewHostClientName('');
                                     setNewHostClientEmail('');
                                     setNewHostClientContact('');
+                                    setNewHostClientAddress('');
                                   }}
                                 >
                                   Cancel
@@ -1624,6 +1642,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                                       name: newHostClientName.trim(),
                                       contactEmail: newHostClientEmail.trim() || undefined,
                                       contactName: newHostClientContact.trim() || undefined,
+                                      address: newHostClientAddress.trim() || undefined,
                                       parentBusinessId,
                                     });
                                   }}

@@ -99,6 +99,7 @@ export const businesses = pgTable("businesses", {
   parentBusinessId: varchar("parent_business_id"),
   contactEmail: varchar("contact_email"),
   contactName: varchar("contact_name"),
+  address: text("address"), // optional postal/business address — shown on contract preview/signing pages for host clients
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [

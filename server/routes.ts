@@ -4647,7 +4647,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user?.id;
       const userType = req.user?.userType;
-      const { name, contactEmail, contactName, parentBusinessId } = req.body;
+      const { name, contactEmail, contactName, address, parentBusinessId } = req.body;
 
       if (!name || !name.trim()) {
         return res.status(400).json({ message: "Host client name is required" });
@@ -4681,6 +4681,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name: name.trim(),
         contactEmail: contactEmail?.trim() || undefined,
         contactName: contactName?.trim() || undefined,
+        address: address?.trim() || undefined,
         parentBusinessId: parentId,
         ownerId: userId,
       });
@@ -5876,7 +5877,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         business: business ? { id: business.id, name: business.name } : null,
         roleTitle: roleTitle ? { id: roleTitle.id, title: roleTitle.title } : null,
         country: country ? { id: country.id, name: country.name, code: (country as any).code || null } : null,
-        customerBusiness: customerBusiness ? { id: customerBusiness.id, name: customerBusiness.name } : null,
+        customerBusiness: customerBusiness ? {
+          id: customerBusiness.id,
+          name: customerBusiness.name,
+          address: (customerBusiness as any).address || null,
+          contactEmail: (customerBusiness as any).contactEmail || null,
+          contactName: (customerBusiness as any).contactName || null,
+        } : null,
         sdpEntity: sdpEntity ? { id: sdpEntity.id, name: sdpEntity.name, companyName: (sdpEntity as any).companyName || null } : null,
         thirdPartyBusiness: thirdPartyBusiness ? { id: (thirdPartyBusiness as any).id, name: (thirdPartyBusiness as any).name } : null,
         remunerationLines: remunerationLinesData,

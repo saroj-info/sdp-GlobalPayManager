@@ -175,7 +175,7 @@ export interface IStorage {
   getPrimaryBusinessForUser(userId: string): Promise<Business | undefined>;
   updateBusinessCountryAccess(businessId: string, countries: string[]): Promise<void>;
   getHostClientsForBusiness(parentBusinessId: string): Promise<Business[]>;
-  createHostClient(data: { name: string; contactEmail?: string; contactName?: string; parentBusinessId: string; ownerId: string }): Promise<Business>;
+  createHostClient(data: { name: string; contactEmail?: string; contactName?: string; address?: string; parentBusinessId: string; ownerId: string }): Promise<Business>;
   
   // Country operations
   getAllCountries(): Promise<Country[]>;
@@ -883,7 +883,7 @@ export class DatabaseStorage implements IStorage {
       );
   }
 
-  async createHostClient(data: { name: string; contactEmail?: string; contactName?: string; parentBusinessId: string; ownerId: string }): Promise<Business> {
+  async createHostClient(data: { name: string; contactEmail?: string; contactName?: string; address?: string; parentBusinessId: string; ownerId: string }): Promise<Business> {
     const [hostClient] = await db
       .insert(businesses)
       .values({
@@ -893,6 +893,7 @@ export class DatabaseStorage implements IStorage {
         parentBusinessId: data.parentBusinessId,
         contactEmail: data.contactEmail || null,
         contactName: data.contactName || null,
+        address: data.address || null,
         accessibleCountries: [],
       })
       .returning();
