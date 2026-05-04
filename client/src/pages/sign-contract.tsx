@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle, Clock, FileText, User, Building, Calendar, DollarSign, MapPin, Mail, Phone, Globe, Briefcase, Users as UsersIcon, CalendarClock, Banknote } from "lucide-react";
+import { generatePeriodSchedule } from "@shared/timesheetPeriodCalculator";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -470,6 +471,51 @@ export default function SignContract() {
                           </div>
                         )}
                       </div>
+
+                      {/* Period & pay-date schedule preview — same calculation as the contract wizard's preview. */}
+                      {c.timesheetFrequency && (c.firstTimesheetStartDate || c.startDate) && (() => {
+                        const schedule = generatePeriodSchedule({
+                          startDate: c.firstTimesheetStartDate || c.startDate,
+                          endDate: c.endDate || null,
+                          timesheetFrequency: c.timesheetFrequency,
+                          timesheetCalculationMethod: c.timesheetCalculationMethod,
+                          paymentScheduleType: c.paymentScheduleType,
+                          paymentDay: c.paymentDay,
+                          paymentDaysAfterPeriod: c.paymentDaysAfterPeriod,
+                        }, 8);
+                        if (schedule.length === 0) return null;
+                        const fmt = (d: Date) => d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+                        return (
+                          <div className="mt-4">
+                            <Label className="text-sm font-medium text-gray-500">Period & Pay-Date Schedule</Label>
+                            <div className="mt-2 border rounded-md overflow-hidden">
+                              <table className="w-full text-sm">
+                                <thead className="bg-gray-50">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">#</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">Period Start</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">Period End</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">Pay Date</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y">
+                                  {schedule.map((p) => (
+                                    <tr key={p.number}>
+                                      <td className="px-3 py-1.5">{p.number}</td>
+                                      <td className="px-3 py-1.5">{fmt(p.start)}</td>
+                                      <td className="px-3 py-1.5">{fmt(p.end)}</td>
+                                      <td className="px-3 py-1.5 font-semibold text-emerald-700">{fmt(p.payDate)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {c.endDate ? 'Periods until contract end date.' : 'Showing the first 8 periods (contract has no end date).'}
+                            </p>
+                          </div>
+                        );
+                      })()}
                     </section>
                   </>
                 )}

@@ -344,6 +344,184 @@ export function getUpcomingPaymentSchedule(config: TimesheetPeriodConfig, count:
 }
 
 /**
+ * Schedule entry produced by `generatePeriodSchedule` — matches the columns shown in
+ * the contract wizard's "Timesheet Periods & Pay Dates Preview" dialog.
+ */
+export interface PeriodScheduleEntry {
+  number: number;
+  start: Date;
+  end: Date;
+  payDate: Date;
+}
+
+export interface PeriodScheduleInput {
+  startDate: string | Date;            // contract start (or first timesheet start)
+  endDate?: string | Date | null;      // contract end (optional)
+  timesheetFrequency?: string | null;  // 'weekly' | 'fortnightly' | 'semi_monthly' | 'monthly'
+  timesheetCalculationMethod?: string | null;
+  paymentScheduleType?: string | null; // 'days_after' | 'specific_day'
+  paymentDay?: string | null;
+  paymentDaysAfterPeriod?: number | null;
+}
+
+function dayOfWeekFromCalcMethod(method: string | null | undefined): number {
+  const map: Record<string, number> = {
+    monday_sunday: 1,
+    tuesday_monday: 2,
+    wednesday_tuesday: 3,
+    thursday_wednesday: 4,
+    friday_thursday: 5,
+    saturday_friday: 6,
+    sunday_saturday: 0,
+  };
+  return method && map[method] !== undefined ? map[method] : 1;
+}
+
+function payDateFor(periodEnd: Date, scheduleType?: string | null, paymentDay?: string | null, daysAfter?: number | null): Date {
+  const out = new Date(periodEnd);
+  if (scheduleType === 'days_after') {
+    out.setDate(out.getDate() + (daysAfter || 0));
+    return out;
+  }
+  if (paymentDay) {
+    const dayMap: Record<string, number> = {
+      sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
+    };
+    const targetDow = dayMap[paymentDay.toLowerCase()];
+    if (targetDow !== undefined) {
+      let diff = targetDow - out.getDay();
+      if (diff <= 0) diff += 7;
+      out.setDate(out.getDate() + diff);
+      return out;
+    }
+  }
+  // Fallback — same day as period end
+  return out;
+}
+
+/**
+ * Generate a sequence of timesheet periods starting at the contract start date.
+ *
+ * This function is the single source of truth used by:
+ *   - the contract wizard's "Timesheet Periods & Pay Dates Preview"
+ *   - the create-timesheet modal's "Suggested Periods"
+ *   - the sign-contract page's payment-schedule preview
+ *
+ * It mirrors the wizard's inline calculation so all three views render identical periods.
+ */
+export function generatePeriodSchedule(
+  input: PeriodScheduleInput,
+  maxPeriods: number = 8,
+): PeriodScheduleEntry[] {
+  if (!input.timesheetFrequency || !input.startDate) return [];
+
+  const parseLocal = (d: string | Date): Date | null => {
+    if (!d) return null;
+    if (d instanceof Date) return new Date(d);
+    // YYYY-MM-DD or ISO — parse as local date so we don't shift across timezones.
+    const ymd = String(d).slice(0, 10).split('-').map(Number);
+    if (ymd.length === 3 && ymd.every(n => !isNaN(n))) {
+      return new Date(ymd[0], ymd[1] - 1, ymd[2]);
+    }
+    const fallback = new Date(d);
+    return isNaN(fallback.getTime()) ? null : fallback;
+  };
+
+  const contractStartDate = parseLocal(input.startDate);
+  if (!contractStartDate) return [];
+  const contractEndDate = input.endDate ? parseLocal(input.endDate) : null;
+  const cap = contractEndDate ? Math.max(maxPeriods, 100) : maxPeriods;
+
+  const periods: PeriodScheduleEntry[] = [];
+  let currentPeriodStart = new Date(contractStartDate);
+
+  for (let i = 0; i < cap; i++) {
+    if (contractEndDate && currentPeriodStart > contractEndDate) break;
+
+    let periodEnd = new Date(currentPeriodStart);
+
+    switch (input.timesheetFrequency) {
+      case 'weekly': {
+        const weekStartDay = dayOfWeekFromCalcMethod(input.timesheetCalculationMethod);
+        const weekEndDay = weekStartDay === 0 ? 6 : weekStartDay - 1;
+        let daysToAdd = weekEndDay - currentPeriodStart.getDay();
+        if (daysToAdd < 0) daysToAdd += 7;
+        if (i > 0 && daysToAdd === 0) daysToAdd = 7;
+        periodEnd.setDate(periodEnd.getDate() + daysToAdd);
+        break;
+      }
+      case 'fortnightly': {
+        const startDay = currentPeriodStart.getDay();
+        if (input.timesheetCalculationMethod === 'week_1') {
+          if (i === 0) {
+            const daysUntilSunday = 7 - startDay;
+            periodEnd.setDate(periodEnd.getDate() + daysUntilSunday);
+          } else {
+            periodEnd.setDate(periodEnd.getDate() + 13);
+          }
+        } else {
+          if (i === 0) {
+            const daysUntilSunday = 7 - startDay;
+            periodEnd.setDate(periodEnd.getDate() + daysUntilSunday + 7);
+          } else {
+            periodEnd.setDate(periodEnd.getDate() + 13);
+          }
+        }
+        break;
+      }
+      case 'semi_monthly': {
+        const currentDay = currentPeriodStart.getDate();
+        const currentMonth = currentPeriodStart.getMonth();
+        const currentYear = currentPeriodStart.getFullYear();
+        if (currentDay <= 15) {
+          periodEnd = new Date(currentYear, currentMonth, 15);
+        } else {
+          periodEnd = new Date(currentYear, currentMonth + 1, 0);
+        }
+        break;
+      }
+      case 'monthly': {
+        const periodStartDay = parseInt(input.timesheetCalculationMethod || '1') || 1;
+        const currentDay = currentPeriodStart.getDate();
+        const currentMonth = currentPeriodStart.getMonth();
+        const currentYear = currentPeriodStart.getFullYear();
+        if (currentDay < periodStartDay) {
+          periodEnd = new Date(currentYear, currentMonth, periodStartDay - 1);
+        } else {
+          periodEnd = new Date(currentYear, currentMonth + 1, periodStartDay - 1);
+        }
+        break;
+      }
+      default:
+        return periods;
+    }
+
+    if (contractEndDate && periodEnd > contractEndDate) {
+      periodEnd = new Date(contractEndDate);
+      periods.push({
+        number: i + 1,
+        start: new Date(currentPeriodStart),
+        end: periodEnd,
+        payDate: payDateFor(periodEnd, input.paymentScheduleType, input.paymentDay, input.paymentDaysAfterPeriod),
+      });
+      break;
+    }
+
+    periods.push({
+      number: i + 1,
+      start: new Date(currentPeriodStart),
+      end: periodEnd,
+      payDate: payDateFor(periodEnd, input.paymentScheduleType, input.paymentDay, input.paymentDaysAfterPeriod),
+    });
+
+    currentPeriodStart = new Date(periodEnd);
+    currentPeriodStart.setDate(currentPeriodStart.getDate() + 1);
+  }
+
+  return periods;
+}
+
+/**
  * Format period for display
  */
 export function formatPeriod(period: TimesheetPeriod): string {

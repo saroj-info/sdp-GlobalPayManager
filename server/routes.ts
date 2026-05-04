@@ -6673,9 +6673,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const contract = await storage.getContractById(timesheet.contractId);
         console.log(`[invoice] approved branch reached — contract found=${!!contract} isForClient=${contract?.isForClient} billingMode=${(contract as any)?.billingMode} invoiceCustomer=${contract?.invoiceCustomer} rateType=${contract?.rateType}`);
 
-        // Salary contracts (annual) do not generate auto-invoices — payroll handles this separately
-        if (contract && contract.rateType === 'annual') {
-          console.log(`Salary contract ${contract.id}: skipping auto-invoice on timesheet approval`);
+        // Pure salary contracts with no host-client billing skip auto-invoicing — payroll handles
+        // them. Salary contracts with isForClient still generate the client-facing invoice (via
+        // customerBillingRate / fixedBillingAmount), but skip the SDP→Business worker-cost invoice
+        // since the worker is paid via payroll, not per-period invoicing.
+        if (contract && contract.rateType === 'annual' && !contract.isForClient) {
+          console.log(`Salary contract ${contract.id}: no client billing, skipping auto-invoice on timesheet approval`);
         } else if (contract && contract.isForClient) {
           // Determine effective billing mode: use explicit billingMode if set, fall back to legacy invoiceCustomer boolean
           const billingMode = (contract as any).billingMode || (contract.invoiceCustomer ? 'invoice_through_platform' : null);
@@ -6704,11 +6707,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 rateLines.map((rl: any) => [rl.id, parseFloat(rl.rate)])
               );
 
-              // Calculate worker cost
+              // Calculate worker cost.
+              // For salary (annual) contracts the worker is paid via payroll, not per-period
+              // invoicing — leave workerCost at 0 and skip the worker-cost line items so the
+              // SDP→Business invoice (if any) and the suggestedMargin calculation behave sanely.
               let workerCost = 0;
               const workerCostLineItems: { description: string; quantity: string; unitPrice: string; amount: string; sortOrder: number }[] = [];
 
-              if (rateStructure === 'multiple' && rateLines.length > 0) {
+              if (rateType === 'annual') {
+                // intentionally skip — workerCost stays 0
+              } else if (rateStructure === 'multiple' && rateLines.length > 0) {
                 // Group entries by their rate line
                 const rateGroups = new Map<string, { hours: number; days: number; rate: number; label: string }>();
                 for (const entry of timesheet.entries) {
@@ -6755,7 +6763,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 workerCostLineItems.push({ description: `${totalHoursCalc}h @ ${contract.currency} ${workerRate}/hr`, quantity: totalHoursCalc.toString(), unitPrice: workerRate.toFixed(2), amount: workerCost.toFixed(2), sortOrder: 0 });
               }
 
-              if (workerCost <= 0) {
+              // Salary contracts may legitimately have workerCost=0 here (paid via payroll);
+              // only treat zero/negative as an error when the worker is paid per-period.
+              if (rateType !== 'annual' && workerCost <= 0) {
                 throw new Error('Cannot create invoice for timesheet with zero or negative worker cost');
               }
 
@@ -6996,8 +7006,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Business → Host Client (business invoices the client)
                 await createB2CInvoice();
               } else if (billingMode === 'auto_invoice') {
-                // Two invoices: SDP → Business (worker cost + billing lines), Business → Host Client (client billing)
-                await createSdpToBusinessInvoice();
+                // Two invoices: SDP → Business (worker cost + billing lines), Business → Host Client (client billing).
+                // Salary contracts skip the SDP→Business invoice — that worker pay is handled via payroll.
+                if (rateType !== 'annual') {
+                  await createSdpToBusinessInvoice();
+                } else {
+                  console.log(`[invoice] Salary contract ${contract.id}: skipping SDP→Business invoice (payroll handles salary)`);
+                }
                 await createB2CInvoice();
               }
             } catch (invoiceError: any) {

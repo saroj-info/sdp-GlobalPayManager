@@ -38,10 +38,9 @@ import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
-  calculatePeriod,
-  formatPeriod,
   formatPaymentDate,
-  type TimesheetPeriodConfig
+  generatePeriodSchedule,
+  type PeriodScheduleEntry,
 } from '../../../shared/timesheetPeriodCalculator';
 
 // ─── Schema ────────────────────────────────────────────────────────────────
@@ -242,19 +241,30 @@ export default function Timesheets() {
   }, [isWorker, workerTimesheetContracts, workerSelectedContractId, selectedContractId, selectedWorkerContracts]);
 
   // Suggested periods — filtered to exclude already-submitted ones
-  const suggestedPeriods = useMemo(() => {
-    if (!activeTimesheetContract?.timesheetFrequency) return [];
-    const startDate = activeTimesheetContract.firstTimesheetStartDate || activeTimesheetContract.startDate;
-    if (!startDate) return [];
+  // Format a period { startDate, endDate } as "Mon d – Mon d, yyyy"
+  const formatPeriod = (p: { startDate: Date | string; endDate: Date | string }) =>
+    `${format(new Date(p.startDate), 'MMM d')} – ${format(new Date(p.endDate), 'MMM d, yyyy')}`;
 
-    const config: TimesheetPeriodConfig = {
-      frequency: activeTimesheetContract.timesheetFrequency,
-      firstTimesheetStartDate: new Date(startDate),
-      calculationMethod: activeTimesheetContract.timesheetCalculationMethod,
-      paymentDay: activeTimesheetContract.paymentDay,
-      paymentDaysAfterPeriod: activeTimesheetContract.paymentDaysAfterPeriod,
-      paymentHolidayRule: activeTimesheetContract.paymentHolidayRule,
-    };
+  // Suggested periods — computed using the SAME logic as the contract wizard's
+  // "Timesheet Periods & Pay Dates Preview" so the user sees consistent dates everywhere.
+  // We generate the schedule from contract start, then surface the next few periods that
+  // (a) haven't been submitted yet and (b) end on or after a few days ago (so a current
+  // open period is still suggestable even if its end-date is just past).
+  const suggestedPeriods = useMemo<(PeriodScheduleEntry & { key: string; startDate: Date; endDate: Date; paymentDate: Date | null })[]>(() => {
+    const c = activeTimesheetContract;
+    if (!c?.timesheetFrequency) return [];
+    const start = c.firstTimesheetStartDate || c.startDate;
+    if (!start) return [];
+
+    const all = generatePeriodSchedule({
+      startDate: start,
+      endDate: c.endDate || null,
+      timesheetFrequency: c.timesheetFrequency,
+      timesheetCalculationMethod: c.timesheetCalculationMethod,
+      paymentScheduleType: c.paymentScheduleType,
+      paymentDay: c.paymentDay,
+      paymentDaysAfterPeriod: c.paymentDaysAfterPeriod,
+    }, 24);
 
     const existingPeriodKeys = new Set(
       (timesheets as any[])
@@ -262,19 +272,18 @@ export default function Timesheets() {
         .map((t) => `${format(new Date(t.periodStart), 'yyyy-MM-dd')}_${format(new Date(t.periodEnd), 'yyyy-MM-dd')}`)
     );
 
-    const periods: any[] = [];
-    let ref = new Date();
-    for (let i = 0; i < 6 && periods.length < 3; i++) {
-      try {
-        const period = calculatePeriod(config, ref);
-        const key = `${format(period.startDate, 'yyyy-MM-dd')}_${format(period.endDate, 'yyyy-MM-dd')}`;
-        if (!existingPeriodKeys.has(key)) {
-          periods.push({ ...period, key });
-        }
-        ref = addDays(period.endDate, 1);
-      } catch {}
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const cutoff = addDays(today, -7); // include periods that ended within the last week
+
+    const out: (PeriodScheduleEntry & { key: string; startDate: Date; endDate: Date; paymentDate: Date | null })[] = [];
+    for (const p of all) {
+      if (p.end < cutoff) continue;
+      const key = `${format(p.start, 'yyyy-MM-dd')}_${format(p.end, 'yyyy-MM-dd')}`;
+      if (existingPeriodKeys.has(key)) continue;
+      out.push({ ...p, key, startDate: p.start, endDate: p.end, paymentDate: p.payDate || null });
+      if (out.length >= 3) break;
     }
-    return periods;
+    return out;
   }, [activeTimesheetContract, timesheets]);
 
   const contractRateType = activeTimesheetContract?.rateType as 'hourly' | 'daily' | 'annual' | undefined;
