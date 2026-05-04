@@ -6010,10 +6010,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Generate signing token
-      const signingToken = generateSigningToken();
-      
-      // Update contract with signing token and sent timestamp
+      // Reuse the existing signing token if the contract already has one — otherwise mint a new one.
+      // Stable tokens mean a re-send (intentional or accidental) doesn't break already-emailed links.
+      const signingToken = (contract as any).signingToken || generateSigningToken();
+
+      // Refresh emailSentAt so audit trail still records this resend.
       await storage.updateContractSigningInfo(id, {
         signingToken,
         emailSentAt: new Date()

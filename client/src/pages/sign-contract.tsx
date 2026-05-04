@@ -27,7 +27,9 @@ export default function SignContract() {
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       if (token) {
-        sessionStorage.setItem('pendingSigningToken', token);
+        // Stored in localStorage (not sessionStorage) so the redirect-back-after-login
+        // survives the user closing the tab or starting fresh from the email link later.
+        localStorage.setItem('pendingSigningToken', token);
       }
       toast({
         title: "Please log in first",

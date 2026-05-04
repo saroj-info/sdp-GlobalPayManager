@@ -256,6 +256,8 @@ export default function Timesheets() {
     const start = c.firstTimesheetStartDate || c.startDate;
     if (!start) return [];
 
+    // For contracts with an end date, generate every period in the term so the user sees all of them.
+    // For open-ended contracts, cap at 24 periods so the dropdown stays sane.
     const all = generatePeriodSchedule({
       startDate: start,
       endDate: c.endDate || null,
@@ -264,7 +266,7 @@ export default function Timesheets() {
       paymentScheduleType: c.paymentScheduleType,
       paymentDay: c.paymentDay,
       paymentDaysAfterPeriod: c.paymentDaysAfterPeriod,
-    }, 24);
+    }, c.endDate ? 200 : 24);
 
     const existingPeriodKeys = new Set(
       (timesheets as any[])
@@ -275,13 +277,15 @@ export default function Timesheets() {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const cutoff = addDays(today, -7); // include periods that ended within the last week
 
+    // Surface every unsubmitted period in the contract term (or up to ~12 ahead for open-ended contracts).
     const out: (PeriodScheduleEntry & { key: string; startDate: Date; endDate: Date; paymentDate: Date | null })[] = [];
+    const ahead = new Date(today); ahead.setDate(ahead.getDate() + (c.endDate ? 365 : 90));
     for (const p of all) {
-      if (p.end < cutoff) continue;
+      if (p.end < cutoff) continue;       // skip periods that ended >1 week ago
+      if (p.start > ahead) break;          // don't show periods more than the lookahead window away
       const key = `${format(p.start, 'yyyy-MM-dd')}_${format(p.end, 'yyyy-MM-dd')}`;
       if (existingPeriodKeys.has(key)) continue;
       out.push({ ...p, key, startDate: p.start, endDate: p.end, paymentDate: p.payDate || null });
-      if (out.length >= 3) break;
     }
     return out;
   }, [activeTimesheetContract, timesheets]);

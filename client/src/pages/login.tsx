@@ -84,9 +84,11 @@ export default function Login() {
         });
         
         // Use window.location for full page reload to ensure auth is loaded
-        const pendingSigningToken = sessionStorage.getItem('pendingSigningToken');
+        // Read from localStorage so the redirect survives across tabs / browser restarts
+        // (sessionStorage is per-tab and gets dropped when the tab closes).
+        const pendingSigningToken = localStorage.getItem('pendingSigningToken');
         if (pendingSigningToken) {
-          sessionStorage.removeItem('pendingSigningToken');
+          localStorage.removeItem('pendingSigningToken');
           window.location.href = `/sign/${pendingSigningToken}`;
         } else {
           window.location.href = '/dashboard';
@@ -135,9 +137,9 @@ export default function Login() {
     });
     
     // Check if there's a pending signing token from email link
-    const pendingSigningToken = sessionStorage.getItem('pendingSigningToken');
+    const pendingSigningToken = localStorage.getItem('pendingSigningToken');
     if (pendingSigningToken) {
-      sessionStorage.removeItem('pendingSigningToken');
+      localStorage.removeItem('pendingSigningToken');
       setLocation(`/sign/${pendingSigningToken}`);
     } else {
       setLocation('/dashboard');
