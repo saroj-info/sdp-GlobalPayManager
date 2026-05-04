@@ -446,6 +446,7 @@ export const contracts = pgTable("contracts", {
   roleTitleId: varchar("role_title_id").references(() => roleTitles.id),
   customRoleTitle: varchar("custom_role_title"), // if not using predefined role
   templateId: varchar("template_id").references(() => contractTemplates.id), // contract template used to generate this contract
+  contractorCompliance: boolean("contractor_compliance").default(false), // For contractor engagements: opted into SDP compliance review/protection
   employmentType: employmentTypeEnum("employment_type").notNull(),
   rateType: rateTypeEnum("rate_type").notNull(),
   rate: decimal("rate", { precision: 12, scale: 2 }).notNull(),

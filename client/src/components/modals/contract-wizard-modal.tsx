@@ -631,8 +631,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     if ((user as any)?.userType === 'sdp_internal') {
       contractStatus = 'ready_to_issue';
     }
-    // For contractor with standard contractor compliance only, set to ready_to_issue  
-    else if (formData.employmentType === 'contractor' && formData.contractorCompliance === 'standard_contractor') {
+    // For contractor that opted into compliance review, set to ready_to_issue
+    else if (formData.employmentType === 'contractor' && formData.contractorCompliance === true) {
       contractStatus = 'ready_to_issue';
     }
     // All other engagement types require SDP internal review
