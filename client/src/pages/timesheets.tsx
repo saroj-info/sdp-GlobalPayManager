@@ -481,7 +481,12 @@ export default function Timesheets() {
     }
 
     const processedData: any = { ...data, entries: normalizedEntries };
-    if (!isWorker && selectedContractId && selectedWorkerId) {
+    if (isWorker) {
+      // Worker side — explicitly send the contract chosen in the "Active Contract" selector
+      // so the server doesn't fall back to "first active signed contract" when a worker has
+      // multiple eligible contracts.
+      if (workerSelectedContractId) processedData.contractId = workerSelectedContractId;
+    } else if (selectedContractId && selectedWorkerId) {
       processedData.contractId = selectedContractId;
       processedData.workerId = selectedWorkerId;
       const w = workers.find((w: any) => w.id === selectedWorkerId);
@@ -844,15 +849,19 @@ export default function Timesheets() {
   // ── Timesheet Card (grid mode) ─────────────────────────────────────────────
 
   const TimesheetCard = ({ timesheet, provided = false }: { timesheet: any; provided?: boolean }) => {
+    console.log('Rendering card for timesheet', timesheet);
     const expanded = expandedTimesheetIds.has(timesheet.id);
     const s = timesheet.status;
     const pStart = new Date(timesheet.periodStart).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
     const pEnd = new Date(timesheet.periodEnd).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 
-    // Contract identification (added so users can see which contract a timesheet belongs to)
+    // Contract identification (added so users can see which contract a timesheet belongs to).
+    // Falls back from contract name → custom role title → resolved role title from the
+    // role_titles table → finally a literal "Contract" if nothing is set on the contract.
     const contractLabel: string =
       timesheet.contractName
       || timesheet.contractCustomRoleTitle
+      || timesheet.contractRoleTitle
       || timesheet.contract?.contractName
       || timesheet.contract?.customRoleTitle
       || timesheet.contract?.roleTitle?.title

@@ -721,10 +721,14 @@ export default function SdpInvoices() {
                         <TableCell className="text-sm">
                           {invoice.contract ? (
                             <div>
-                              <div className="font-medium">{invoice.contract.jobTitle || '—'}</div>
-                              {invoice.contract.rate && (
+                              <div className="font-medium">{invoice.contract.contractName || invoice.contract.jobTitle || '—'}</div>
+                              {invoice.contract.rateStructure === 'multiple' ? (
+                                <div className="text-xs text-gray-500">
+                                  Multiple rates · {Array.isArray(invoice.contract.rateLines) ? invoice.contract.rateLines.length : 0}
+                                </div>
+                              ) : invoice.contract.rate ? (
                                 <div className="text-xs text-gray-500">{invoice.contract.currency} {invoice.contract.rate}/{invoice.contract.rateType}</div>
-                              )}
+                              ) : null}
                             </div>
                           ) : '—'}
                         </TableCell>
@@ -867,16 +871,53 @@ export default function SdpInvoices() {
                         )}
 
                         {invoice.contract && (
-                          <div className="flex justify-between text-sm">
-                            <span className="text-secondary-600">Contract:</span>
-                            <span className="text-right">
-                              {invoice.contract.jobTitle || 'N/A'}
-                              {invoice.contract.rate && (
-                                <span className="text-xs text-gray-500 ml-1">
-                                  ({invoice.contract.currency} {invoice.contract.rate}/{invoice.contract.rateType})
-                                </span>
-                              )}
-                            </span>
+                          <div className="text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-secondary-600">Contract:</span>
+                              <span className="text-right">
+                                {invoice.contract.contractName || invoice.contract.jobTitle || 'N/A'}
+                                {invoice.contract.rateStructure !== 'multiple' && invoice.contract.rate && (
+                                  <span className="text-xs text-gray-500 ml-1">
+                                    ({invoice.contract.currency} {invoice.contract.rate}/{invoice.contract.rateType})
+                                  </span>
+                                )}
+                                {invoice.contract.rateStructure === 'multiple' && (
+                                  <span className="text-xs text-gray-500 ml-1">
+                                    (Multiple rates · {Array.isArray(invoice.contract.rateLines) ? invoice.contract.rateLines.length : 0})
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                            {/* Multi-rate breakdown — show every project rate so the admin can see
+                                where each invoice line item came from and not assume the contract's
+                                top-level rate is what was billed. */}
+                            {invoice.contract.rateStructure === 'multiple'
+                              && Array.isArray(invoice.contract.rateLines)
+                              && invoice.contract.rateLines.length > 0 && (
+                              <div className="mt-1 ml-2 border-l-2 border-secondary-200 pl-2 space-y-0.5">
+                                {invoice.contract.rateLines.map((rl: any) => {
+                                  const unit = rl.rateType === 'daily' ? 'day'
+                                    : rl.rateType === 'hourly' ? 'hr'
+                                    : rl.rateType;
+                                  return (
+                                    <div key={rl.id} className="flex justify-between text-xs">
+                                      <span className="text-secondary-600 truncate">
+                                        {rl.projectName || rl.description || 'Rate line'}
+                                        {rl.isDefault && (
+                                          <span className="ml-1 text-[9px] text-gray-500 border border-gray-300 rounded px-1 py-0">Default</span>
+                                        )}
+                                      </span>
+                                      <span className="font-medium tabular-nums whitespace-nowrap">
+                                        {rl.currency || invoice.contract.currency} {parseFloat(rl.rate || '0').toLocaleString()}/{unit}
+                                        {rl.clientRate && parseFloat(rl.clientRate) > 0 && (
+                                          <span className="text-[10px] text-gray-500 ml-1">(client {rl.currency || invoice.contract.currency} {parseFloat(rl.clientRate).toLocaleString()})</span>
+                                        )}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         )}
 

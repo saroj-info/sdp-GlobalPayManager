@@ -6445,7 +6445,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user?.id;
       const userType = req.user?.userType;
-      
+
+      // Helper to attach the contract's approver role, identifying info and customerBusinessId
+      // so the UI can both gate action buttons and show which contract a timesheet belongs to.
+      // Hoisted above the worker branch so worker timesheets also get the contract name etc.
+      const attachContractMeta = async (ts: any) => {
+        if (!ts.contractId) {
+          console.log(`[timesheet] no contractId for timesheet ${ts.id} — skipping enrichment`);
+          return ts;
+        }
+        try {
+          const c: any = await storage.getContractById(ts.contractId);
+          console.log(`[timesheet] enrich ts=${ts.id} contractId=${ts.contractId} → contractName=${JSON.stringify(c?.contractName)} customRoleTitle=${JSON.stringify(c?.customRoleTitle)} roleTitleId=${c?.roleTitleId || null}`);
+          // Resolve role title text so the UI doesn't have to look it up — gives us a third
+          // fallback when neither contractName nor customRoleTitle is set on the contract.
+          let roleTitleText: string | null = null;
+          if (c?.roleTitleId) {
+            try {
+              const rt: any = await storage.getRoleTitle(c.roleTitleId);
+              roleTitleText = rt?.title || null;
+            } catch {}
+          }
+          return {
+            ...ts,
+            timesheetApproverRole: c?.timesheetApproverRole || null,
+            contractEmployingBusinessId: c?.businessId || null,
+            contractCustomerBusinessId: c?.customerBusinessId || null,
+            contractName: c?.contractName || null,
+            contractCustomRoleTitle: c?.customRoleTitle || null,
+            contractRoleTitleId: c?.roleTitleId || null,
+            contractRoleTitle: roleTitleText,
+            contractStartDate: c?.startDate || null,
+            contractEndDate: c?.endDate || null,
+            contractRateType: c?.rateType || null,
+          };
+        } catch {
+          return ts;
+        }
+      };
+
       if (userType === 'worker') {
         // Workers see their own timesheets
         const worker = await storage.getWorkerByUserId(userId);
@@ -6489,36 +6527,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
 
-        const timesheetsWithFlag = timesheets.map((t: any) => ({
-          ...t,
-          hasInvoice: timesheetIdsWithInvoice.has(t.id),
-        }));
+        // Enrich each timesheet with contract metadata (contractName, role, dates, approver role)
+        // so the worker's timesheet cards can show which contract each timesheet belongs to.
+        const timesheetsWithFlag = await Promise.all(
+          timesheets.map((t: any) => attachContractMeta({
+            ...t,
+            hasInvoice: timesheetIdsWithInvoice.has(t.id),
+          }))
+        );
         res.json(timesheetsWithFlag);
         return;
       }
-      
-      // Helper to attach the contract's approver role, identifying info and customerBusinessId
-      // so the UI can both gate action buttons and show which contract a timesheet belongs to.
-      const attachContractMeta = async (ts: any) => {
-        if (!ts.contractId) return ts;
-        try {
-          const c: any = await storage.getContractById(ts.contractId);
-          return {
-            ...ts,
-            timesheetApproverRole: c?.timesheetApproverRole || null,
-            contractEmployingBusinessId: c?.businessId || null,
-            contractCustomerBusinessId: c?.customerBusinessId || null,
-            contractName: c?.contractName || null,
-            contractCustomRoleTitle: c?.customRoleTitle || null,
-            contractRoleTitleId: c?.roleTitleId || null,
-            contractStartDate: c?.startDate || null,
-            contractEndDate: c?.endDate || null,
-            contractRateType: c?.rateType || null,
-          };
-        } catch {
-          return ts;
-        }
-      };
 
       if (userType === 'sdp_internal') {
         // SDP internal users can see all timesheets; include sdpInvoiced flag
@@ -8010,8 +8029,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   resolvedTitle = rt?.title || '';
                 } catch {}
               }
+              // Multi-rate contracts: fetch the rate lines so the SDP admin card can show
+              // each project rate (which is what the invoice line items are actually billed at).
+              let rateLines: any[] = [];
+              if (c.rateStructure === 'multiple') {
+                try { rateLines = await storage.getContractRateLines(c.id); } catch {}
+              }
               contract = {
                 id: c.id,
+                contractName: c.contractName || null,
                 jobTitle: resolvedTitle || c.jobDescription || '',
                 rateType: c.rateType || '',
                 rate: c.rate || '',
@@ -8019,6 +8045,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 status: c.status || '',
                 startDate: c.startDate || null,
                 endDate: c.endDate || null,
+                rateStructure: c.rateStructure || 'single',
+                rateLines,
+                customerBillingRate: c.customerBillingRate || null,
+                customerBillingRateType: c.customerBillingRateType || null,
+                customerCurrency: c.customerCurrency || null,
+                clientBillingType: c.clientBillingType || null,
+                fixedBillingAmount: c.fixedBillingAmount || null,
+                fixedBillingFrequency: c.fixedBillingFrequency || null,
               };
             }
           }
