@@ -42,6 +42,7 @@ import {
   generatePeriodSchedule,
   type PeriodScheduleEntry,
 } from '../../../shared/timesheetPeriodCalculator';
+import { getTrackingUnit } from '../../../shared/contractHelpers';
 
 // ─── Schema ────────────────────────────────────────────────────────────────
 
@@ -290,7 +291,12 @@ export default function Timesheets() {
     return out;
   }, [activeTimesheetContract, timesheets]);
 
-  const contractRateType = activeTimesheetContract?.rateType as 'hourly' | 'daily' | 'annual' | undefined;
+  // The unit the worker is asked to log on their timesheet AND the unit that drives
+  // the auto-invoice customer-billing math. For client work, the host-client's billing
+  // unit wins — so an annual salary worker placed at a host client billed hourly logs
+  // HOURS (not presence), and the invoice line is "Nh × $rate" with no conversion.
+  const contractTrackingUnit = getTrackingUnit(activeTimesheetContract);
+  const contractRateType = contractTrackingUnit; // historical name used elsewhere in the file
   const contractRateStructure = (activeTimesheetContract?.rateStructure as 'single' | 'multiple') || 'single';
 
   const { data: contractRateLines = [] } = useQuery<any[]>({

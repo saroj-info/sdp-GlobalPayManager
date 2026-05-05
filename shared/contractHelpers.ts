@@ -8,6 +8,39 @@ export interface Contract {
   status: string;
 }
 
+/**
+ * The unit ("tracking unit") that a worker should record on their timesheet,
+ * AND that the auto-invoice customer-billing calculation uses to multiply by.
+ *
+ * Rule:
+ *   - For client work (`isForClient = true`), the tracking unit is the client's
+ *     billing unit (`customerBillingRateType`) — because the timesheet feeds the
+ *     client invoice and we want exact 1:1 numbers.
+ *   - For pure salary engagements (`isForClient = false`), the tracking unit is
+ *     the worker's pay unit (`rateType`).
+ *   - When `customerBillingRateType` isn't set, falls back to the worker's pay unit.
+ *
+ * This single rule keeps the entry-form UI and the auto-invoice math in sync,
+ * so an annual-salary worker placed at a host client billed hourly logs HOURS
+ * (not presence), and the resulting invoice line is "Nh × $rate".
+ */
+export type TimesheetTrackingUnit = 'hourly' | 'daily' | 'annual';
+
+export function getTrackingUnit(
+  contract: {
+    rateType?: string | null;
+    isForClient?: boolean | null;
+    customerBillingRateType?: string | null;
+  } | null | undefined,
+): TimesheetTrackingUnit {
+  if (!contract) return 'hourly';
+  if (contract.isForClient && contract.customerBillingRateType) {
+    return contract.customerBillingRateType === 'daily' ? 'daily' : 'hourly';
+  }
+  const rt = (contract.rateType || 'hourly') as TimesheetTrackingUnit;
+  return rt === 'daily' || rt === 'annual' || rt === 'hourly' ? rt : 'hourly';
+}
+
 export interface ContractInstance {
   id: string;
   signatureStatus: string;

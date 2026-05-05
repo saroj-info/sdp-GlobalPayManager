@@ -87,7 +87,7 @@ import {
   ObjectNotFoundError,
 } from "./objectStorage";
 import { type ContractInstance, type Contract, type Worker, type Country, type RoleTitle, type Business } from "@shared/schema";
-import { getDerivedContractStatus } from "@shared/contractHelpers";
+import { getDerivedContractStatus, getTrackingUnit } from "@shared/contractHelpers";
 import { registerEmailTestRoutes } from "./routes/emailTestRoute";
 import { getBusinessInvitationTemplate, getWorkerApprovalRequestTemplate, getEmailBaseUrl } from "./emailService";
 
@@ -6679,6 +6679,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // If approving a timesheet, auto-generate invoices based on contract billingMode
       if (status === 'approved') {
         const contract = await storage.getContractById(timesheet.contractId);
+
+        console.log("contract", contract);
         console.log(`[invoice] approved branch reached — contract found=${!!contract} isForClient=${contract?.isForClient} billingMode=${(contract as any)?.billingMode} invoiceCustomer=${contract?.invoiceCustomer} rateType=${contract?.rateType}`);
 
         // Pure salary contracts with no host-client billing skip auto-invoicing — payroll handles
@@ -6819,6 +6821,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   return firstWith ? parseFloat(firstWith.clientRate) : 0;
                 })();
                 const customerRate = topLevelCustomerRate || defaultLineClientRate;
+
+                // Use the contract's tracking unit (which prefers customerBillingRateType when
+                // isForClient) so the invoice math matches what the worker logged in the form.
+                const trackingUnit = getTrackingUnit(contract as any);
+                const HOURS_PER_DAY = 8;
                 if (rateStructure === 'multiple' && rateLines.length > 0) {
                   // Use per-entry rates for client invoice too
                   const rateGroups = new Map<string, { hours: number; days: number; rate: number; label: string }>();
@@ -6830,19 +6837,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     const key = rateLineId || 'default';
                     if (!rateGroups.has(key)) rateGroups.set(key, { hours: 0, days: 0, rate: entryRate, label });
                     const g = rateGroups.get(key)!;
-                    if (rateType === 'daily') {
-                      const days = parseFloat(entry.daysWorked || '0') || 0;
+                    const entryHours = parseFloat(entry.hoursWorked || '0') || 0;
+                    const entryDays = parseFloat(entry.daysWorked || '0') || 0;
+                    if (trackingUnit === 'daily') {
+                      // Prefer days; if the worker logged hours instead (e.g. legacy timesheet
+                      // for a hourly→daily switched contract), convert at 8h/day.
+                      const days = entryDays > 0 ? entryDays : (entryHours > 0 ? entryHours / HOURS_PER_DAY : 0);
                       g.days += days;
                       customerBillingAmount += days * entryRate;
                     } else {
-                      const hours = parseFloat(entry.hoursWorked || '0') || 0;
+                      const hours = entryHours > 0 ? entryHours : (entryDays > 0 ? entryDays * HOURS_PER_DAY : 0);
                       g.hours += hours;
                       customerBillingAmount += hours * entryRate;
                     }
                   }
                   let idx = 0;
                   for (const [, g] of rateGroups) {
-                    if (rateType === 'daily' && g.days > 0) {
+                    if (trackingUnit === 'daily' && g.days > 0) {
                       const amt = g.days * g.rate;
                       clientLineItems.push({ description: `${g.label} — ${g.days}d`, quantity: g.days.toString(), unitPrice: g.rate.toFixed(2), amount: amt.toFixed(2), sortOrder: idx++ });
                     } else if (g.hours > 0) {
@@ -6850,18 +6861,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
                       clientLineItems.push({ description: `${g.label} — ${g.hours}h`, quantity: g.hours.toString(), unitPrice: g.rate.toFixed(2), amount: amt.toFixed(2), sortOrder: idx++ });
                     }
                   }
-                } else if (rateType === 'daily') {
-                  const totalDays = timesheet.entries.reduce((sum: number, e: any) => {
-                    const d = parseFloat(e.daysWorked || '0'); return sum + (isNaN(d) ? 0 : d);
-                  }, 0);
-                  customerBillingAmount = totalDays * customerRate;
-                  clientLineItems.push({ description: `${totalDays}d @ ${contract.customerCurrency || contract.currency} ${customerRate}/day`, quantity: totalDays.toString(), unitPrice: customerRate.toFixed(2), amount: customerBillingAmount.toFixed(2), sortOrder: 0 });
                 } else {
-                  const totalHoursCalc = timesheet.entries.reduce((sum: number, e: any) => {
+                  const sumHours = timesheet.entries.reduce((sum: number, e: any) => {
                     const h = parseFloat(e.hoursWorked || '0'); return sum + (isNaN(h) ? 0 : h);
                   }, 0);
-                  customerBillingAmount = totalHoursCalc * customerRate;
-                  clientLineItems.push({ description: `${totalHoursCalc}h @ ${contract.customerCurrency || contract.currency} ${customerRate}/hr`, quantity: totalHoursCalc.toString(), unitPrice: customerRate.toFixed(2), amount: customerBillingAmount.toFixed(2), sortOrder: 0 });
+                  const sumDays = timesheet.entries.reduce((sum: number, e: any) => {
+                    const d = parseFloat(e.daysWorked || '0'); return sum + (isNaN(d) ? 0 : d);
+                  }, 0);
+                  // Backwards-compat safety net: legacy annual timesheets used presence-only entries.
+                  // If the worker logged neither hours nor days, count days where isPresent=true.
+                  const presentDays = (sumHours === 0 && sumDays === 0)
+                    ? timesheet.entries.reduce((sum: number, e: any) => sum + (e.isPresent ? 1 : 0), 0)
+                    : 0;
+
+                  if (trackingUnit === 'daily') {
+                    const totalDays = sumDays > 0
+                      ? sumDays
+                      : sumHours > 0 ? sumHours / HOURS_PER_DAY : presentDays;
+                    customerBillingAmount = totalDays * customerRate;
+                    clientLineItems.push({ description: `${totalDays}d @ ${contract.customerCurrency || contract.currency} ${customerRate}/day`, quantity: totalDays.toString(), unitPrice: customerRate.toFixed(2), amount: customerBillingAmount.toFixed(2), sortOrder: 0 });
+                  } else {
+                    const totalHours = sumHours > 0
+                      ? sumHours
+                      : sumDays > 0 ? sumDays * HOURS_PER_DAY : presentDays * HOURS_PER_DAY;
+                    customerBillingAmount = totalHours * customerRate;
+                    clientLineItems.push({ description: `${totalHours}h @ ${contract.customerCurrency || contract.currency} ${customerRate}/hr`, quantity: totalHours.toString(), unitPrice: customerRate.toFixed(2), amount: customerBillingAmount.toFixed(2), sortOrder: 0 });
+                  }
                 }
               }
 
@@ -6876,9 +6901,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
               
               // Helper: create a Business→HostClient invoice (category: business_to_client)
               const createB2CInvoice = async () => {
-                if (!contract.customerBusinessId) throw new Error('Contract missing customerBusinessId for B2C invoice');
+                if (!contract.customerBusinessId) {
+                  console.warn(`[invoice] Skipping B2C invoice for contract ${contract.id} — customerBusinessId is not set.`);
+                  return;
+                }
+                // Nothing to bill yet (rate-based contract with no customer rate set, or a 0-hour timesheet).
+                // Skip silently — the operator can fix the contract config or add hours and re-approve later.
                 if (clientBillingType !== 'fixed_price' && customerBillingAmount <= 0) {
-                  throw new Error(`Contract ${contract.id} has no customerBillingRate set — cannot create B2C invoice with 0 amount`);
+                  console.warn(`[invoice] Skipping B2C invoice for contract ${contract.id} — billable amount is 0 (set customerBillingRate / clientRate, or log hours on the timesheet).`);
+                  return;
                 }
                 const existing = allInvoices.find(inv =>
                   inv.timesheetId === timesheet.id && inv.invoiceCategory === 'business_to_client'
@@ -6917,12 +6948,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
               
               // Helper: create SDP→HostClient invoice (category: customer_billing)
               const createCustomerBillingInvoice = async () => {
-                if (!contract.customerBusinessId) throw new Error('Contract missing customerBusinessId for customer billing invoice');
-                // For rate-based billing: either the top-level customerBillingRate OR per-line clientRate on rate lines must drive a positive amount
-                if (clientBillingType !== 'fixed_price' && customerBillingAmount <= 0) {
-                  throw new Error(`Contract ${contract.id} produced 0 customer billing amount — set customerBillingRate or clientRate on rate lines`);
+                if (!contract.customerBusinessId) {
+                  console.warn(`[invoice] Skipping customer_billing invoice for contract ${contract.id} — customerBusinessId is not set.`);
+                  return;
                 }
-                if (!contract.customerCurrency) throw new Error('Contract missing customerCurrency');
+                // Nothing to bill yet (no customerBillingRate / clientRate, or 0-hour timesheet).
+                // Skip silently — operator can fix the contract config or add hours and re-approve later.
+                if (clientBillingType !== 'fixed_price' && customerBillingAmount <= 0) {
+                  console.warn(`[invoice] Skipping customer_billing invoice for contract ${contract.id} — billable amount is 0 (set customerBillingRate / clientRate, or log hours on the timesheet).`);
+                  return;
+                }
+                if (!contract.customerCurrency) {
+                  console.warn(`[invoice] Skipping customer_billing invoice for contract ${contract.id} — customerCurrency is not set.`);
+                  return;
+                }
                 const existing = allInvoices.find(inv =>
                   inv.timesheetId === timesheet.id && inv.invoiceCategory === 'customer_billing'
                 );
