@@ -6453,7 +6453,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Worker profile not found" });
         }
         const timesheets = await storage.getTimesheetsByWorker(worker.id);
-        res.json(timesheets);
+
+        // Tag each timesheet with `hasInvoice` so the worker's "create invoice" picker can
+        // hide timesheets that are already covered by:
+        //   1. a contractor invoice (legacy `invoices` table — direct timesheetId)
+        //   2. an SDP-side invoice with a direct timesheetId column reference
+        //   3. an SDP-side consolidated invoice that links to the timesheet via the
+        //      `sdp_invoice_timesheets` junction table.
+        const [contractorInvoices, allSdpInvoices] = await Promise.all([
+          storage.getInvoicesByContractor(worker.id),
+          storage.getAllSdpInvoices(),
+        ]);
+        const timesheetIdsWithInvoice = new Set<string>();
+
+        // (1) Legacy contractor invoices.
+        contractorInvoices.forEach((i: any) => { if (i.timesheetId) timesheetIdsWithInvoice.add(i.timesheetId); });
+
+        // (2) SDP invoices linked directly via timesheetId, scoped to this worker.
+        const workerSdpInvoiceIds: string[] = [];
+        allSdpInvoices.forEach((i: any) => {
+          if (i.workerId === worker.id) {
+            workerSdpInvoiceIds.push(i.id);
+            if (i.timesheetId) timesheetIdsWithInvoice.add(i.timesheetId);
+          }
+        });
+
+        // (3) SDP invoices linked via the junction table (consolidated invoices) — fetch the
+        //     timesheet IDs for every worker-scoped SDP invoice and add them to the set.
+        if (workerSdpInvoiceIds.length > 0) {
+          const junctionResults = await Promise.all(
+            workerSdpInvoiceIds.map((invId) => storage.getSdpInvoiceTimesheets(invId).catch(() => []))
+          );
+          junctionResults.forEach((rows) => {
+            rows.forEach((r: any) => { if (r.timesheetId) timesheetIdsWithInvoice.add(r.timesheetId); });
+          });
+        }
+
+        const timesheetsWithFlag = timesheets.map((t: any) => ({
+          ...t,
+          hasInvoice: timesheetIdsWithInvoice.has(t.id),
+        }));
+        res.json(timesheetsWithFlag);
         return;
       }
       
@@ -7087,8 +7127,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { id } = req.params;
       const userId = req.user?.id;
-      
+
       await storage.updateTimesheetStatus(id, 'submitted', userId);
+
+      // Notify the approver (business / host client) by email so they don't have to poll the UI.
+      // Failures here MUST NOT roll back the submission — it's a notification, not a contract.
+      try {
+        const ts: any = await storage.getTimesheetById(id);
+        if (ts) {
+          const contract: any = ts.contractId ? await storage.getContractById(ts.contractId) : null;
+          const worker: any = ts.workerId ? await storage.getWorkerById(ts.workerId) : null;
+          const workerName = worker ? `${worker.firstName || ''} ${worker.lastName || ''}`.trim() : 'A worker';
+
+          // Resolve who should approve this contract's timesheets and find their email.
+          const approverRole: string | null = contract?.timesheetApproverRole || null;
+          let approverEmail: string | null = null;
+          let approverName = 'Approver';
+          if (contract) {
+            if (approverRole === 'host_client' && contract.customerBusinessId) {
+              const hc: any = await storage.getBusinessById(contract.customerBusinessId);
+              approverEmail = hc?.contactEmail || null;
+              approverName = hc?.contactName || hc?.name || 'Host Client';
+            } else if (approverRole === 'sdp') {
+              // SDP-approved timesheets — defer to the contract's createdByUserId as a sensible fallback.
+              if (contract.createdByUserId) {
+                const sdpUser: any = await storage.getUser(contract.createdByUserId);
+                approverEmail = sdpUser?.email || null;
+                approverName = sdpUser?.firstName || 'SDP Team';
+              }
+            } else {
+              // 'business' or legacy default — email the employing business owner.
+              const biz: any = contract.businessId ? await storage.getBusinessById(contract.businessId) : null;
+              if (biz) {
+                approverName = biz.contactName || biz.name || 'Approver';
+                if (biz.contactEmail) {
+                  approverEmail = biz.contactEmail;
+                } else if (biz.ownerId) {
+                  const ownerUser: any = await storage.getUser(biz.ownerId);
+                  approverEmail = ownerUser?.email || null;
+                  if (!approverName || approverName === 'Approver') {
+                    approverName = ownerUser?.firstName || biz.name || 'Approver';
+                  }
+                }
+              }
+            }
+          }
+
+          if (approverEmail) {
+            const totalHoursNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.hoursWorked || '0') || 0), 0);
+            const totalDaysNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.daysWorked || '0') || 0), 0);
+            const totalLabel = totalDaysNum > 0
+              ? `${totalDaysNum.toFixed(1)}d`
+              : totalHoursNum > 0
+                ? `${totalHoursNum.toFixed(1)}h`
+                : `${(ts.entries || []).filter((e: any) => e.isPresent).length} days present`;
+
+            const contractLabel = contract?.contractName
+              || contract?.customRoleTitle
+              || (contract?.roleTitleId ? (await storage.getRoleTitle(contract.roleTitleId).catch(() => null))?.title : '')
+              || 'Contract';
+
+            const baseUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+            const reviewLink = `${baseUrl}/timesheets`;
+
+            await emailService.sendTimesheetSubmittedEmail({
+              to: approverEmail,
+              approverName,
+              workerName,
+              contractLabel,
+              periodStart: ts.periodStart,
+              periodEnd: ts.periodEnd,
+              totalLabel,
+              reviewLink,
+            });
+            console.log(`[timesheet-submit] approval email sent to ${approverEmail} (${approverRole || 'business'}) for timesheet ${id}`);
+          } else {
+            console.warn(`[timesheet-submit] no approver email resolved for timesheet ${id} (approverRole=${approverRole}). Skipping notification.`);
+          }
+        }
+      } catch (notifyError: any) {
+        console.error('[timesheet-submit] failed to send approver notification:', notifyError?.message || notifyError);
+      }
+
       res.json({ message: "Timesheet submitted for approval" });
     } catch (error: any) {
       console.error("Error submitting timesheet:", error);
@@ -7621,19 +7741,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'User not found' });
       }
 
-      let invoices;
+      let invoices: any[] = [];
       if (user.userType === 'sdp_internal') {
-        // SDP internal users can see all invoices
         invoices = await storage.getAllInvoices();
       } else if (user.userType === 'business_user') {
-        // Business users can see invoices for their business
         const business = await storage.getBusinessByOwnerId(userId);
         if (!business) {
           return res.status(404).json({ message: 'Business not found' });
         }
         invoices = await storage.getInvoicesByBusiness(business.id);
       } else if (user.userType === 'worker') {
-        // Contractor workers can see their own invoices
         const worker = await storage.getWorkerByUserId(userId);
         if (!worker) {
           return res.status(404).json({ message: 'Worker profile not found' });
@@ -7646,7 +7763,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Access denied' });
       }
 
-      res.json(invoices);
+      // Enrich each invoice with the linked contract (job title, role, dates) and timesheet
+      // (period dates, hours/days) so the UI can show what work the invoice represents.
+      const enriched = await Promise.all(invoices.map(async (inv: any) => {
+        let contract: any = null;
+        if (inv.contractId) {
+          try {
+            const c: any = await storage.getContractById(inv.contractId);
+            if (c) {
+              let title = c.customRoleTitle || '';
+              if (!title && c.roleTitleId) {
+                try {
+                  const rt = await storage.getRoleTitle(c.roleTitleId);
+                  title = rt?.title || '';
+                } catch {}
+              }
+              contract = {
+                id: c.id,
+                contractName: c.contractName || null,
+                jobTitle: title || c.jobDescription || '',
+                rateType: c.rateType,
+                rate: c.rate,
+                currency: c.currency,
+                startDate: c.startDate,
+                endDate: c.endDate,
+              };
+            }
+          } catch {}
+        }
+        let timesheet: any = null;
+        if (inv.timesheetId) {
+          try {
+            const ts: any = await storage.getTimesheetById(inv.timesheetId);
+            if (ts) {
+              const totalHoursNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.hoursWorked || '0') || 0), 0);
+              const totalDaysNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.daysWorked || '0') || 0), 0);
+              timesheet = {
+                id: ts.id,
+                periodStart: ts.periodStart,
+                periodEnd: ts.periodEnd,
+                totalHours: parseFloat(ts.totalHours || '0') > 0 ? ts.totalHours : totalHoursNum.toFixed(2),
+                totalDays: ts.totalDays ?? (totalDaysNum > 0 ? totalDaysNum.toFixed(2) : null),
+                status: ts.status,
+                entryCount: ts.entries?.length || 0,
+              };
+            }
+          } catch {}
+        }
+        return { ...inv, contract, timesheet };
+      }));
+
+      res.json(enriched);
     } catch (error: any) {
       console.error('Error fetching invoices:', error);
       res.status(500).json({ message: 'Failed to fetch invoices' });
@@ -7753,9 +7920,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { status, rejectionReason } = req.body;
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
-      
-      // Only business users and SDP internal users can update invoice status
-      if (!user || (user.userType !== 'business_user' && user.userType !== 'sdp_internal')) {
+
+      if (!user) {
         return res.status(403).json({ message: 'Access denied' });
       }
 
@@ -7763,6 +7929,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const invoice = await storage.getInvoiceById(id);
       if (!invoice) {
         return res.status(404).json({ message: 'Invoice not found' });
+      }
+
+      // Workers may only flip their OWN draft invoice to "submitted" (i.e. send for approval).
+      // Anything else (approve/reject/paid) stays restricted to business / SDP users.
+      if (user.userType === 'worker') {
+        const worker = await storage.getWorkerByUserId(userId);
+        const isOwn = !!worker && worker.id === invoice.contractorId;
+        const isSendForApproval = invoice.status === 'draft' && status === 'submitted';
+        if (!isOwn || !isSendForApproval) {
+          return res.status(403).json({ message: 'Workers can only submit their own draft invoices' });
+        }
+      } else if (user.userType !== 'business_user' && user.userType !== 'sdp_internal') {
+        return res.status(403).json({ message: 'Access denied' });
       }
 
       await storage.updateInvoiceStatus(id, status, userId);

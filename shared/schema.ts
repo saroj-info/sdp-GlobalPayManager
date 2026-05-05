@@ -839,6 +839,8 @@ export const invoices = pgTable("invoices", {
   status: invoiceStatusEnum("status").default('draft'),
   invoiceFileUrl: text("invoice_file_url"), // Object storage path for uploaded invoice document
   notes: text("notes"),
+  // Contract reference — when the invoice covers work under a specific contract
+  contractId: varchar("contract_id").references(() => contracts.id),
   // Timesheet reference if created from timesheet
   timesheetId: varchar("timesheet_id").references(() => timesheets.id),
   submittedAt: timestamp("submitted_at"),

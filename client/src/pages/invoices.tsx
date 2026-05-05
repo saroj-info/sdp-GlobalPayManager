@@ -30,8 +30,10 @@ interface Invoice {
   status: string;
   notes?: string;
   timesheetId?: string;
+  contractId?: string;
   submittedAt?: string;
   reviewedAt?: string;
+  paidAt?: string | Date | null;
   createdAt: string;
   contractor: {
     id: string;
@@ -531,7 +533,7 @@ export default function Invoices() {
                                     </Badge>
                                   </TableCell>
                                   <TableCell className="text-right">
-                                    {canUpdateStatus && invoice.status === 'submitted' && (
+                                    {canUpdateStatus && (invoice.status === 'submitted' || invoice.status === 'draft') && (
                                       <div className="flex gap-2 justify-end">
                                         <Button
                                           size="sm"
@@ -554,6 +556,17 @@ export default function Invoices() {
                                           Reject
                                         </Button>
                                       </div>
+                                    )}
+                                    {canUpdateStatus && invoice.status === 'approved' && (
+                                      <Button
+                                        size="sm"
+                                        onClick={() => handleStatusUpdate(invoice.id, 'paid')}
+                                        disabled={updateStatusMutation.isPending}
+                                        className="bg-green-600 hover:bg-green-700"
+                                      >
+                                        <CreditCard className="h-3 w-3 mr-1" />
+                                        Mark Paid
+                                      </Button>
                                     )}
                                   </TableCell>
                                 </TableRow>
@@ -582,24 +595,67 @@ export default function Invoices() {
 
                               <CardContent className="space-y-4">
                                 <InvoiceParties invoice={invoice} source="contractor" />
+
+                                {/* Linked contract & timesheet (if either was set when the invoice was created) */}
+                                {((invoice as any).contract || (invoice as any).timesheet) && (
+                                  <div className="rounded-md border border-secondary-200 bg-secondary-50/40 p-2 text-xs space-y-1">
+                                    {(invoice as any).contract && (
+                                      <div className="flex justify-between gap-2">
+                                        <span className="text-secondary-600">Contract</span>
+                                        <span className="font-medium text-right truncate max-w-[60%]">
+                                          {(invoice as any).contract.contractName || (invoice as any).contract.jobTitle || 'Contract'}
+                                          {(invoice as any).contract.rate ? ` · ${(invoice as any).contract.currency} ${(invoice as any).contract.rate}/${(invoice as any).contract.rateType}` : ''}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {(invoice as any).timesheet && (
+                                      <div className="flex justify-between gap-2">
+                                        <span className="text-secondary-600">Timesheet</span>
+                                        <span className="font-medium text-right">
+                                          {formatDate((invoice as any).timesheet.periodStart)} – {formatDate((invoice as any).timesheet.periodEnd)}
+                                          {parseFloat((invoice as any).timesheet.totalHours || '0') > 0 ? ` · ${parseFloat((invoice as any).timesheet.totalHours).toFixed(1)}h` : ''}
+                                          {parseFloat((invoice as any).timesheet.totalDays || '0') > 0 ? ` · ${parseFloat((invoice as any).timesheet.totalDays).toFixed(1)}d` : ''}
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
                                 <div className="space-y-2">
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-secondary-600">Issue Date:</span>
+                                    <span>{formatDate(invoice.invoiceDate)}</span>
+                                  </div>
+
                                   <div className="flex justify-between text-sm">
                                     <span className="text-secondary-600">Period:</span>
                                     <span>{formatDate(invoice.periodStart)} - {formatDate(invoice.periodEnd)}</span>
                                   </div>
-                                  
+
                                   <div className="flex justify-between text-sm">
                                     <span className="text-secondary-600">Due Date:</span>
                                     <span>{formatDate(invoice.dueDate)}</span>
                                   </div>
-                                  
-                                  {invoice.hoursWorked && (
+
+                                  {invoice.hoursWorked && parseFloat(invoice.hoursWorked) > 0 && (
                                     <div className="flex justify-between text-sm">
                                       <span className="text-secondary-600">Hours:</span>
-                                      <span>{parseFloat(invoice.hoursWorked).toFixed(1)}h</span>
+                                      <span>{parseFloat(invoice.hoursWorked).toFixed(1)}h{invoice.hourlyRate ? ` @ ${invoice.currency} ${parseFloat(invoice.hourlyRate).toFixed(2)}/hr` : ''}</span>
                                     </div>
                                   )}
-                                  
+
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-secondary-600">Subtotal:</span>
+                                    <span>{formatCurrency(invoice.subtotal || invoice.totalAmount, invoice.currency)}</span>
+                                  </div>
+
+                                  {parseFloat(invoice.taxAmount || '0') > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                      <span className="text-secondary-600">GST / Tax:</span>
+                                      <span>{formatCurrency(invoice.taxAmount, invoice.currency)}</span>
+                                    </div>
+                                  )}
+
                                   <div className="flex justify-between font-medium pt-2 border-t">
                                     <span>Total Amount:</span>
                                     <span className="text-primary-600">
@@ -609,19 +665,53 @@ export default function Invoices() {
                                 </div>
 
                                 {invoice.description && (
-                                  <div className="text-sm text-secondary-600">
-                                    {invoice.description}
+                                  <div className="text-sm text-secondary-700">
+                                    <span className="text-xs uppercase tracking-wide text-secondary-500">Description</span>
+                                    <p className="whitespace-pre-wrap">{invoice.description}</p>
                                   </div>
                                 )}
 
-                                {invoice.timesheetId && (
+                                {invoice.notes && (
+                                  <div className="text-xs text-secondary-700 rounded-md bg-blue-50/60 border border-blue-100 p-2">
+                                    <span className="text-[10px] uppercase tracking-wide text-blue-700 font-semibold">Notes</span>
+                                    <p className="whitespace-pre-wrap mt-0.5">{invoice.notes}</p>
+                                  </div>
+                                )}
+
+                                {/* Activity timeline */}
+                                {(invoice.submittedAt || invoice.reviewedAt || invoice.paidAt) && (
+                                  <div className="rounded-md border border-secondary-200 bg-secondary-50/40 p-2 text-[11px]">
+                                    <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                                      {invoice.submittedAt && (
+                                        <>
+                                          <span className="text-secondary-500">Submitted</span>
+                                          <span className="font-medium">{formatDate(invoice.submittedAt)}</span>
+                                        </>
+                                      )}
+                                      {invoice.reviewedAt && (
+                                        <>
+                                          <span className="text-secondary-500">{invoice.status === 'rejected' ? 'Rejected' : 'Approved'}</span>
+                                          <span className="font-medium">{formatDate(invoice.reviewedAt)}</span>
+                                        </>
+                                      )}
+                                      {invoice.paidAt && (
+                                        <>
+                                          <span className="text-secondary-500">Paid</span>
+                                          <span className="font-medium">{formatDate(invoice.paidAt)}</span>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {invoice.timesheetId && !((invoice as any).timesheet) && (
                                   <Badge variant="outline" className="text-xs">
                                     <Clock className="h-3 w-3 mr-1" />
                                     From Timesheet
                                   </Badge>
                                 )}
 
-                                {canUpdateStatus && invoice.status === 'submitted' && (
+                                {canUpdateStatus && (invoice.status === 'submitted' || invoice.status === 'draft') && (
                                   <div className="flex gap-2 pt-2">
                                     <Button
                                       size="sm"
@@ -644,6 +734,17 @@ export default function Invoices() {
                                       Reject
                                     </Button>
                                   </div>
+                                )}
+                                {canUpdateStatus && invoice.status === 'approved' && (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleStatusUpdate(invoice.id, 'paid')}
+                                    disabled={updateStatusMutation.isPending}
+                                    className="w-full bg-green-600 hover:bg-green-700"
+                                  >
+                                    <CreditCard className="h-3 w-3 mr-1" />
+                                    Mark as Paid
+                                  </Button>
                                 )}
                               </CardContent>
                             </Card>

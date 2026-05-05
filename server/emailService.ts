@@ -613,6 +613,66 @@ class EmailService {
     });
   }
 
+  /**
+   * Sent to whoever has approval authority on a contract (business or host client) when
+   * a worker submits a timesheet for review.
+   */
+  async sendTimesheetSubmittedEmail(opts: {
+    to: string;
+    approverName: string;       // e.g. "Anish" or business name
+    workerName: string;
+    contractLabel: string;      // contract name / role title for display
+    periodStart: Date | string;
+    periodEnd: Date | string;
+    totalLabel: string;         // e.g. "8.0h" or "5d"
+    reviewLink: string;         // deep link into the timesheets page on the platform
+  }): Promise<boolean> {
+    const fmt = (d: Date | string) => new Date(d).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+    const period = `${fmt(opts.periodStart)} – ${fmt(opts.periodEnd)}`;
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Timesheet Awaiting Your Approval</title></head>
+<body style="font-family: Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 20px;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <div style="background-color: #1e3a5f; padding: 32px 40px; text-align: center;">
+      <h1 style="color: #ffffff; margin: 0; font-size: 22px;">SDP Global Pay</h1>
+      <p style="color: #93c5fd; margin: 8px 0 0 0; font-size: 14px;">Timesheet Awaiting Approval</p>
+    </div>
+    <div style="padding: 32px 40px;">
+      <p style="color: #111827; font-size: 16px; margin: 0 0 16px 0;">Hello ${opts.approverName},</p>
+      <p style="color: #374151; font-size: 14px; line-height: 1.6;">
+        <strong>${opts.workerName}</strong> has submitted a timesheet for your approval.
+      </p>
+      <table style="width: 100%; margin: 16px 0; border-collapse: collapse;">
+        <tr><td style="padding: 6px 0; color: #6b7280; font-size: 13px;">Contract</td><td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: 600;">${opts.contractLabel}</td></tr>
+        <tr><td style="padding: 6px 0; color: #6b7280; font-size: 13px;">Period</td><td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: 600;">${period}</td></tr>
+        <tr><td style="padding: 6px 0; color: #6b7280; font-size: 13px;">Total</td><td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: 600;">${opts.totalLabel}</td></tr>
+      </table>
+      <div style="text-align: center; margin: 32px 0;">
+        <a href="${opts.reviewLink}" style="display: inline-block; background-color: #1e3a5f; color: #ffffff; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-size: 16px; font-weight: 600;">Review Timesheet</a>
+      </div>
+      <p style="color: #6b7280; font-size: 13px; line-height: 1.5;">
+        If the button doesn't work, copy and paste this link into your browser:<br/>
+        <span style="color: #2563eb; word-break: break-all;">${opts.reviewLink}</span>
+      </p>
+    </div>
+    <div style="background-color: #f3f4f6; padding: 16px 40px; text-align: center;">
+      <p style="margin: 0; color: #9ca3af; font-size: 12px;">SDP Global Pay — Global Workforce Management</p>
+    </div>
+  </div>
+</body>
+</html>`;
+    const text = `Hello ${opts.approverName},\n\n${opts.workerName} has submitted a timesheet for your approval.\n\nContract: ${opts.contractLabel}\nPeriod: ${period}\nTotal: ${opts.totalLabel}\n\nReview at: ${opts.reviewLink}\n\nSDP Global Pay`;
+
+    return this.sendEmail({
+      to: opts.to,
+      subject: `Timesheet from ${opts.workerName} awaiting approval`,
+      html,
+      text,
+    });
+  }
+
   async testConnection(): Promise<boolean> {
     if (!process.env.RESEND_API_KEY) {
       console.error('RESEND_API_KEY not configured');

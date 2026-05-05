@@ -639,7 +639,7 @@ export default function ContractsPage() {
   const [sortBy, setSortBy] = useState<'worker' | 'role' | 'country' | 'status' | 'date'>('date');
   const { user, isAuthenticated, isLoading } = useAuth();
   const { toast } = useToast();
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   
   usePageHeader(
     "Contracts",
@@ -1043,7 +1043,20 @@ export default function ContractsPage() {
                       </dl>
                     </CardContent>
 
-                    <CardFooter className="border-t border-secondary-100 bg-secondary-50/40 px-4 py-3">
+                    <CardFooter className="border-t border-secondary-100 bg-secondary-50/40 px-4 py-3 flex flex-col gap-2">
+                      {/* Worker-side: contract is awaiting their signature → quick "Sign Contract" link.
+                          Falls back to legacy email-only flow if no signing token has been issued yet. */}
+                      {(user as any)?.userType === 'worker' && !contract.signedAt && (contract as any).signingToken && (
+                        <Button
+                          size="sm"
+                          className="w-full bg-primary-600 hover:bg-primary-700 text-white"
+                          onClick={() => setLocation(`/sign/${(contract as any).signingToken}`)}
+                          data-testid={`button-sign-contract-${contract.id}`}
+                        >
+                          <CheckCircle className="mr-2 h-4 w-4" />
+                          Sign Contract
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
