@@ -12,17 +12,16 @@ export interface Contract {
  * The unit ("tracking unit") that a worker should record on their timesheet,
  * AND that the auto-invoice customer-billing calculation uses to multiply by.
  *
- * Rule:
- *   - For client work (`isForClient = true`), the tracking unit is the client's
- *     billing unit (`customerBillingRateType`) — because the timesheet feeds the
- *     client invoice and we want exact 1:1 numbers.
- *   - For pure salary engagements (`isForClient = false`), the tracking unit is
- *     the worker's pay unit (`rateType`).
- *   - When `customerBillingRateType` isn't set, falls back to the worker's pay unit.
- *
- * This single rule keeps the entry-form UI and the auto-invoice math in sync,
- * so an annual-salary worker placed at a host client billed hourly logs HOURS
- * (not presence), and the resulting invoice line is "Nh × $rate".
+ * Rule (deliberately narrow — DO NOT broaden without explicit ask):
+ *   - For HOURLY or DAILY contracts: always use the worker's `rateType`. These
+ *     contracts already match their billing unit; nothing to override.
+ *   - For ANNUAL salary contracts that are also for a host client AND have a
+ *     `customerBillingRateType` set: use the customer's billing unit. This is
+ *     the only case where the worker's rateType ('annual') doesn't map to a
+ *     per-period unit, so we have to derive the tracking unit from the client
+ *     side. (Salary worker placed at a host client billed hourly → log HOURS.)
+ *   - Anything else: fall back to the worker's `rateType` (with a default of
+ *     'hourly' for safety).
  */
 export type TimesheetTrackingUnit = 'hourly' | 'daily' | 'annual';
 
@@ -34,7 +33,13 @@ export function getTrackingUnit(
   } | null | undefined,
 ): TimesheetTrackingUnit {
   if (!contract) return 'hourly';
-  if (contract.isForClient && contract.customerBillingRateType) {
+  // Only annual contracts borrow the customer's billing unit. Hourly/daily contracts
+  // already track in their own unit and must NOT be overridden.
+  if (
+    contract.rateType === 'annual'
+    && contract.isForClient
+    && contract.customerBillingRateType
+  ) {
     return contract.customerBillingRateType === 'daily' ? 'daily' : 'hourly';
   }
   const rt = (contract.rateType || 'hourly') as TimesheetTrackingUnit;
