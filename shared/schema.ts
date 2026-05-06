@@ -536,15 +536,46 @@ export const contracts = pgTable("contracts", {
 export const remunerationTypeEnum = pgEnum('remuneration_type', ['base_salary', 'bonus', 'commission', 'allowance', 'overtime', 'other']);
 export const remunerationFrequencyEnum = pgEnum('remuneration_frequency', ['annual', 'monthly', 'per_occurrence', 'hourly', 'daily']);
 
+// Pay Item type — used by reusable Pay Items
+export const payItemTypeEnum = pgEnum('pay_item_type', [
+  'earnings',
+  'discretionary_earnings',
+  'addition_before_tax',
+  'deduction_before_tax',
+  'addition_after_tax',
+  'deduction_after_tax',
+  'retirement_benefits',
+]);
+
+// Reusable Pay Items: business-scoped (businessId set) or global (businessId null, created by SDP)
+export const payItems = pgTable("pay_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessId: varchar("business_id").references(() => businesses.id, { onDelete: 'cascade' }), // null = global (SDP-created)
+  countryId: varchar("country_id").references(() => countries.id), // null = applies to all countries
+  name: varchar("name").notNull(),
+  type: payItemTypeEnum("type").notNull(),
+  defaultAmount: decimal("default_amount", { precision: 12, scale: 2 }),
+  defaultFrequency: remunerationFrequencyEnum("default_frequency"),
+  defaultPaymentTrigger: varchar("default_payment_trigger"), // 'scheduled' | 'timesheet_period' | 'event_triggered'
+  isActive: boolean("is_active").default(true).notNull(),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_pay_items_business").on(table.businessId),
+  index("idx_pay_items_country").on(table.countryId),
+]);
+
 // Remuneration Lines - Multiple compensation entries per contract
 export const remunerationLines = pgTable("remuneration_lines", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   contractId: varchar("contract_id").references(() => contracts.id, { onDelete: 'cascade' }).notNull(),
-  type: remunerationTypeEnum("type").notNull(),
-  description: varchar("description").notNull(),
+  payItemId: varchar("pay_item_id").references(() => payItems.id), // links to the reusable Pay Item; nullable for legacy rows
+  type: remunerationTypeEnum("type"), // legacy column; new rows derive from payItem; nullable for backward compat
+  description: varchar("description"), // legacy column; new rows use the Pay Item's name
   amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
-  frequency: remunerationFrequencyEnum("frequency").notNull(),
-  paymentTrigger: varchar("payment_trigger").default('scheduled'), // 'scheduled' | 'timesheet_period' | 'event_triggered'
+  frequency: remunerationFrequencyEnum("frequency"), // override of pay item's defaultFrequency; null = inherit
+  paymentTrigger: varchar("payment_trigger"), // override of pay item's defaultPaymentTrigger; null = inherit
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1560,6 +1591,21 @@ export const insertRemunerationLineSchema = createInsertSchema(remunerationLines
 });
 
 export type InsertRemunerationLineType = z.infer<typeof insertRemunerationLineSchema>;
+
+export const insertPayItemSchema = createInsertSchema(payItems).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  businessId: z.string().nullable().optional(),
+  countryId: z.string().nullable().optional(),
+  defaultAmount: z.union([z.string(), z.number()]).optional().nullable().transform((val) =>
+    val === '' || val === null || val === undefined ? null : String(val)
+  ),
+});
+
+export type InsertPayItemType = z.infer<typeof insertPayItemSchema>;
+export type PayItem = typeof payItems.$inferSelect;
 
 export const insertRoleTitleSchema = createInsertSchema(roleTitles).omit({
   id: true,

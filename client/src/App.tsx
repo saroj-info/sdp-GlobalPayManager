@@ -22,6 +22,7 @@ import Leave from "@/pages/leave";
 import WorkerInvoices from "@/pages/worker-invoices";
 import Benefits from "@/pages/benefits";
 import Admin from "@/pages/admin";
+import PayItems from "@/pages/pay-items";
 import UserManagement from "@/pages/user-management";
 import BusinessUsers from "@/pages/business-users";
 import CountryManagement from "@/pages/country-management";
@@ -171,6 +172,10 @@ function Router() {
       <Route path="/platform-config" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;
         return <AuthenticatedLayout><Admin /></AuthenticatedLayout>;
+      }} />
+      <Route path="/pay-items" component={() => {
+        if (!authReady) return <AuthLoadingSkeleton />;
+        return <AuthenticatedLayout><PayItems /></AuthenticatedLayout>;
       }} />
       <Route path="/user-management" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;

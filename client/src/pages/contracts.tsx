@@ -315,6 +315,7 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
   const [isOpen, setIsOpen] = useState(false);
   const [editingLine, setEditingLine] = useState<any>(null);
   const [newLine, setNewLine] = useState<any>(null);
+  const [newPayItemContext, setNewPayItemContext] = useState<{ onCreated: (item: any) => void } | null>(null);
   const contractId = contract.id;
   const isSalary = contract.rateType === 'annual';
   const ctcValue = parseFloat(contract.totalPackageValue || contract.rate || '0');
@@ -337,6 +338,34 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
     enabled: isOpen,
   });
 
+  const { data: payItems = [] } = useQuery<any[]>({
+    queryKey: ['/api/pay-items'],
+    queryFn: async () => {
+      const res = await apiRequest('GET', '/api/pay-items');
+      return res.json();
+    },
+    enabled: isOpen,
+  });
+
+  const visiblePayItems = useMemo(
+    () => (payItems || []).filter((pi: any) =>
+      pi.isActive !== false && (!pi.countryId || !contract.countryId || pi.countryId === contract.countryId)
+    ),
+    [payItems, contract.countryId]
+  );
+  const payItemById = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const pi of payItems || []) m.set(pi.id, pi);
+    return m;
+  }, [payItems]);
+
+  const refreshContractCaches = () => {
+    queryClient.invalidateQueries({ queryKey: ['/api/contracts', contractId, 'remuneration-lines'] });
+    // Also refresh the parent contracts list so the card's remunerationLines preview updates
+    queryClient.invalidateQueries({ queryKey: ['/api/contracts'] });
+    queryClient.invalidateQueries({ queryKey: ['/api/contracts/business'] });
+  };
+
   const saveMutation = useMutation({
     mutationFn: async (line: any) => {
       if (line.id) {
@@ -347,7 +376,7 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/contracts', contractId, 'remuneration-lines'] });
+      refreshContractCaches();
       setEditingLine(null);
       setNewLine(null);
       toast({ title: "Saved", description: "Remuneration line saved." });
@@ -360,7 +389,7 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
       await apiRequest('DELETE', `/api/contracts/${contractId}/remuneration-lines/${lineId}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/contracts', contractId, 'remuneration-lines'] });
+      refreshContractCaches();
       toast({ title: "Deleted", description: "Remuneration line removed." });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -400,9 +429,10 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
   const LineForm = ({ line, onSave, onCancel }: { line: any; onSave: (l: any) => void; onCancel: () => void }) => {
     const [form, setForm] = useState({ ...line });
     const [validationError, setValidationError] = useState('');
+    const selectedPayItem = form.payItemId ? payItemById.get(form.payItemId) : null;
     const handleSave = () => {
-      if (!form.description || !form.description.trim()) {
-        setValidationError('Description is required');
+      if (!form.payItemId) {
+        setValidationError('Pay Item is required');
         return;
       }
       if (!form.amount && form.amount !== 0) {
@@ -410,7 +440,13 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
         return;
       }
       setValidationError('');
-      onSave(form);
+      const payload: any = {
+        ...form,
+        // legacy columns are derived from the pay item; keep description in sync for older email/templates that read it
+        description: selectedPayItem?.name ?? form.description ?? '',
+        type: null,
+      };
+      onSave(payload);
     };
     return (
       <div className="border border-green-200 rounded-lg p-3 bg-green-50 space-y-3">
@@ -418,32 +454,70 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
           <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{validationError}</p>
         )}
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs font-medium text-gray-600 mb-1 block">Type</label>
-            <Select value={form.type} onValueChange={v => setForm({ ...form, type: v })}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="base_salary">Base Salary/Rate</SelectItem>
-                <SelectItem value="allowance">Allowance</SelectItem>
-                <SelectItem value="bonus">Bonus</SelectItem>
-                <SelectItem value="commission">Commission</SelectItem>
-                <SelectItem value="overtime">Overtime</SelectItem>
-                <SelectItem value="other">Other</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="col-span-2">
+            <label className="text-xs font-medium text-gray-600 mb-1 block">Pay Item</label>
+            <div className="flex gap-2">
+              <Select
+                value={form.payItemId || ''}
+                onValueChange={v => {
+                  const pi = payItemById.get(v);
+                  setForm({
+                    ...form,
+                    payItemId: v,
+                    amount: form.amount || pi?.defaultAmount || '',
+                    frequency: form.frequency || pi?.defaultFrequency || (isSalary ? 'annual' : (contract.rateType || 'hourly')),
+                    paymentTrigger: form.paymentTrigger || pi?.defaultPaymentTrigger || 'scheduled',
+                  });
+                  setValidationError('');
+                }}
+              >
+                <SelectTrigger className="h-8 text-sm flex-1">
+                  <SelectValue placeholder="Select a Pay Item" />
+                </SelectTrigger>
+                <SelectContent>
+                  {visiblePayItems.length === 0 ? (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">No Pay Items yet — create one</div>
+                  ) : (
+                    visiblePayItems.map((pi: any) => (
+                      <SelectItem key={pi.id} value={pi.id}>
+                        {pi.name}
+                        {pi.businessId === null ? ' (Global)' : ''}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 border-green-300 text-green-700 hover:bg-green-50"
+                onClick={() => setNewPayItemContext({
+                  onCreated: (created) => {
+                    setForm((f: any) => ({
+                      ...f,
+                      payItemId: created.id,
+                      amount: f.amount || created.defaultAmount || '',
+                      frequency: f.frequency || created.defaultFrequency || (isSalary ? 'annual' : (contract.rateType || 'hourly')),
+                      paymentTrigger: f.paymentTrigger || created.defaultPaymentTrigger || 'scheduled',
+                    }));
+                  },
+                })}
+              >
+                <Plus className="h-3 w-3 mr-1" /> New
+              </Button>
+            </div>
           </div>
           <div>
             <label className="text-xs font-medium text-gray-600 mb-1 block">Amount</label>
-            <Input value={form.amount} onChange={e => { setForm({ ...form, amount: e.target.value }); setValidationError(''); }} placeholder="0.00" type="number" step="0.01" className="h-8 text-sm" />
-          </div>
-          <div className="col-span-2">
-            <label className="text-xs font-medium text-gray-600 mb-1 block">Description</label>
-            <Input value={form.description} onChange={e => { setForm({ ...form, description: e.target.value }); setValidationError(''); }} placeholder="e.g. Superannuation" className={`h-8 text-sm ${validationError && !form.description?.trim() ? 'border-red-400' : ''}`} />
+            <Input value={form.amount} onChange={e => { setForm({ ...form, amount: e.target.value }); setValidationError(''); }} placeholder={selectedPayItem?.defaultAmount || '0.00'} type="number" step="0.01" className="h-8 text-sm" />
           </div>
           <div>
             <label className="text-xs font-medium text-gray-600 mb-1 block">Frequency</label>
-            <Select value={form.frequency} onValueChange={v => setForm({ ...form, frequency: v })}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+            <Select value={form.frequency || ''} onValueChange={v => setForm({ ...form, frequency: v })}>
+              <SelectTrigger className="h-8 text-sm">
+                <SelectValue placeholder={selectedPayItem?.defaultFrequency || 'Select'} />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="annual">Annual</SelectItem>
                 <SelectItem value="monthly">Monthly</SelectItem>
@@ -455,8 +529,10 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
           </div>
           <div>
             <label className="text-xs font-medium text-gray-600 mb-1 block">Payment Trigger</label>
-            <Select value={form.paymentTrigger || 'scheduled'} onValueChange={v => setForm({ ...form, paymentTrigger: v })}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+            <Select value={form.paymentTrigger || ''} onValueChange={v => setForm({ ...form, paymentTrigger: v })}>
+              <SelectTrigger className="h-8 text-sm">
+                <SelectValue placeholder={selectedPayItem?.defaultPaymentTrigger || 'Select'} />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="scheduled">Scheduled</SelectItem>
                 <SelectItem value="timesheet_period">Per Timesheet</SelectItem>
@@ -517,27 +593,24 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
             <p className="text-sm text-muted-foreground py-2">Loading...</p>
           ) : (
             <div className="space-y-2">
-              {remunLines.map((line: any) => (
-                editingLine?.id === line.id ? (
+              {remunLines.map((line: any) => {
+                const pi = line.payItemId ? payItemById.get(line.payItemId) : null;
+                const displayName = pi?.name || line.description || 'Untitled';
+                const legacyTypeLabel = line.type ? (typeLabels[line.type] || (line.type || '').replace(/_/g, ' ')) : null;
+                return editingLine?.id === line.id ? (
                   <LineForm key={line.id} line={editingLine} onSave={l => saveMutation.mutate(l)} onCancel={() => setEditingLine(null)} />
                 ) : (
                   <div key={line.id} className="flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium truncate">{line.description}</span>
-                        <Badge variant="outline" className="text-xs flex-shrink-0 capitalize">
-                          {typeLabels[line.type] || (line.type || '').replace(/_/g, ' ')}
-                        </Badge>
+                        <span className="text-sm font-medium truncate">{displayName}</span>
+                        {legacyTypeLabel && (
+                          <Badge variant="outline" className="text-xs flex-shrink-0 capitalize">{legacyTypeLabel}</Badge>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 mt-0.5">
                         <span className="text-xs font-medium text-green-700">
                           {contract.currency} {parseFloat(line.amount || '0').toLocaleString()}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {freqLabels[line.frequency] || line.frequency}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {triggerLabels[line.paymentTrigger] || (line.paymentTrigger || 'scheduled').replace(/_/g, ' ')}
                         </span>
                       </div>
                     </div>
@@ -546,8 +619,8 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-600 hover:text-red-700" onClick={() => deleteMutation.mutate(line.id)} disabled={deleteMutation.isPending}><Trash2 className="h-3 w-3" /></Button>
                     </div>
                   </div>
-                )
-              ))}
+                );
+              })}
               {newLine && (
                 <LineForm line={newLine} onSave={l => saveMutation.mutate(l)} onCancel={() => setNewLine(null)} />
               )}
@@ -567,7 +640,7 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
               </Button>
             )}
             {!newLine && (
-              <Button size="sm" variant="outline" className="border-green-300 text-green-700 hover:bg-green-50" onClick={() => setNewLine({ type: 'base_salary', description: '', amount: '', frequency: isSalary ? 'annual' : (contract.rateType || 'hourly'), paymentTrigger: 'scheduled' })}>
+              <Button size="sm" variant="outline" className="border-green-300 text-green-700 hover:bg-green-50" onClick={() => setNewLine({ payItemId: '', amount: '', frequency: '', paymentTrigger: '' })}>
                 <Plus className="h-3 w-3 mr-1" />
                 Add Line
               </Button>
@@ -575,7 +648,154 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
           </div>
         </div>
       )}
+
+      {newPayItemContext && (
+        <NewPayItemDialog
+          open={!!newPayItemContext}
+          defaultCountryId={contract.countryId}
+          onOpenChange={(open) => { if (!open) setNewPayItemContext(null); }}
+          onCreated={(item) => {
+            newPayItemContext.onCreated(item);
+            setNewPayItemContext(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function NewPayItemDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  defaultCountryId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (item: any) => void;
+  defaultCountryId?: string;
+}) {
+  const { toast } = useToast();
+  const [form, setForm] = useState<any>({
+    name: '',
+    type: 'earnings',
+    countryId: defaultCountryId || null,
+    defaultAmount: '',
+    defaultFrequency: '',
+    defaultPaymentTrigger: '',
+  });
+
+  const { data: countries = [] } = useQuery<any[]>({
+    queryKey: ['/api/countries'],
+    queryFn: async () => (await apiRequest('GET', '/api/countries')).json(),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (payload: any) => {
+      const res = await apiRequest('POST', '/api/pay-items', payload);
+      return res.json();
+    },
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/pay-items'] });
+      toast({ title: 'Pay Item created', description: created.name });
+      onCreated(created);
+    },
+    onError: (e: any) => toast({ title: 'Failed to create Pay Item', description: e.message, variant: 'destructive' }),
+  });
+
+  const handleSave = () => {
+    if (!form.name?.trim()) {
+      toast({ title: 'Name required', variant: 'destructive' });
+      return;
+    }
+    const payload: any = {
+      name: form.name.trim(),
+      type: form.type,
+      countryId: form.countryId || null,
+      defaultAmount: form.defaultAmount === '' ? null : form.defaultAmount,
+      defaultFrequency: form.defaultFrequency || null,
+      defaultPaymentTrigger: form.defaultPaymentTrigger || null,
+    };
+    createMutation.mutate(payload);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>New Pay Item</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-gray-600 mb-1 block">Pay Item</label>
+            <Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Superannuation" className="h-9 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-600 mb-1 block">Country</label>
+            <Select value={form.countryId || 'all'} onValueChange={v => setForm({ ...form, countryId: v === 'all' ? null : v })}>
+              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Countries</SelectItem>
+                {countries.map((c: any) => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-600 mb-1 block">Type</label>
+            <Select value={form.type} onValueChange={v => setForm({ ...form, type: v })}>
+              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="earnings">Earnings</SelectItem>
+                <SelectItem value="discretionary_earnings">Discretionary Earnings</SelectItem>
+                <SelectItem value="addition_before_tax">Addition Before Tax</SelectItem>
+                <SelectItem value="deduction_before_tax">Deduction Before Tax</SelectItem>
+                <SelectItem value="addition_after_tax">Addition After Tax</SelectItem>
+                <SelectItem value="deduction_after_tax">Deduction After Tax</SelectItem>
+                <SelectItem value="retirement_benefits">Retirement Benefits</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Default Amount</label>
+              <Input value={form.defaultAmount} onChange={e => setForm({ ...form, defaultAmount: e.target.value })} placeholder="Optional" type="number" step="0.01" className="h-9 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Pay Frequency</label>
+              <Select value={form.defaultFrequency || ''} onValueChange={v => setForm({ ...form, defaultFrequency: v })}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Optional" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="annual">Annual</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="hourly">Hourly</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="per_occurrence">Per Occurrence</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Pay Trigger</label>
+              <Select value={form.defaultPaymentTrigger || ''} onValueChange={v => setForm({ ...form, defaultPaymentTrigger: v })}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Optional" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="scheduled">Scheduled</SelectItem>
+                  <SelectItem value="timesheet_period">Per Timesheet</SelectItem>
+                  <SelectItem value="event_triggered">Event</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button onClick={handleSave} disabled={createMutation.isPending}>
+              {createMutation.isPending ? 'Creating...' : 'Create Pay Item'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1022,6 +1242,37 @@ export default function ContractsPage() {
                             : 'No Billing Lines'}
                         </div>
                       )}
+
+                      {/* SDP-only remuneration lines preview — fixed shape so the card layout doesn't reflow when lines are added */}
+                      {((user as any)?.userType === 'sdp_internal' || (user as any)?.userType === 'sdp_super_admin') && (() => {
+                        const lines = (contract as any).remunerationLines as any[] | undefined;
+                        const count = Array.isArray(lines) ? lines.length : 0;
+                        return (
+                          <div className={`rounded-md border px-2.5 py-1.5 text-xs ${count > 0 ? 'border-green-200 bg-green-50/60 text-green-900' : 'border-gray-200 bg-gray-50 text-gray-500'}`}>
+                            <div className="flex items-center justify-between font-medium">
+                              <span className="inline-flex items-center gap-1.5">
+                                <DollarSign className={`h-3.5 w-3.5 ${count > 0 ? 'text-green-700' : 'text-gray-400'}`} />
+                                {count > 0 ? `${count} Remuneration Line${count === 1 ? '' : 's'}` : 'No Remuneration Lines'}
+                              </span>
+                            </div>
+                            {count > 0 && (
+                              <div className="mt-1.5 space-y-0.5">
+                                {lines!.slice(0, 3).map((rl: any) => (
+                                  <div key={rl.id} className="flex items-center justify-between gap-2">
+                                    <span className="truncate">{rl.description || rl.payItemName || 'Untitled'}</span>
+                                    <span className="font-semibold tabular-nums whitespace-nowrap">
+                                      {contract.currency} {parseFloat(rl.amount || '0').toLocaleString()}
+                                    </span>
+                                  </div>
+                                ))}
+                                {count > 3 && (
+                                  <div className="text-[10px] text-green-700/70">+{count - 3} more</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {/* Spacer pushes the dates block to the bottom of the content area */}
                       <div className="flex-1" />

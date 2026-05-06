@@ -6,6 +6,7 @@ import {
   workers,
   contracts,
   remunerationLines,
+  payItems,
   contractRateLines,
   contractBillingLines,
   purchaseOrders,
@@ -54,6 +55,8 @@ import {
   type InsertContract,
   type RemunerationLine,
   type InsertRemunerationLineType,
+  type PayItem,
+  type InsertPayItemType,
   type ContractTemplate,
   type InsertContractTemplate,
   type ContractInstance,
@@ -271,6 +274,14 @@ export interface IStorage {
   createRemunerationLine(line: InsertRemunerationLineType): Promise<RemunerationLine>;
   updateRemunerationLine(id: string, data: Partial<InsertRemunerationLineType>): Promise<RemunerationLine>;
   deleteRemunerationLine(id: string): Promise<void>;
+
+  // Pay Item operations
+  getPayItemsForBusiness(businessId: string | null): Promise<PayItem[]>;
+  getAllPayItems(): Promise<PayItem[]>;
+  getPayItem(id: string): Promise<PayItem | undefined>;
+  createPayItem(payItem: InsertPayItemType): Promise<PayItem>;
+  updatePayItem(id: string, data: Partial<InsertPayItemType>): Promise<PayItem>;
+  deletePayItem(id: string): Promise<void>;
 
   // Contract Rate Lines
   getContractRateLines(contractId: string): Promise<SelectContractRateLine[]>;
@@ -1627,6 +1638,56 @@ export class DatabaseStorage implements IStorage {
       .where(eq(remunerationLines.id, id));
   }
 
+  // Pay Item operations — business-scoped (own + globals) or global-only
+  async getPayItemsForBusiness(businessId: string | null): Promise<PayItem[]> {
+    if (businessId) {
+      return await db
+        .select()
+        .from(payItems)
+        .where(
+          and(
+            eq(payItems.isActive, true),
+            or(eq(payItems.businessId, businessId), isNull(payItems.businessId))
+          )
+        );
+    }
+    return await db
+      .select()
+      .from(payItems)
+      .where(and(eq(payItems.isActive, true), isNull(payItems.businessId)));
+  }
+
+  async getAllPayItems(): Promise<PayItem[]> {
+    return await db
+      .select()
+      .from(payItems)
+      .where(eq(payItems.isActive, true));
+  }
+
+  async getPayItem(id: string): Promise<PayItem | undefined> {
+    const [row] = await db.select().from(payItems).where(eq(payItems.id, id));
+    return row;
+  }
+
+  async createPayItem(payItem: InsertPayItemType): Promise<PayItem> {
+    const [created] = await db.insert(payItems).values(payItem as any).returning();
+    return created;
+  }
+
+  async updatePayItem(id: string, data: Partial<InsertPayItemType>): Promise<PayItem> {
+    const [updated] = await db
+      .update(payItems)
+      .set({ ...(data as any), updatedAt: new Date() })
+      .where(eq(payItems.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deletePayItem(id: string): Promise<void> {
+    // Soft-delete by toggling isActive so existing remuneration lines can still resolve the link
+    await db.update(payItems).set({ isActive: false, updatedAt: new Date() }).where(eq(payItems.id, id));
+  }
+
   // Contract Rate Lines
   async getContractRateLines(contractId: string): Promise<SelectContractRateLine[]> {
     return await db
@@ -2850,22 +2911,22 @@ export class DatabaseStorage implements IStorage {
   </thead>
   <tbody>
 ${lines.map(line => `    <tr>
-      <td>${this.formatRemunerationType(line.type)}</td>
-      <td>${line.description}</td>
+      <td>${this.formatRemunerationType(line.type ?? 'other')}</td>
+      <td>${line.description ?? ''}</td>
       <td>${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-      <td>${this.formatRemunerationFrequency(line.frequency)}</td>
+      <td>${this.formatRemunerationFrequency(line.frequency ?? 'annual')}</td>
     </tr>`).join('\n')}
   </tbody>
 </table>`;
 
         // Format as simple text list for non-HTML templates
-        remunerationLines = lines.map(line => 
-          `• ${this.formatRemunerationType(line.type)}: ${line.description} - ${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${this.formatRemunerationFrequency(line.frequency)})`
+        remunerationLines = lines.map(line =>
+          `• ${this.formatRemunerationType(line.type ?? 'other')}: ${line.description ?? ''} - ${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${this.formatRemunerationFrequency(line.frequency ?? 'annual')})`
         ).join('\n');
 
         // Extract individual common remuneration types for easy template access
         lines.forEach(line => {
-          const formattedAmount = `${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${this.formatRemunerationFrequency(line.frequency)}`;
+          const formattedAmount = `${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${this.formatRemunerationFrequency(line.frequency ?? 'annual')}`;
           
           switch (line.type) {
             case 'base_salary':

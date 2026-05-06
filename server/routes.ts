@@ -80,6 +80,7 @@ import {
   insertCountryAdvisorFeeSchema,
   insertCountryDocumentSchema,
   type InsertRemunerationLineType,
+  insertPayItemSchema,
 } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -6244,10 +6245,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/contracts/:id/remuneration-lines/:lineId', authMiddleware, sdpOnlyMiddleware, async (req: any, res) => {
     try {
       const { lineId } = req.params;
-      const line = await storage.updateRemunerationLine(lineId, req.body);
+      const { id, contractId, createdAt, updatedAt, ...patch } = req.body;
+      const line = await storage.updateRemunerationLine(lineId, patch);
       res.json(line);
     } catch (error: any) {
-      res.status(500).json({ message: "Failed to update remuneration line" });
+      console.error('Error updating remuneration line:', error);
+      res.status(500).json({ message: "Failed to update remuneration line", error: error.message });
     }
   });
 
@@ -6258,6 +6261,129 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete remuneration line" });
+    }
+  });
+
+  // ─── Pay Items ────────────────────────────────────────────────────────────
+  // Visibility: business_user sees own + globals; SDP user sees all.
+  // Globals (businessId = null) are created/edited only by SDP users.
+  app.get('/api/pay-items', authMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.user?.userId;
+      const sdpRole = req.user?.sdpRole;
+      const userType = req.user?.userType;
+      if (sdpRole) {
+        const items = await storage.getAllPayItems();
+        return res.json(items);
+      }
+      if (userType === 'business_user' && userId) {
+        const business = await storage.getBusinessByOwnerId(userId);
+        const items = await storage.getPayItemsForBusiness(business?.id ?? null);
+        return res.json(items);
+      }
+      // workers and any other types: globals only
+      const items = await storage.getPayItemsForBusiness(null);
+      res.json(items);
+    } catch (error: any) {
+      console.error('Error fetching pay items:', error);
+      res.status(500).json({ message: 'Failed to fetch pay items' });
+    }
+  });
+
+  app.post('/api/pay-items', authMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.user?.userId;
+      const sdpRole = req.user?.sdpRole;
+      const userType = req.user?.userType;
+      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+      const parsed = insertPayItemSchema.safeParse({ ...req.body, createdBy: userId });
+      if (!parsed.success) {
+        return res.status(400).json({ message: 'Invalid pay item data', errors: parsed.error.errors });
+      }
+      const data = parsed.data;
+
+      let businessId: string | null = null;
+      if (sdpRole) {
+        // SDP users may create global (businessId=null) or business-scoped
+        businessId = data.businessId ?? null;
+      } else if (userType === 'business_user') {
+        const business = await storage.getBusinessByOwnerId(userId);
+        if (!business) return res.status(403).json({ message: 'No business found for user' });
+        // Force-scope to caller's business — ignore any client-supplied businessId
+        businessId = business.id;
+      } else {
+        return res.status(403).json({ message: 'Not authorized to create pay items' });
+      }
+
+      const created = await storage.createPayItem({ ...data, businessId } as any);
+      res.json(created);
+    } catch (error: any) {
+      console.error('Error creating pay item:', error);
+      res.status(500).json({ message: 'Failed to create pay item' });
+    }
+  });
+
+  app.patch('/api/pay-items/:id', authMiddleware, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+      const sdpRole = req.user?.sdpRole;
+      const userType = req.user?.userType;
+      const existing = await storage.getPayItem(id);
+      if (!existing) return res.status(404).json({ message: 'Pay item not found' });
+
+      // Authorization: SDP can edit any; business user can only edit own
+      if (sdpRole) {
+        // ok
+      } else if (userType === 'business_user' && userId) {
+        const business = await storage.getBusinessByOwnerId(userId);
+        if (!business || existing.businessId !== business.id) {
+          return res.status(403).json({ message: 'Not authorized to edit this pay item' });
+        }
+      } else {
+        return res.status(403).json({ message: 'Not authorized' });
+      }
+
+      // Don't let non-SDP users move a row between businesses or to global
+      const update: any = { ...req.body };
+      if (!sdpRole) delete update.businessId;
+      delete update.id;
+      delete update.createdAt;
+      delete update.updatedAt;
+      delete update.createdBy;
+
+      const updated = await storage.updatePayItem(id, update);
+      res.json(updated);
+    } catch (error: any) {
+      console.error('Error updating pay item:', error);
+      res.status(500).json({ message: 'Failed to update pay item' });
+    }
+  });
+
+  app.delete('/api/pay-items/:id', authMiddleware, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+      const sdpRole = req.user?.sdpRole;
+      const userType = req.user?.userType;
+      const existing = await storage.getPayItem(id);
+      if (!existing) return res.status(404).json({ message: 'Pay item not found' });
+      if (sdpRole) {
+        // ok
+      } else if (userType === 'business_user' && userId) {
+        const business = await storage.getBusinessByOwnerId(userId);
+        if (!business || existing.businessId !== business.id) {
+          return res.status(403).json({ message: 'Not authorized to delete this pay item' });
+        }
+      } else {
+        return res.status(403).json({ message: 'Not authorized' });
+      }
+      await storage.deletePayItem(id);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting pay item:', error);
+      res.status(500).json({ message: 'Failed to delete pay item' });
     }
   });
 

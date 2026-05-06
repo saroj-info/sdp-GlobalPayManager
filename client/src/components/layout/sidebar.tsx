@@ -21,6 +21,7 @@ export function Sidebar() {
     { name: 'Timesheets', href: '/timesheets', icon: 'fas fa-clock' },
     { name: 'Leave Requests', href: '/leave-requests', icon: 'fas fa-calendar-day' },
     { name: 'Invoices', href: '/invoices', icon: 'fas fa-file-invoice' },
+    { name: 'Pay Items', href: '/pay-items', icon: 'fas fa-coins' },
     { name: 'Resources', href: '/resources', icon: 'fas fa-calculator' },
   ];
 
@@ -86,7 +87,12 @@ export function Sidebar() {
     if (userSdpRole && ['sdp_super_admin', 'sdp_admin'].includes(userSdpRole)) {
       navigation.push({ name: 'Templates', href: '/platform-config', icon: 'fas fa-file-contract' });
     }
-    
+
+    // Pay Items (Global management) for Super Admin and Admin only
+    if (userSdpRole && ['sdp_super_admin', 'sdp_admin'].includes(userSdpRole)) {
+      navigation.push({ name: 'Pay Items', href: '/pay-items', icon: 'fas fa-coins' });
+    }
+
     return navigation;
   };
 
