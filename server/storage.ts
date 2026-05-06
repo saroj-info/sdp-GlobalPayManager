@@ -2886,6 +2886,41 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // Resolve role title and job description from the saved contract (when available),
+    // falling back to whatever the client passed in. Templates rely on these.
+    let resolvedRoleTitle = contractData.roleTitle || '';
+    let resolvedJobDescription = contractData.jobDescription || contractData.roleDescription || '';
+    let resolvedThirdParty: any = null;
+    if (contractData.contractId) {
+      const contractRow = await this.getContract(contractData.contractId);
+      if (contractRow) {
+        if (!resolvedRoleTitle) {
+          if (contractRow.roleTitleId) {
+            const rt = await this.getRoleTitle(contractRow.roleTitleId);
+            if (rt) resolvedRoleTitle = rt.title || '';
+          }
+          if (!resolvedRoleTitle && (contractRow as any).customRoleTitle) {
+            resolvedRoleTitle = (contractRow as any).customRoleTitle;
+          }
+        }
+        if (!resolvedJobDescription && (contractRow as any).jobDescription) {
+          resolvedJobDescription = (contractRow as any).jobDescription;
+        }
+        if ((contractRow as any).thirdPartyBusinessId) {
+          const [tp] = await db.select().from(thirdPartyBusinesses).where(eq(thirdPartyBusinesses.id, (contractRow as any).thirdPartyBusinessId));
+          if (tp) resolvedThirdParty = tp;
+        }
+      }
+    }
+
+    // Map rateType → human-friendly salary frequency for older templates
+    const salaryFrequencyByRateType: Record<string, string> = {
+      annual: 'annually',
+      monthly: 'monthly',
+      hourly: 'per hour',
+      daily: 'per day',
+    };
+
     // Fetch remuneration lines if contractId is provided
     let remunerationLines = '';
     let remunerationLinesTable = '';
@@ -2893,35 +2928,49 @@ export class DatabaseStorage implements IStorage {
     let bonus = '';
     let commission = '';
     let allowance = '';
-    
+
     if (contractData.contractId) {
       const lines = await this.getRemunerationLinesByContractId(contractData.contractId);
-      
+      const lineCurrency = (contractData.rateCurrency as string) || country.currency || '';
+
       if (lines && lines.length > 0) {
-        // Format as HTML table for PDF rendering
+        // Look up pay item names for any lines that link to a pay item but don't already
+        // carry the name in `description`
+        const payItemIds = Array.from(new Set(
+          lines.map((l: any) => l.payItemId).filter((id: any): id is string => !!id)
+        ));
+        const payItemNameById = new Map<string, string>();
+        if (payItemIds.length > 0) {
+          const pis = await db.select().from(payItems).where(inArray(payItems.id, payItemIds));
+          for (const pi of pis) payItemNameById.set(pi.id, pi.name);
+        }
+        const labelFor = (line: any) =>
+          (line.payItemId && payItemNameById.get(line.payItemId))
+          || line.description
+          || (line.type ? this.formatRemunerationType(line.type) : 'Pay Item');
+
+        // Format as HTML table for PDF rendering — Pay Item / Amount / Frequency
         remunerationLinesTable = `
 <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%;">
   <thead>
     <tr>
-      <th>Type</th>
-      <th>Description</th>
+      <th>Pay Item</th>
       <th>Amount</th>
       <th>Frequency</th>
     </tr>
   </thead>
   <tbody>
 ${lines.map(line => `    <tr>
-      <td>${this.formatRemunerationType(line.type ?? 'other')}</td>
-      <td>${line.description ?? ''}</td>
-      <td>${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-      <td>${this.formatRemunerationFrequency(line.frequency ?? 'annual')}</td>
+      <td>${labelFor(line)}</td>
+      <td>${lineCurrency} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      <td>${line.frequency ? this.formatRemunerationFrequency(line.frequency) : '—'}</td>
     </tr>`).join('\n')}
   </tbody>
 </table>`;
 
         // Format as simple text list for non-HTML templates
         remunerationLines = lines.map(line =>
-          `• ${this.formatRemunerationType(line.type ?? 'other')}: ${line.description ?? ''} - ${(line as any).currency ?? ''} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${this.formatRemunerationFrequency(line.frequency ?? 'annual')})`
+          `• ${labelFor(line)} — ${lineCurrency} ${parseFloat(line.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${line.frequency ? ` (${this.formatRemunerationFrequency(line.frequency)})` : ''}`
         ).join('\n');
 
         // Extract individual common remuneration types for easy template access
@@ -2998,7 +3047,7 @@ ${lines.map(line => `    <tr>
       rateType: contractData.rateType || 'hour',
 
       // Contract aliases (match Variable Helper UI labels)
-      contractTitle: contractData.contractTitle || contractData.serviceDescription || '',
+      contractTitle: contractData.contractTitle || resolvedRoleTitle || contractData.serviceDescription || '',
       contractType: contractData.contractType || contractData.employmentType || '',
       salaryAmount: contractData.rateAmount || '',
       currency: contractData.rateCurrency || country.currency,
@@ -3007,6 +3056,37 @@ ${lines.map(line => `    <tr>
       department: contractData.department || '',
       probationPeriod: contractData.probationPeriod || '',
       holidayEntitlement: contractData.holidayEntitlement || '',
+
+      // Role + duties (resolved from saved contract or contractData fallback)
+      roleTitle: resolvedRoleTitle,
+      jobTitle: resolvedRoleTitle,
+      position: resolvedRoleTitle,
+      workerRole: resolvedRoleTitle,
+      jobDescription: resolvedJobDescription,
+      roleDescription: resolvedJobDescription,
+      duties: resolvedJobDescription,
+
+      // Employee-flavoured aliases (older templates use {{employeeXxx}} instead of {{workerXxx}})
+      employeeName: contractorFullName,
+      employeeFirstName: worker.firstName,
+      employeeLastName: worker.lastName,
+      employeeEmail: worker.email,
+      employeePhone: (worker as any).phoneNumber || '',
+      employeeAddress: contractorAddressStr,
+      employeeDateOfBirth: dob,
+      employeeSSNLast4: ((worker as any).ssn || '').slice(-4),
+
+      // Salary frequency derived from rateType when not explicitly supplied
+      salaryFrequency: contractData.salaryFrequency || salaryFrequencyByRateType[contractData.rateType || ''] || '',
+
+      // Third-party business (when this contract is for a third-party-supplied worker)
+      thirdPartyBusinessName: contractData.thirdPartyBusinessName || resolvedThirdParty?.name || '',
+      thirdPartyContactPerson: contractData.thirdPartyContactPerson || resolvedThirdParty?.contactPerson || '',
+      thirdPartyContactEmail: contractData.thirdPartyContactEmail || resolvedThirdParty?.email || '',
+      thirdPartyContactPhone: contractData.thirdPartyContactPhone || resolvedThirdParty?.phone || '',
+      thirdPartyAddress: contractData.thirdPartyAddress || '',
+      thirdPartyRegistrationNumber: contractData.thirdPartyRegistrationNumber || '',
+      thirdPartyTaxId: contractData.thirdPartyTaxId || '',
 
       // Notice period
       noticePeriod: noticePeriod,
@@ -3041,6 +3121,18 @@ ${lines.map(line => `    <tr>
       governingLaw: contractData.governingLaw || `the laws of ${country.name}`,
       disputeVenue: contractData.disputeVenue || country.name,
     };
+
+    // Passthrough for any ad-hoc template variable supplied by the caller via contractData
+    // (e.g. {{flsaClassification}}, {{stateOfEmployment}}, {{benefitsDescription}}, {{workSchedule}}).
+    // Explicit canonical fields above always win — this only fills in keys that aren't already set.
+    if (contractData && typeof contractData === 'object') {
+      for (const [k, v] of Object.entries(contractData)) {
+        if (variables[k] !== undefined && variables[k] !== '') continue;
+        if (v === null || v === undefined) continue;
+        const s = typeof v === 'string' ? v : (typeof v === 'number' || typeof v === 'boolean' ? String(v) : '');
+        if (s) variables[k] = s;
+      }
+    }
 
     // Generate final contract content
     let content = await this.generateContractContent(template, variables);

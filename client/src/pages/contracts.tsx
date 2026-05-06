@@ -757,6 +757,7 @@ function NewPayItemDialog({
               </SelectContent>
             </Select>
           </div>
+          {/* Optional Pay Item defaults — set per contract instead of on the Pay Item itself
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">Default Amount</label>
@@ -787,6 +788,7 @@ function NewPayItemDialog({
               </Select>
             </div>
           </div>
+          */}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button onClick={handleSave} disabled={createMutation.isPending}>

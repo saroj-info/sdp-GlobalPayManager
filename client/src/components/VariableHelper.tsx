@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Copy, ChevronDown, ChevronRight, HelpCircle, Building2, User, FileText, Landmark } from 'lucide-react';
+import { Copy, ChevronDown, ChevronRight, HelpCircle, Building2, User, FileText, Landmark, Coins, Users2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 interface VariableGroup {
@@ -65,6 +65,19 @@ const TEMPLATE_VARIABLES: VariableGroup[] = [
       { name: 'workerBankName', description: 'Worker bank name', example: 'Commonwealth Bank' },
       { name: 'workerBankAccount', description: 'Worker bank account', example: '123456789' },
       { name: 'workerBsb', description: 'Bank BSB code (if applicable)', example: '062-001' },
+      // Aliases used by older templates
+      { name: 'employeeName', description: 'Alias for workerName', example: 'John Michael Doe' },
+      { name: 'employeeFirstName', description: 'Alias for workerFirstName', example: 'John' },
+      { name: 'employeeLastName', description: 'Alias for workerLastName', example: 'Doe' },
+      { name: 'employeeEmail', description: 'Alias for workerEmail', example: 'john.doe@email.com' },
+      { name: 'employeePhone', description: 'Alias for workerPhone', example: '+61 4 1234 5678' },
+      { name: 'employeeAddress', description: 'Alias for workerAddress', example: '789 Residential St, Melbourne, VIC 3000' },
+      { name: 'employeeDateOfBirth', description: 'Alias for workerDateOfBirth', example: '1990-05-15' },
+      { name: 'employeeSSNLast4', description: 'Last 4 digits of SSN/national ID', example: '1234' },
+      { name: 'contractorName', description: 'Alias for workerName (contractor wording)', example: 'John Michael Doe' },
+      { name: 'contractorAddress', description: 'Alias for workerAddress', example: '789 Residential St, Melbourne, VIC 3000' },
+      { name: 'contractorEmail', description: 'Alias for workerEmail', example: 'john.doe@email.com' },
+      { name: 'contractorBusinessName', description: "Worker's own business name (independent contractors)", example: 'Acme Consulting Ltd' },
     ],
   },
   {
@@ -72,21 +85,63 @@ const TEMPLATE_VARIABLES: VariableGroup[] = [
     icon: FileText,
     description: 'Specific terms and details of the contract',
     variables: [
+      { name: 'agreementDate', description: 'Date the agreement is dated', example: '15/01/2024' },
       { name: 'contractTitle', description: 'Contract job title/position', example: 'Senior Software Developer' },
       { name: 'contractType', description: 'Employment type', example: 'Fixed Term Contract' },
+      { name: 'roleTitle', description: 'Role / position title', example: 'Senior Software Developer' },
+      { name: 'jobTitle', description: 'Alias for roleTitle', example: 'Senior Software Developer' },
+      { name: 'position', description: 'Alias for roleTitle', example: 'Senior Software Developer' },
+      { name: 'workerRole', description: 'Alias for roleTitle', example: 'Senior Software Developer' },
+      { name: 'jobDescription', description: 'Detailed description of duties / responsibilities', example: 'Design and ship backend services...' },
+      { name: 'roleDescription', description: 'Alias for jobDescription', example: 'Design and ship backend services...' },
+      { name: 'duties', description: 'Alias for jobDescription', example: 'Design and ship backend services...' },
+      { name: 'serviceDescription', description: 'Service / scope description (contractor agreements)', example: 'Software development services for Project Alpha' },
       { name: 'startDate', description: 'Contract start date', example: '2024-01-15' },
       { name: 'endDate', description: 'Contract end date (if applicable)', example: '2024-12-31' },
       { name: 'salaryAmount', description: 'Salary or rate amount', example: '150000' },
+      { name: 'salaryFrequency', description: 'Frequency the salary/rate is paid at', example: 'annually' },
       { name: 'currency', description: 'Currency code', example: 'AUD' },
       { name: 'rateType', description: 'How salary is calculated', example: 'per annum' },
+      { name: 'rateAmount', description: 'Headline rate amount', example: '150000' },
+      { name: 'rateCurrency', description: 'Currency for the headline rate', example: 'AUD' },
       { name: 'workLocation', description: 'Primary work location', example: 'Sydney Office / Remote' },
       { name: 'reportingManager', description: 'Direct manager name', example: 'Sarah Johnson' },
       { name: 'department', description: 'Department or team', example: 'Technology' },
       { name: 'probationPeriod', description: 'Probation period duration', example: '3 months' },
-      { name: 'noticePeriod', description: 'Required notice period', example: '4 weeks' },
+      { name: 'noticePeriod', description: 'Required notice period (formatted)', example: '30 days notice' },
+      { name: 'noticePeriodDays', description: 'Required notice period (days)', example: '30' },
       { name: 'holidayEntitlement', description: 'Annual leave entitlement', example: '20 days' },
+      { name: 'governingLaw', description: 'Governing law clause text', example: 'the laws of Australia' },
+      { name: 'disputeVenue', description: 'Venue for dispute resolution', example: 'Australia' },
     ],
   },
+  {
+    category: 'Compensation / Remuneration',
+    icon: Coins,
+    description: 'Multi-line salary breakdown for the contract — the splits surfaced from Pay Items / Remuneration Lines',
+    variables: [
+      { name: 'remunerationLinesTable', description: 'Full breakdown rendered as an HTML table (Pay Item / Amount / Frequency)', example: '<table>...</table>' },
+      { name: 'remunerationLines', description: 'Same breakdown as a plain bulleted list (for non-HTML templates)', example: '• Base Salary — AUD 100,000.00 (annually)' },
+      { name: 'baseSalary', description: 'Base Salary line — formatted amount + frequency', example: 'AUD 100,000.00 annually' },
+      { name: 'bonus', description: 'Bonus line — formatted amount + frequency', example: 'AUD 10,000.00 annually' },
+      { name: 'commission', description: 'Commission line — formatted amount + frequency', example: 'AUD 5,000.00 per occurrence' },
+      { name: 'allowance', description: 'Allowance line — formatted amount + frequency', example: 'AUD 2,000.00 monthly' },
+    ],
+  },
+  // {
+  //   category: 'Third-Party Business',
+  //   icon: Users2,
+  //   description: 'For contracts where a 3rd-party vendor supplies the worker',
+  //   variables: [
+  //     { name: 'thirdPartyBusinessName', description: 'Vendor business name', example: 'Vendor Co Pty Ltd' },
+  //     { name: 'thirdPartyContactPerson', description: 'Vendor primary contact', example: 'Alex Lee' },
+  //     { name: 'thirdPartyContactEmail', description: 'Vendor contact email', example: 'alex@vendorco.com' },
+  //     { name: 'thirdPartyContactPhone', description: 'Vendor contact phone', example: '+61 2 1234 5678' },
+  //     { name: 'thirdPartyAddress', description: 'Vendor address (supplied via contractData)', example: '12 Vendor St, Sydney' },
+  //     { name: 'thirdPartyRegistrationNumber', description: 'Vendor registration / company number', example: 'ABN 12 345 678 901' },
+  //     { name: 'thirdPartyTaxId', description: 'Vendor tax ID', example: '12-3456789' },
+  //   ],
+  // },
 ];
 
 interface VariableHelperProps {

@@ -276,6 +276,7 @@ function PayItemEditor({
               </SelectContent>
             </Select>
           </div>
+          {/* Optional Pay Item defaults — set per contract instead of on the Pay Item itself
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">Default Amount</label>
@@ -304,6 +305,7 @@ function PayItemEditor({
               </SelectContent>
             </Select>
           </div>
+          */}
           {isSdp && !item && (
             <div className="flex items-center justify-between border rounded-md px-3 py-2">
               <div>
