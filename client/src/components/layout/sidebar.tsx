@@ -84,7 +84,7 @@ export function Sidebar() {
 
     // Templates (Admin) for Super Admin and Admin only
     if (userSdpRole && ['sdp_super_admin', 'sdp_admin'].includes(userSdpRole)) {
-      navigation.push({ name: 'Templates', href: '/admin', icon: 'fas fa-file-contract' });
+      navigation.push({ name: 'Templates', href: '/platform-config', icon: 'fas fa-file-contract' });
     }
     
     return navigation;

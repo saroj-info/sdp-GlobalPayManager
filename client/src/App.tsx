@@ -168,7 +168,7 @@ function Router() {
         if (!authReady) return <AuthLoadingSkeleton />;
         return <AuthenticatedLayout><Benefits /></AuthenticatedLayout>;
       }} />
-      <Route path="/admin" component={() => {
+      <Route path="/platform-config" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;
         return <AuthenticatedLayout><Admin /></AuthenticatedLayout>;
       }} />

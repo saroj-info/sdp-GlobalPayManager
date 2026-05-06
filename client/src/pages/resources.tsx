@@ -770,7 +770,7 @@ function EmploymentCostCalculator() {
             <Button
               variant="outline"
               onClick={() => {
-                setLocation('/admin');
+                setLocation('/platform-config');
                 setTimeout(() => {
                   const tabTrigger = document.querySelector('[value="jurisdiction-data"]');
                   if (tabTrigger) {
