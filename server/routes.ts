@@ -4484,13 +4484,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const worker = workers.find((w: any) => w.id === ts.workerId);
         const business = businesses.find((b: any) => b.id === ts.businessId);
         const country = countries.find((c: any) => c.id === worker?.countryId);
-        
+
+        // Authoritative source: sum `hoursWorked` from entries. Daily/annual contracts
+        // legitimately have no hours and contribute 0, which is what we want for an
+        // "Approved Hours" tile.
+        const computedHours = (ts.entries || []).reduce(
+          (s: number, e: any) => s + (parseFloat(e.hoursWorked ?? '0') || 0),
+          0,
+        );
+
         return {
           id: ts.id,
           workerName: worker ? `${worker.firstName} ${worker.lastName}` : 'Unknown Worker',
           businessName: business?.name || 'Unknown Business',
           countryName: country?.name || 'Unknown Country',
-          totalHours: ts.totalHours || 0,
+          totalHours: computedHours,
           amount: ts.totalAmount || 0,
           approvedDate: ts.approvedAt?.toISOString() || ts.updatedAt?.toISOString() || new Date().toISOString(),
         };
@@ -4546,8 +4554,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }),
       ];
 
-      const totalPaymentsValue = paymentsToProcess.reduce((sum, payment) => sum + payment.amount, 0);
-      const totalApprovedHours = approvedTimesheets.reduce((sum, ts) => sum + ts.totalHours, 0);
+      const toNum = (v: any) => {
+        const n = typeof v === 'number' ? v : parseFloat(v ?? '0');
+        return Number.isFinite(n) ? n : 0;
+      };
+      const totalPaymentsValue = paymentsToProcess.reduce((sum, payment) => sum + toNum(payment.amount), 0);
+      const totalApprovedHours = approvedTimesheets.reduce((sum, ts) => sum + toNum(ts.totalHours), 0);
 
       res.json({
         contractsByCountry,
@@ -6272,17 +6284,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.userId;
       const sdpRole = req.user?.sdpRole;
       const userType = req.user?.userType;
+      const countryId = (req.query.countryId as string | undefined) || undefined;
       if (sdpRole) {
-        const items = await storage.getAllPayItems();
+        const items = await storage.getAllPayItems(countryId);
         return res.json(items);
       }
       if (userType === 'business_user' && userId) {
         const business = await storage.getBusinessByOwnerId(userId);
-        const items = await storage.getPayItemsForBusiness(business?.id ?? null);
+        const items = await storage.getPayItemsForBusiness(business?.id ?? null, countryId);
         return res.json(items);
       }
       // workers and any other types: globals only
-      const items = await storage.getPayItemsForBusiness(null);
+      const items = await storage.getPayItemsForBusiness(null, countryId);
       res.json(items);
     } catch (error: any) {
       console.error('Error fetching pay items:', error);

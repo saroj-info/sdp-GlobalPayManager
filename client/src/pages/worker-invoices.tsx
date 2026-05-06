@@ -30,6 +30,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { Calendar as CalendarIcon, Plus, FileText, Check, X, AlertCircle, DollarSign, Upload } from "lucide-react";
+import { PageLoader } from "@/components/ui/loader";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 
@@ -170,11 +171,7 @@ export default function WorkerInvoicesPage() {
   });
 
   if (isLoading || profileLoading) {
-    return (
-      <div className="flex items-center justify-center h-full p-6">
-        <div className="text-center">Loading...</div>
-      </div>
-    );
+    return <PageLoader label="Loading invoices" />;
   }
 
   if (!isAuthenticated || (user as any)?.userType !== 'worker') {

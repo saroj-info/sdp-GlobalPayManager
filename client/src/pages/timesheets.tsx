@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { TimesheetEntryTable, type TimesheetEntryValue } from "@/components/TimesheetEntryTable";
+import { PageLoader } from "@/components/ui/loader";
 import {
   Select,
   SelectContent,
@@ -588,7 +589,7 @@ export default function Timesheets() {
   // ── Loading ────────────────────────────────────────────────────────────────
 
   if (isLoading || isLoadingTimesheets) {
-    return <div className="p-6 text-center py-16 text-muted-foreground">Loading timesheets...</div>;
+    return <PageLoader label="Loading timesheets" />;
   }
 
   // ── Shared create form content (used in both dialogs) ─────────────────────

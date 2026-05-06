@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { Plus, FileText, Clock, DollarSign, CheckCircle, XCircle, AlertCircle, Building, Globe, CreditCard, LayoutGrid, List } from "lucide-react";
+import { Loader, PageLoader } from "@/components/ui/loader";
 import { apiRequest } from "@/lib/queryClient";
 import { CreateInvoiceModal } from "@/components/modals/create-invoice-modal";
 import { SdpInvoicePaymentModal } from "@/components/modals/sdp-invoice-payment-modal";
@@ -325,18 +326,7 @@ export default function Invoices() {
   usePageHeader("Invoices", headerDescription);
 
   if (isLoading) {
-    return (
-          <div className="p-6">
-            <div className="animate-pulse space-y-6">
-              <div className="h-8 bg-gray-200 rounded w-1/4"></div>
-              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-48 bg-gray-200 rounded"></div>
-                ))}
-              </div>
-            </div>
-          </div>
-    );
+    return <PageLoader label="Loading invoices" />;
   }
 
   return (
@@ -469,7 +459,7 @@ export default function Invoices() {
 
                 {/* Contractor Invoices Grid or List */}
                 {isLoading ? (
-                  <div className="text-center py-8">Loading contractor invoices...</div>
+                  <Loader fullPage label="Loading contractor invoices" />
                 ) : (
                   <>
                     {contractorViewMode === 'list' ? (
@@ -832,7 +822,7 @@ export default function Invoices() {
                 
                 {/* SDP Invoices Grid or List */}
                 {isSdpLoading ? (
-                  <div className="text-center py-8">Loading SDP invoices...</div>
+                  <Loader fullPage label="Loading SDP invoices" />
                 ) : (
                   <>
                     {sdpViewMode === 'list' ? (
@@ -1121,7 +1111,7 @@ export default function Invoices() {
                   </Button>
                 </div>
                 {isClientInvoicesLoading ? (
-                  <div className="text-center py-8">Loading client invoices...</div>
+                  <Loader fullPage label="Loading client invoices" />
                 ) : clientInvoices.length === 0 ? (
                   <Card>
                     <CardContent className="py-12 text-center">

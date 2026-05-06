@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Switch } from "@/components/ui/switch";
 import { Plus, Edit, Trash2, Globe } from "lucide-react";
+import { Loader } from "@/components/ui/loader";
 
 const PAY_ITEM_TYPE_LABELS: Record<string, string> = {
   earnings: "Earnings",
@@ -101,7 +102,7 @@ export default function PayItemsPage() {
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground py-4">Loading...</p>
+            <Loader fullPage label="Loading Pay Items" />
           ) : items.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4">No Pay Items yet. Create your first one.</p>
           ) : (

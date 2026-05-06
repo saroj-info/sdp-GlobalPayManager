@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { Plus, FileText, Clock, DollarSign, CheckCircle, XCircle, AlertCircle, Building, Globe, Edit, Send, Mail, ArrowRight, Download, RefreshCw, RotateCcw, LayoutGrid, List, Search, Filter, Layers, Trash2, Ban } from "lucide-react";
+import { PageLoader } from "@/components/ui/loader";
 import { generateInvoicePdf } from "@/lib/generateInvoicePdf";
 import { apiRequest } from "@/lib/queryClient";
 import { CreateSdpInvoiceModal } from "@/components/modals/create-sdp-invoice-modal";
@@ -446,18 +447,7 @@ export default function SdpInvoices() {
   }
 
   if (isLoading) {
-    return (
-      <div className="p-6">
-        <div className="animate-pulse space-y-6">
-          <div className="h-8 bg-gray-200 rounded w-1/4"></div>
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-48 bg-gray-200 rounded"></div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
+    return <PageLoader label="Loading SDP invoices" />;
   }
 
   return (

@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Loader } from "@/components/ui/loader";
 
 export default function BusinessSetup() {
   const [businessName, setBusinessName] = useState("");
@@ -69,10 +70,7 @@ export default function BusinessSetup() {
   if (countriesLoading) {
     return (
       <div className="min-h-screen bg-secondary-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-secondary-600">Loading...</p>
-        </div>
+        <Loader size="xl" label="Loading countries" vertical />
       </div>
     );
   }

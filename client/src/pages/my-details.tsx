@@ -31,6 +31,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { personalDetailsSchema, businessStructureSchema, bankDetailsSchema, taxDetailsSchema, Worker } from "@shared/schema";
 import { User, Building, CreditCard, FileText, Phone, Mail, MapPin, Calendar, Edit, Save, X, Shield, PiggyBank, Globe } from "lucide-react";
+import { PageLoader } from "@/components/ui/loader";
 
 type PersonalDetailsData = {
   firstName: string;
@@ -556,11 +557,7 @@ export default function MyDetailsPage() {
   };
 
   if (isLoading || profileLoading) {
-    return (
-      <div className="flex items-center justify-center h-full p-6">
-        <div className="text-center">Loading...</div>
-      </div>
-    );
+    return <PageLoader label="Loading your details" />;
   }
 
   if (!isAuthenticated || (user as any)?.userType !== 'worker') {

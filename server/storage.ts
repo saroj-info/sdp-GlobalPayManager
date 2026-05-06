@@ -276,8 +276,8 @@ export interface IStorage {
   deleteRemunerationLine(id: string): Promise<void>;
 
   // Pay Item operations
-  getPayItemsForBusiness(businessId: string | null): Promise<PayItem[]>;
-  getAllPayItems(): Promise<PayItem[]>;
+  getPayItemsForBusiness(businessId: string | null, countryId?: string | null): Promise<PayItem[]>;
+  getAllPayItems(countryId?: string | null): Promise<PayItem[]>;
   getPayItem(id: string): Promise<PayItem | undefined>;
   createPayItem(payItem: InsertPayItemType): Promise<PayItem>;
   updatePayItem(id: string, data: Partial<InsertPayItemType>): Promise<PayItem>;
@@ -1638,30 +1638,40 @@ export class DatabaseStorage implements IStorage {
       .where(eq(remunerationLines.id, id));
   }
 
-  // Pay Item operations — business-scoped (own + globals) or global-only
-  async getPayItemsForBusiness(businessId: string | null): Promise<PayItem[]> {
-    if (businessId) {
-      return await db
-        .select()
-        .from(payItems)
-        .where(
-          and(
-            eq(payItems.isActive, true),
-            or(eq(payItems.businessId, businessId), isNull(payItems.businessId))
-          )
-        );
-    }
+  // Pay Item operations — business-scoped (own + globals) or global-only.
+  // When `countryId` is provided, restrict to items whose country matches OR is null (global-country).
+  async getPayItemsForBusiness(businessId: string | null, countryId?: string | null): Promise<PayItem[]> {
+    const countryFilter = countryId
+      ? or(eq(payItems.countryId, countryId), isNull(payItems.countryId))
+      : undefined;
+    const scopeFilter = businessId
+      ? or(eq(payItems.businessId, businessId), isNull(payItems.businessId))
+      : isNull(payItems.businessId);
     return await db
       .select()
       .from(payItems)
-      .where(and(eq(payItems.isActive, true), isNull(payItems.businessId)));
+      .where(
+        and(
+          eq(payItems.isActive, true),
+          scopeFilter,
+          ...(countryFilter ? [countryFilter] : [])
+        )
+      );
   }
 
-  async getAllPayItems(): Promise<PayItem[]> {
+  async getAllPayItems(countryId?: string | null): Promise<PayItem[]> {
+    const countryFilter = countryId
+      ? or(eq(payItems.countryId, countryId), isNull(payItems.countryId))
+      : undefined;
     return await db
       .select()
       .from(payItems)
-      .where(eq(payItems.isActive, true));
+      .where(
+        and(
+          eq(payItems.isActive, true),
+          ...(countryFilter ? [countryFilter] : [])
+        )
+      );
   }
 
   async getPayItem(id: string): Promise<PayItem | undefined> {

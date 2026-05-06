@@ -8,6 +8,7 @@ import { AddWorkerModal } from "@/components/modals/add-worker-modal";
 import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { Users, Clock, DollarSign, Globe, AlertCircle, TrendingUp, FileText, Building2, Receipt, CheckCircle2, Clock4, XCircle, Calendar, Target, BarChart3, Mail, ExternalLink, User, Shield, PiggyBank, CreditCard, Plus, Send } from "lucide-react";
+import { PageLoader } from "@/components/ui/loader";
 import worldMapImage from "@assets/generated_images/Uniform_blue_world_map_b8ed3f3b.png";
 import { useLocation } from "wouter";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
@@ -432,7 +433,7 @@ function BusinessDashboard() {
   });
 
   // SDP Global Pay specific analytics for internal users
-  const { data: sdpAnalytics } = useQuery<{
+  const { data: sdpAnalytics, isLoading: isLoadingSdpAnalytics } = useQuery<{
     contractsByCountry: { countryId: string; countryName: string; pending: number; signed: number; expired: number; total: number }[];
     businessUsersByCountry: { countryId: string; countryName: string; activeUsers: number; totalBusinesses: number }[];
     approvedTimesheets: { id: string; workerName: string; businessName: string; countryName: string; totalHours: number; amount: number; approvedDate: string }[];
@@ -461,6 +462,9 @@ function BusinessDashboard() {
   usePageHeader(getDashboardTitle(), getDashboardDescription());
 
   if (isSdpInternal) {
+    if (isLoadingSdpAnalytics && !sdpAnalytics) {
+      return <PageLoader label="Loading dashboard analytics" />;
+    }
     return (
       <div className="p-6 bg-gray-50 min-h-full">
 
@@ -501,7 +505,12 @@ function BusinessDashboard() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-gray-600">Approved Hours</p>
-                      <p className="text-2xl font-bold text-gray-900">{sdpAnalytics?.totalApprovedHours?.toLocaleString() || 0}</p>
+                      <p className="text-2xl font-bold text-gray-900">{(() => {
+                        const raw = sdpAnalytics?.totalApprovedHours;
+                        // Server may return a stale string with thousand-separators (e.g. "05.000.002") on a not-yet-restarted backend — strip non-digits before parsing
+                        const n = typeof raw === 'number' ? raw : parseFloat(String(raw ?? '0').replace(/[^\d.-]/g, ''));
+                        return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '0';
+                      })()}</p>
                     </div>
                     <CheckCircle2 className="h-8 w-8 text-orange-600" />
                   </div>
@@ -1450,26 +1459,9 @@ function BusinessDashboard() {
 export default function Dashboard() {
   const { user, isLoading, isAuthenticated, authReady, error } = useAuth();
 
-  // Show loading skeleton while determining auth state
+  // Show loader while determining auth state
   if (!authReady || (isAuthenticated && isLoading)) {
-    return (
-      <div className="flex h-screen bg-gray-50">
-        <div className="w-64 bg-white border-r border-gray-200">
-          <div className="p-4">
-            <div className="h-8 bg-gray-200 rounded animate-pulse"></div>
-          </div>
-        </div>
-        <div className="flex-1 p-6">
-          <div className="h-8 bg-gray-200 rounded w-1/3 animate-pulse mb-4"></div>
-          <div className="grid grid-cols-4 gap-4">
-            <div className="h-24 bg-gray-200 rounded animate-pulse"></div>
-            <div className="h-24 bg-gray-200 rounded animate-pulse"></div>
-            <div className="h-24 bg-gray-200 rounded animate-pulse"></div>
-            <div className="h-24 bg-gray-200 rounded animate-pulse"></div>
-          </div>
-        </div>
-      </div>
-    );
+    return <PageLoader label="Loading dashboard" />;
   }
 
   // If not authenticated, redirect to login

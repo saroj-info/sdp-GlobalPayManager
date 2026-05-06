@@ -11,6 +11,7 @@ import { ViewWorkerModal } from "@/components/modals/view-worker-modal";
 import { useLocation } from "wouter";
 import { usePageHeader, useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
 import { LayoutGrid, List, ArrowUpDown, Building2 } from "lucide-react";
+import { PageLoader } from "@/components/ui/loader";
 
 export default function Workforce() {
   const [, setLocation] = useLocation();
@@ -36,7 +37,7 @@ export default function Workforce() {
     enabled: (user as any)?.userType === 'sdp_internal',
   });
 
-  const { data: workers = [] } = useQuery({
+  const { data: workers = [], isLoading: isLoadingWorkers } = useQuery({
     queryKey: filterBusiness && filterBusiness !== "all" ? ["/api/workers/business", filterBusiness] : ["/api/workers"],
   });
 
@@ -97,6 +98,10 @@ export default function Workforce() {
     
     return sorted;
   }, [workers, searchTerm, filterCountry, filterType, sortBy, businesses]);
+
+  if (isLoadingWorkers) {
+    return <PageLoader label="Loading workforce" />;
+  }
 
   return (
     <div className="p-6">

@@ -30,6 +30,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { Calendar as CalendarIcon, Plus, Clock, Check, X, AlertCircle } from "lucide-react";
+import { PageLoader } from "@/components/ui/loader";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 
@@ -94,11 +95,7 @@ export default function LeavePage() {
   });
 
   if (isLoading || profileLoading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">Loading...</div>
-      </div>
-    );
+    return <PageLoader label="Loading leave requests" />;
   }
 
   if (!isAuthenticated || (user as any)?.userType !== 'worker') {

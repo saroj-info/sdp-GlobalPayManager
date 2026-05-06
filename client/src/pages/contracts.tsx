@@ -13,11 +13,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, FileText, Clock, CheckCircle, AlertCircle, Users, Building2, MapPin, DollarSign, Edit, Save, X, Mail, ExternalLink, LayoutGrid, List as ListIcon, ArrowUpDown, RotateCcw, Lock, ChevronDown, ChevronUp, Trash2, Info } from "lucide-react";
+import { Loader, PageLoader } from "@/components/ui/loader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
 import { useAuth } from "@/hooks/useAuth";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { getContractStatusLabel, getContractStatusVariant } from "@shared/contractHelpers";
+import { generatePeriodSchedule } from "@shared/timesheetPeriodCalculator";
 
 interface ContractInstance {
   id: string;
@@ -339,19 +341,21 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
   });
 
   const { data: payItems = [] } = useQuery<any[]>({
-    queryKey: ['/api/pay-items'],
+    queryKey: ['/api/pay-items', { countryId: contract.countryId || null }],
     queryFn: async () => {
-      const res = await apiRequest('GET', '/api/pay-items');
+      const url = contract.countryId
+        ? `/api/pay-items?countryId=${encodeURIComponent(contract.countryId)}`
+        : '/api/pay-items';
+      const res = await apiRequest('GET', url);
       return res.json();
     },
     enabled: isOpen,
   });
 
+  // Server already filters by country (own + global). Belt-and-braces drop inactive ones too.
   const visiblePayItems = useMemo(
-    () => (payItems || []).filter((pi: any) =>
-      pi.isActive !== false && (!pi.countryId || !contract.countryId || pi.countryId === contract.countryId)
-    ),
-    [payItems, contract.countryId]
+    () => (payItems || []).filter((pi: any) => pi.isActive !== false),
+    [payItems]
   );
   const payItemById = useMemo(() => {
     const m = new Map<string, any>();
@@ -590,7 +594,7 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
           )}
 
           {isLoading ? (
-            <p className="text-sm text-muted-foreground py-2">Loading...</p>
+            <Loader fullPage label="Loading remuneration lines" />
           ) : (
             <div className="space-y-2">
               {remunLines.map((line: any) => {
@@ -813,7 +817,11 @@ function ContractRateLinesPanel({ contractId, currency, rateType }: { contractId
   });
 
   if (isLoading) {
-    return <div className="text-xs text-muted-foreground p-3">Loading rate lines...</div>;
+    return (
+      <div className="p-4">
+        <Loader fullPage size="sm" label="Loading project rate lines" />
+      </div>
+    );
   }
   if (!rateLines || rateLines.length === 0) {
     return <div className="text-xs text-muted-foreground p-3">No project rate lines defined.</div>;
@@ -1035,14 +1043,7 @@ export default function ContractsPage() {
 
   // Show loading state
   if (isLoading || isLoadingContracts) {
-    return (
-      <div className="p-6">
-        <div className="text-center py-12">
-          <h1 className="text-2xl font-semibold mb-4">Loading Contracts...</h1>
-          <p className="text-muted-foreground">Please wait while we fetch your contracts.</p>
-        </div>
-      </div>
-    );
+    return <PageLoader label="Loading contracts" />;
   }
 
   return (
@@ -1604,6 +1605,24 @@ export default function ContractsPage() {
                         <p className="font-medium">{selectedContract.paymentHolidayRule ? 'Use prior working day' : 'Pay on date'}</p>
                       </div>
                     )}
+                    {(selectedContract as any).contractorCompliance != null && (selectedContract.employmentType === 'contractor' || selectedContract.employmentType === 'gig_worker') && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">SDP Compliance Review</p>
+                        <p className="font-medium">{(selectedContract as any).contractorCompliance ? 'Opted in' : 'Not opted in'}</p>
+                      </div>
+                    )}
+                    {(selectedContract as any).createdAt && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Created</p>
+                        <p className="font-medium">{new Date((selectedContract as any).createdAt).toLocaleDateString()}</p>
+                      </div>
+                    )}
+                    {(selectedContract as any).updatedAt && (selectedContract as any).updatedAt !== (selectedContract as any).createdAt && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Last Updated</p>
+                        <p className="font-medium">{new Date((selectedContract as any).updatedAt).toLocaleDateString()}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1680,6 +1699,57 @@ export default function ContractsPage() {
                     )}
                   </div>
                 </div>
+                  );
+                })()}
+
+                {/* Timesheet Periods & Pay Dates — derived from the contract's frequency + payment schedule */}
+                {selectedContract.requiresTimesheet && selectedContract.timesheetFrequency && selectedContract.startDate && (() => {
+                  const fmt = (d: Date) => new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' });
+                  let schedule: { number: number; start: Date; end: Date; payDate: Date }[] = [];
+                  try {
+                    schedule = generatePeriodSchedule(
+                      {
+                        startDate: (selectedContract as any).firstTimesheetStartDate || selectedContract.startDate,
+                        endDate: selectedContract.endDate || null,
+                        timesheetFrequency: selectedContract.timesheetFrequency,
+                        timesheetCalculationMethod: (selectedContract as any).timesheetCalculationMethod,
+                        paymentScheduleType: (selectedContract as any).paymentScheduleType,
+                        paymentDay: (selectedContract as any).paymentDay,
+                        paymentDaysAfterPeriod: (selectedContract as any).paymentDaysAfterPeriod,
+                      },
+                      6,
+                    );
+                  } catch {
+                    schedule = [];
+                  }
+                  if (schedule.length === 0) return null;
+                  return (
+                    <div className="border rounded-lg overflow-hidden">
+                      <div className="px-4 py-2 bg-secondary-50 border-b flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Timesheet Periods &amp; Pay Dates</p>
+                        <Badge variant="secondary" className="text-[10px]">Next {schedule.length}</Badge>
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead className="bg-secondary-50 text-xs text-secondary-600">
+                          <tr>
+                            <th className="px-4 py-2 text-left font-medium">#</th>
+                            <th className="px-4 py-2 text-left font-medium">Period Start</th>
+                            <th className="px-4 py-2 text-left font-medium">Period End</th>
+                            <th className="px-4 py-2 text-left font-medium">Pay Date</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {schedule.map((p) => (
+                            <tr key={p.number} className="border-t">
+                              <td className="px-4 py-2">{p.number}</td>
+                              <td className="px-4 py-2">{fmt(p.start)}</td>
+                              <td className="px-4 py-2">{fmt(p.end)}</td>
+                              <td className="px-4 py-2 font-semibold text-emerald-700">{fmt(p.payDate)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   );
                 })()}
 
