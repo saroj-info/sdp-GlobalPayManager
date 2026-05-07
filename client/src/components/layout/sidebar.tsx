@@ -88,11 +88,6 @@ export function Sidebar() {
       navigation.push({ name: 'Templates', href: '/platform-config', icon: 'fas fa-file-contract' });
     }
 
-    // Pay Items (Global management) for Super Admin and Admin only
-    if (userSdpRole && ['sdp_super_admin', 'sdp_admin'].includes(userSdpRole)) {
-      navigation.push({ name: 'Pay Items', href: '/pay-items', icon: 'fas fa-coins' });
-    }
-
     return navigation;
   };
 
