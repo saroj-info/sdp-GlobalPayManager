@@ -6008,7 +6008,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { id } = req.params;
       const userId = req.user?.id;
-      
+
       const contract = await storage.getContract(id);
       if (!contract) {
         return res.status(404).json({ message: "Contract not found" });
@@ -6021,6 +6021,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!business || contract.businessId !== business.id) {
           return res.status(403).json({ message: "Unauthorized" });
         }
+      }
+
+      // Re-render the contract document right before sending so it picks up remuneration lines,
+      // role title, job description and any other variables that may have been filled in
+      // *after* the contract was originally created. The document is stored in DB so the
+      // worker sees the latest version on the signing page.
+      try {
+        if ((contract as any).templateId) {
+          const regen = await storage.generateUniversalContract(
+            (contract as any).templateId,
+            contract.businessId,
+            contract.workerId,
+            {
+              contractId: contract.id,
+              agreementDate: new Date().toLocaleDateString(),
+              serviceDescription: (contract as any).jobDescription || '',
+              startDate: contract.startDate,
+              endDate: contract.endDate || '',
+              rateAmount: contract.rate,
+              rateCurrency: contract.currency,
+              rateType: contract.rateType || 'hourly',
+              noticePeriodDays: (contract as any).noticePeriodDays || 30,
+            },
+          );
+          if (regen?.content) {
+            await storage.updateContract(id, { contractDocument: regen.content } as any);
+          }
+        }
+      } catch (regenErr: any) {
+        console.error('[contract] re-render before send-for-signing failed:', regenErr?.message);
+        // fall through — sending still proceeds with whatever document is on the contract row
       }
 
       // Reuse the existing signing token if the contract already has one — otherwise mint a new one.
@@ -6062,6 +6093,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error sending contract for signing:", error);
       res.status(500).json({ message: "Failed to send contract" });
+    }
+  });
+
+  // Re-render saved contractDocument for a single contract.
+  // Useful when remuneration lines / role title / job description were filled in *after*
+  // the contract was originally generated and the saved document needs to catch up.
+  app.post('/api/contracts/:id/refresh-document', authMiddleware, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      const userType = req.user?.userType;
+
+      const contract = await storage.getContract(id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (!(contract as any).templateId) {
+        return res.status(400).json({ message: "Contract has no template — cannot regenerate document" });
+      }
+
+      // Same authorisation as send-for-signing: SDP internal, or the owning business.
+      if (userType !== 'sdp_internal') {
+        const business = await storage.getBusinessByOwnerId(userId);
+        if (!business || contract.businessId !== business.id) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+      }
+
+      const regen = await storage.generateUniversalContract(
+        (contract as any).templateId,
+        contract.businessId,
+        contract.workerId,
+        {
+          contractId: contract.id,
+          agreementDate: new Date().toLocaleDateString(),
+          serviceDescription: (contract as any).jobDescription || '',
+          startDate: contract.startDate,
+          endDate: contract.endDate || '',
+          rateAmount: contract.rate,
+          rateCurrency: contract.currency,
+          rateType: contract.rateType || 'hourly',
+          noticePeriodDays: (contract as any).noticePeriodDays || 30,
+        },
+      );
+      if (!regen?.content) return res.status(500).json({ message: "Re-render produced empty content" });
+      await storage.updateContract(id, { contractDocument: regen.content } as any);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error refreshing contract document:", error);
+      res.status(500).json({ message: "Failed to refresh contract document" });
     }
   });
 

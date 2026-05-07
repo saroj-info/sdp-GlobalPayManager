@@ -978,7 +978,7 @@ export default function ContractsPage() {
         title: "Contract Sent",
         description: "The contract has been sent to the worker for signing via email.",
       });
-      queryClient.invalidateQueries({ 
+      queryClient.invalidateQueries({
         predicate: (query) => {
           const key = query.queryKey;
           return Array.isArray(key) && typeof key[0] === 'string' && key[0].startsWith('/api/contracts');
@@ -989,6 +989,33 @@ export default function ContractsPage() {
       toast({
         title: "Error",
         description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Re-render the saved contract document so newly-added remuneration lines, role title etc.
+  // show up without having to re-send the contract for signing.
+  const refreshDocumentMutation = useMutation({
+    mutationFn: async (contractId: string) => {
+      return await apiRequest("POST", `/api/contracts/${contractId}/refresh-document`);
+    },
+    onSuccess: () => {
+      toast({
+        title: "Document Refreshed",
+        description: "Contract document has been re-rendered with the latest data.",
+      });
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey;
+          return Array.isArray(key) && typeof key[0] === 'string' && key[0].startsWith('/api/contracts');
+        },
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Refresh Failed",
+        description: error?.message || 'Could not regenerate the contract document.',
         variant: "destructive",
       });
     },
@@ -1463,7 +1490,7 @@ export default function ContractsPage() {
 
       {/* Contract Details Modal - Comprehensive Summary */}
       <Dialog open={showContractDetails} onOpenChange={setShowContractDetails}>
-        <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto overflow-x-hidden">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
@@ -1883,7 +1910,7 @@ export default function ContractsPage() {
               )}
 
               {/* Actions - Different for workers vs business users */}
-              <div className="flex justify-center gap-3 pt-4">
+              <div className="flex flex-wrap justify-center gap-2 pt-4 border-t mt-2">
                 {((user as any)?.userType === 'worker' || (selectedContract as any)?.readOnly === true) ? (
                   // Worker / Host Client view - read-only
                   <>
@@ -1895,6 +1922,7 @@ export default function ContractsPage() {
                     )}
                     <Button
                       variant="outline"
+                      size="sm"
                       data-testid="button-view-document"
                       onClick={() => {
                         if (!selectedContract?.contractDocument) {
@@ -1912,14 +1940,11 @@ export default function ContractsPage() {
                       View Document
                     </Button>
                     {selectedContract?.signedAt && (
-                      <div className="flex items-center gap-2 px-3 py-2 bg-green-50 text-green-700 rounded-md">
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-md text-sm">
                         <CheckCircle className="h-4 w-4" />
-                        <span className="text-sm font-medium">Signed</span>
+                        <span className="font-medium">Signed</span>
                       </div>
                     )}
-                    <Button variant="outline" onClick={() => setShowContractDetails(false)} data-testid="button-close-contract">
-                      Close
-                    </Button>
                   </>
                 ) : (
                   // Business/SDP Internal view - full functionality with locking
@@ -1938,6 +1963,7 @@ export default function ContractsPage() {
                         ) : isLocked ? (
                           <Button
                             variant="outline"
+                            size="sm"
                             className="border-amber-400 text-amber-700 hover:bg-amber-50"
                             data-testid="button-recall-contract"
                             onClick={() => {
@@ -1949,8 +1975,9 @@ export default function ContractsPage() {
                             Recall
                           </Button>
                         ) : (
-                          <Button 
+                          <Button
                             variant="outline"
+                            size="sm"
                             onClick={() => {
                               setIsEditingContract(true);
                               setShowContractDetails(false);
@@ -1962,8 +1989,9 @@ export default function ContractsPage() {
                             Edit Contract
                           </Button>
                         )}
-                        <Button 
-                          variant="outline" 
+                        <Button
+                          variant="outline"
+                          size="sm"
                           data-testid="button-view-document"
                           onClick={() => {
                             if (!selectedContract?.contractDocument) {
@@ -1980,9 +2008,32 @@ export default function ContractsPage() {
                           <FileText className="mr-2 h-4 w-4" />
                           View Document
                         </Button>
+                        {!isLocked && !isFullySigned && (selectedContract as any).templateId && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => refreshDocumentMutation.mutate(selectedContract.id)}
+                            disabled={refreshDocumentMutation.isPending}
+                            data-testid="button-refresh-document"
+                            title="Re-render the saved document with the latest remuneration lines, role title, etc."
+                          >
+                            {refreshDocumentMutation.isPending ? (
+                              <>
+                                <Clock className="mr-2 h-4 w-4 animate-spin" />
+                                Refreshing...
+                              </>
+                            ) : (
+                              <>
+                                <RotateCcw className="mr-2 h-4 w-4" />
+                                Refresh Document
+                              </>
+                            )}
+                          </Button>
+                        )}
                         {!isLocked && !isFullySigned && (
-                          <Button 
+                          <Button
                             variant="default"
+                            size="sm"
                             onClick={() => sendForSigningMutation.mutate(selectedContract.id)}
                             disabled={sendForSigningMutation.isPending}
                             data-testid="button-send-for-signing"
@@ -2001,14 +2052,16 @@ export default function ContractsPage() {
                           </Button>
                         )}
                         {isLocked && (
-                          <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 text-amber-700 rounded-md text-sm">
+                          <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-700 rounded-md text-sm">
                             <Clock className="h-4 w-4" />
                             Awaiting Signature
                           </div>
                         )}
-                        <Button variant="outline" onClick={() => setShowContractDetails(false)} data-testid="button-close-contract">
-                          Close
-                        </Button>
+                        {(isLocked || isFullySigned) && (
+                          <Button variant="outline" size="sm" onClick={() => setShowContractDetails(false)} data-testid="button-close-contract">
+                            Close
+                          </Button>
+                        )}
                       </>
                     );
                   })()

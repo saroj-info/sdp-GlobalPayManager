@@ -2827,7 +2827,20 @@ export class DatabaseStorage implements IStorage {
 
   async generateContractContent(template: ContractTemplate, variables: Record<string, string>): Promise<string> {
     let content = template.template;
-    
+
+    // Defensive: caller may have passed Date / number / boolean values. Normalise everything to a string
+    // so the .trim() / replace() calls below don't blow up on a non-string value.
+    const stringifyValue = (v: any): string => {
+      if (v === null || v === undefined) return '';
+      if (typeof v === 'string') return v;
+      if (v instanceof Date) return v.toLocaleDateString();
+      if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+      return '';
+    };
+    variables = Object.fromEntries(
+      Object.entries(variables).map(([k, v]) => [k, stringifyValue(v)])
+    );
+
     // Replace simple template variables
     Object.entries(variables).forEach(([key, value]) => {
       const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'g');
