@@ -343,28 +343,37 @@ export default function Invoices() {
             </div>
           )}
 
-          {/* Tabs for business users to separate contractor and SDP invoices */}
-          {user?.userType === 'business_user' ? (
+          {/* Tabs for business + SDP users to separate contractor (and, for businesses, SDP / Client) invoices */}
+          {(user?.userType === 'business_user' || user?.userType === 'sdp_internal') ? (
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className={`grid w-full ${isHostClientBusiness ? 'grid-cols-2' : 'grid-cols-3'}`}>
-                <TabsTrigger value="contractor" className="flex items-center gap-2" data-testid="tab-contractor-invoices">
-                  <FileText className="h-4 w-4" />
-                  Contractor Invoices
-                </TabsTrigger>
-                <TabsTrigger value="sdp" className="flex items-center gap-2" data-testid="tab-sdp-invoices">
-                  <Building className="h-4 w-4" />
-                  SDP Global Pay Invoices
-                </TabsTrigger>
-                {!isHostClientBusiness && (
-                  <TabsTrigger value="client" className="flex items-center gap-2" data-testid="tab-client-invoices">
-                    <Globe className="h-4 w-4" />
-                    Client Invoices
-                    {clientInvoices.length > 0 && (
-                      <span className="ml-1 bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded-full">{clientInvoices.length}</span>
+              {(() => {
+                const cols =
+                  user?.userType === 'sdp_internal' ? 'grid-cols-1' :
+                  isHostClientBusiness ? 'grid-cols-2' : 'grid-cols-3';
+                return (
+                  <TabsList className={`grid w-full ${cols}`}>
+                    <TabsTrigger value="contractor" className="flex items-center gap-2" data-testid="tab-contractor-invoices">
+                      <FileText className="h-4 w-4" />
+                      Contractor Invoices
+                    </TabsTrigger>
+                    {user?.userType === 'business_user' && (
+                      <TabsTrigger value="sdp" className="flex items-center gap-2" data-testid="tab-sdp-invoices">
+                        <Building className="h-4 w-4" />
+                        SDP Global Pay Invoices
+                      </TabsTrigger>
                     )}
-                  </TabsTrigger>
-                )}
-              </TabsList>
+                    {user?.userType === 'business_user' && !isHostClientBusiness && (
+                      <TabsTrigger value="client" className="flex items-center gap-2" data-testid="tab-client-invoices">
+                        <Globe className="h-4 w-4" />
+                        Client Invoices
+                        {clientInvoices.length > 0 && (
+                          <span className="ml-1 bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded-full">{clientInvoices.length}</span>
+                        )}
+                      </TabsTrigger>
+                    )}
+                  </TabsList>
+                );
+              })()}
               
               <TabsContent value="contractor" className="mt-6">
                 <div className="rounded-md border border-blue-200 bg-blue-50/60 px-3 py-2 mb-4 text-sm text-blue-900">
@@ -586,6 +595,24 @@ export default function Invoices() {
                               <CardContent className="space-y-4">
                                 <InvoiceParties invoice={invoice} source="contractor" />
 
+                                {/* Contractor contact / country — useful for SDP and business owners */}
+                                {(invoice.contractor?.email || invoice.contractor?.country?.name) && user?.userType !== 'worker' && (
+                                  <div className="rounded-md border border-secondary-200 bg-white px-2.5 py-1.5 text-[11px] text-secondary-700 space-y-0.5">
+                                    {invoice.contractor.email && (
+                                      <div className="flex justify-between gap-2">
+                                        <span className="text-secondary-500">Email</span>
+                                        <span className="font-medium truncate max-w-[60%]" title={invoice.contractor.email}>{invoice.contractor.email}</span>
+                                      </div>
+                                    )}
+                                    {invoice.contractor.country?.name && (
+                                      <div className="flex justify-between gap-2">
+                                        <span className="text-secondary-500">Country</span>
+                                        <span className="font-medium">{invoice.contractor.country.name}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
                                 {/* Linked contract & timesheet (if either was set when the invoice was created) */}
                                 {((invoice as any).contract || (invoice as any).timesheet) && (
                                   <div className="rounded-md border border-secondary-200 bg-secondary-50/40 p-2 text-xs space-y-1">
@@ -599,14 +626,26 @@ export default function Invoices() {
                                       </div>
                                     )}
                                     {(invoice as any).timesheet && (
-                                      <div className="flex justify-between gap-2">
-                                        <span className="text-secondary-600">Timesheet</span>
-                                        <span className="font-medium text-right">
-                                          {formatDate((invoice as any).timesheet.periodStart)} – {formatDate((invoice as any).timesheet.periodEnd)}
-                                          {parseFloat((invoice as any).timesheet.totalHours || '0') > 0 ? ` · ${parseFloat((invoice as any).timesheet.totalHours).toFixed(1)}h` : ''}
-                                          {parseFloat((invoice as any).timesheet.totalDays || '0') > 0 ? ` · ${parseFloat((invoice as any).timesheet.totalDays).toFixed(1)}d` : ''}
-                                        </span>
-                                      </div>
+                                      <>
+                                        <div className="flex justify-between gap-2">
+                                          <span className="text-secondary-600">Timesheet</span>
+                                          <span className="font-medium text-right">
+                                            {formatDate((invoice as any).timesheet.periodStart)} – {formatDate((invoice as any).timesheet.periodEnd)}
+                                            {parseFloat((invoice as any).timesheet.totalHours || '0') > 0 ? ` · ${parseFloat((invoice as any).timesheet.totalHours).toFixed(1)}h` : ''}
+                                            {parseFloat((invoice as any).timesheet.totalDays || '0') > 0 ? ` · ${parseFloat((invoice as any).timesheet.totalDays).toFixed(1)}d` : ''}
+                                          </span>
+                                        </div>
+                                        {((invoice as any).timesheet.entryCount > 0 || (invoice as any).timesheet.status) && (
+                                          <div className="flex justify-between gap-2">
+                                            <span className="text-secondary-600">Entries / Status</span>
+                                            <span className="font-medium text-right capitalize">
+                                              {(invoice as any).timesheet.entryCount ? `${(invoice as any).timesheet.entryCount} entr${(invoice as any).timesheet.entryCount === 1 ? 'y' : 'ies'}` : ''}
+                                              {(invoice as any).timesheet.entryCount && (invoice as any).timesheet.status ? ' · ' : ''}
+                                              {(invoice as any).timesheet.status ? String((invoice as any).timesheet.status).replace(/_/g, ' ') : ''}
+                                            </span>
+                                          </div>
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                 )}
@@ -631,6 +670,13 @@ export default function Invoices() {
                                     <div className="flex justify-between text-sm">
                                       <span className="text-secondary-600">Hours:</span>
                                       <span>{parseFloat(invoice.hoursWorked).toFixed(1)}h{invoice.hourlyRate ? ` @ ${invoice.currency} ${parseFloat(invoice.hourlyRate).toFixed(2)}/hr` : ''}</span>
+                                    </div>
+                                  )}
+
+                                  {parseFloat((invoice as any).daysWorked || '0') > 0 && (
+                                    <div className="flex justify-between text-sm">
+                                      <span className="text-secondary-600">Days:</span>
+                                      <span>{parseFloat((invoice as any).daysWorked).toFixed(1)}d{(invoice as any).dayRate ? ` @ ${invoice.currency} ${parseFloat((invoice as any).dayRate).toFixed(2)}/day` : ''}</span>
                                     </div>
                                   )}
 
@@ -669,9 +715,15 @@ export default function Invoices() {
                                 )}
 
                                 {/* Activity timeline */}
-                                {(invoice.submittedAt || invoice.reviewedAt || invoice.paidAt) && (
+                                {(invoice.createdAt || invoice.submittedAt || invoice.reviewedAt || invoice.paidAt) && (
                                   <div className="rounded-md border border-secondary-200 bg-secondary-50/40 p-2 text-[11px]">
                                     <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                                      {invoice.createdAt && (
+                                        <>
+                                          <span className="text-secondary-500">Created</span>
+                                          <span className="font-medium">{formatDate(invoice.createdAt)}</span>
+                                        </>
+                                      )}
                                       {invoice.submittedAt && (
                                         <>
                                           <span className="text-secondary-500">Submitted</span>
