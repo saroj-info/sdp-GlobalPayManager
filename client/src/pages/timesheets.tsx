@@ -638,6 +638,9 @@ export default function Timesheets() {
             entries={form.watch('entries') as TimesheetEntryValue[]}
             onChange={(entries) => form.setValue('entries', entries)}
             currency={activeTimesheetContract?.currency}
+            contractRateType={activeTimesheetContract?.rateType}
+            isForClient={activeTimesheetContract?.isForClient}
+            customerBillingRateType={activeTimesheetContract?.customerBillingRateType}
           />
         </div>
 

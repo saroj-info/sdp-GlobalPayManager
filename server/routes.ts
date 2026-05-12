@@ -2322,18 +2322,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Mark invitation as accepted
       await storage.updateSdpUserInvite(invite.id, { acceptedAt: new Date() });
       
-      // Send registration confirmation email
+      // Send the SDP account-ready welcome email — fires once, the moment the invite is
+      // accepted + 2FA is set up. Failures are logged but don't fail the registration.
       if (user.email) {
         try {
-          await emailService.sendBusinessRegistrationConfirmation(
-            user.email,
-            invite.firstName,
-            'enterprise' // SDP internal users get business-style welcome
-          );
-          console.log('Registration confirmation email sent to SDP user:', user.email);
+          await emailService.sendSdpAccountReadyEmail(user.email, invite.firstName);
+          console.log('SDP account-ready email sent to:', user.email);
         } catch (emailError: any) {
-          console.error('Failed to send registration confirmation email to SDP user:', emailError);
-          // Don't fail the registration if email sending fails
+          console.error('Failed to send SDP account-ready email:', emailError);
         }
       }
       

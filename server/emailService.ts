@@ -472,6 +472,24 @@ class EmailService {
     });
   }
 
+  async sendSdpAccountReadyEmail(to: string, firstName: string): Promise<boolean> {
+    // Try database template first, fallback to hardcoded
+    let template = await this.renderEmailFromDatabase('sdp_account_ready', {
+      firstName,
+    });
+
+    if (!template) {
+      template = getSdpAccountReadyTemplate(firstName);
+    }
+
+    return this.sendEmail({
+      to,
+      subject: template.subject,
+      html: template.html,
+      text: template.text,
+    });
+  }
+
   async sendEmailVerification(to: string, firstName: string, verificationToken: string): Promise<boolean> {
     // Try database template first, fallback to hardcoded
     let template = await this.renderEmailFromDatabase('email_verification', {
@@ -747,6 +765,61 @@ export function getWelcomeEmailTemplate(workerName: string, businessName: string
       </div>
     `,
     text: `Welcome to SDP Global Pay, ${workerName}!\n\nYour onboarding with ${businessName} has been completed successfully.\n\nYou can now access your dashboard at: ${getEmailBaseUrl()}/dashboard\n\nBest regards,\nSDP Global Pay Team`
+  };
+}
+
+/**
+ * Sent to an SDP internal user the moment they finish 2FA enrollment.
+ * Confirms their account is live and summarises what they can do on the platform.
+ */
+export function getSdpAccountReadyTemplate(firstName: string): EmailTemplate {
+  return {
+    subject: 'Welcome to SDP Global Pay — Your Account is Ready',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+        <div style="background-color: #1e40af; padding: 30px; text-align: center;">
+          <h1 style="color: #ffffff !important; margin: 0; font-size: 28px; font-weight: bold;">Welcome to SDP Global Pay</h1>
+          <p style="color: #bfdbfe !important; margin: 10px 0 0 0; font-size: 16px; font-weight: 500;">Your Account is Ready</p>
+        </div>
+
+        <div style="padding: 30px; background-color: #ffffff;">
+          <h2 style="color: #1e40af; margin-bottom: 20px; font-weight: bold;">Hello ${firstName},</h2>
+
+          <p style="color: #374151; line-height: 1.6; margin-bottom: 20px;">
+            Congratulations! Your account with <strong>SDP Global Pay</strong> has been successfully created.
+          </p>
+
+          <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #1e40af; margin-top: 0; font-weight: bold;">What You Can Do Now:</h3>
+            <ul style="color: #374151; line-height: 1.6; padding-left: 20px;">
+              <li>Manage all contracts for our customers</li>
+              <li>All admin's activities to deliver our service</li>
+              <li>Upload payslips that we generate on other platforms to SDP Global Pay</li>
+            </ul>
+          </div>
+
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin: 30px 0;">
+            <tr>
+              <td align="center">
+                <a href="${getEmailBaseUrl()}/dashboard"
+                   style="display: inline-block; background-color: #1e40af; color: #ffffff !important; padding: 14px 36px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px;">
+                  Go to Dashboard
+                </a>
+              </td>
+            </tr>
+          </table>
+
+          <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
+            If you have any questions, please don't hesitate to contact our support team.
+          </p>
+        </div>
+
+        <div style="background-color: #f9fafb; padding: 20px; text-align: center; color: #6b7280; font-size: 12px;">
+          <p style="margin: 0;">© 2025 SDP Global Pay. Making global contracting and employment easy.</p>
+        </div>
+      </div>
+    `,
+    text: `Hello ${firstName},\n\nCongratulations! Your account with SDP Global Pay has been successfully created.\n\nWhat You Can Do Now:\n• Manage all contracts for our customers\n• All admin's activities to deliver our service\n• Upload payslips that we generate on other platforms to SDP Global Pay\n\nAccess your dashboard: ${getEmailBaseUrl()}/dashboard\n\nBest regards,\nSDP Global Pay Team`,
   };
 }
 

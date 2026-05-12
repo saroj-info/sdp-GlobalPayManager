@@ -36,6 +36,12 @@ interface TimesheetEntryTableProps {
   entries: TimesheetEntryValue[];
   onChange: (entries: TimesheetEntryValue[]) => void;
   currency?: string;
+  // Original contract attributes (the `rateType` prop above is the *tracking unit*, not the contract's
+  // raw rateType). These let the Mon→Fri copy button decide whether to render for an annual
+  // salary worker placed at an hourly-billed host client.
+  contractRateType?: string | null;
+  isForClient?: boolean | null;
+  customerBillingRateType?: string | null;
 }
 
 function calcHours(start: string, end: string, brk: string): number {
@@ -65,7 +71,12 @@ export function TimesheetEntryTable({
   entries,
   onChange,
   currency = "AUD",
+  contractRateType,
+  isForClient,
+  customerBillingRateType,
 }: TimesheetEntryTableProps) {
+  const isAnnualForHourlyClient =
+    contractRateType === 'annual' && !!isForClient && customerBillingRateType === 'hourly';
   const isMultiple = rateStructure === "multiple" && rateLines.length > 0;
 
   const entriesForDate = (dateStr: string) =>
@@ -196,6 +207,38 @@ export function TimesheetEntryTable({
                       onChange(next);
                     }}
                     data-testid="button-copy-down"
+                  >
+                    <Copy className="h-3 w-3 mr-1" />
+                    Copy to Tue–Fri
+                  </Button>
+                )}
+                {isAnnualForHourlyClient && date.getDay() === 1 && dayEntries.length > 0 && parseFloat(dayEntries[0].hoursWorked || "0") > 0 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-primary hover:text-primary"
+                    title="Copy this day's hours to Tue–Fri"
+                    onClick={() => {
+                      const src = dayEntries[0];
+                      const next = [...entries];
+                      for (let offset = 1; offset <= 4; offset++) {
+                        const target = new Date(date);
+                        target.setDate(date.getDate() + offset);
+                        const tStr = format(target, "yyyy-MM-dd");
+                        const filtered = next.filter((e) => e.date !== tStr);
+                        filtered.push({
+                          date: tStr,
+                          hoursWorked: src.hoursWorked,
+                          description: src.description,
+                          projectRateLineId: src.projectRateLineId,
+                        });
+                        next.length = 0;
+                        next.push(...filtered);
+                      }
+                      onChange(next);
+                    }}
+                    data-testid="button-copy-down-annual-hourly"
                   >
                     <Copy className="h-3 w-3 mr-1" />
                     Copy to Tue–Fri
