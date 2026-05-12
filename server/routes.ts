@@ -772,7 +772,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // =====================================================
   
   // Get all email template definitions with metadata
-  app.get('/api/admin/email-template-definitions', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.get('/api/admin/email-template-definitions', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const definitions = await storage.getEmailTemplateDefinitions();
       res.json(definitions);
@@ -783,7 +783,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get specific email template definition by key
-  app.get('/api/admin/email-template-definitions/:key', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.get('/api/admin/email-template-definitions/:key', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const definition = await storage.getEmailTemplateDefinitionByKey(req.params.key);
       if (!definition) {
@@ -797,7 +797,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get all email templates
-  app.get('/api/admin/email-templates', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.get('/api/admin/email-templates', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const templates = await storage.getEmailTemplates();
       res.json(templates);
@@ -811,7 +811,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // =====================================================
 
   // Get all jurisdictions
-  app.get('/api/admin/jurisdictions', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.get('/api/admin/jurisdictions', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const jurisdictions = await storage.getJurisdictions();
       res.json(jurisdictions);
@@ -845,7 +845,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get specific jurisdiction
-  app.get('/api/admin/jurisdictions/:id', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.get('/api/admin/jurisdictions/:id', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const { id } = req.params;
       const jurisdiction = await storage.getJurisdictionById(id);
@@ -860,7 +860,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create new jurisdiction
-  app.post('/api/admin/jurisdictions', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.post('/api/admin/jurisdictions', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const jurisdictionData = req.body;
       const jurisdiction = await storage.createJurisdiction(jurisdictionData);
@@ -872,7 +872,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update jurisdiction
-  app.patch('/api/admin/jurisdictions/:id', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.patch('/api/admin/jurisdictions/:id', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const { id } = req.params;
       const updates = req.body;
@@ -885,7 +885,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Delete jurisdiction
-  app.delete('/api/admin/jurisdictions/:id', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.delete('/api/admin/jurisdictions/:id', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const { id } = req.params;
       await storage.deleteJurisdiction(id);
@@ -897,7 +897,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Seed jurisdiction data (SDP super admin only)
-  app.post('/api/admin/jurisdictions/seed', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.post('/api/admin/jurisdictions/seed', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const DEFAULT_JURISDICTIONS = {
         Australia: {
@@ -974,7 +974,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get templates for specific definition
-  app.get('/api/admin/email-templates/definition/:definitionId', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.get('/api/admin/email-templates/definition/:definitionId', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const templates = await storage.getEmailTemplatesByDefinition(req.params.definitionId);
       res.json(templates);
@@ -985,7 +985,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get published template for preview/testing
-  app.get('/api/admin/email-templates/:key/published', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.get('/api/admin/email-templates/:key/published', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const { locale = 'en', scopeType = 'global', scopeId } = req.query;
       const template = await storage.getPublishedEmailTemplate(
@@ -1007,7 +1007,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create new email template
-  app.post('/api/admin/email-templates', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.post('/api/admin/email-templates', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const user = req.user;
       if (!user?.id) {
@@ -1028,7 +1028,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update email template
-  app.put('/api/admin/email-templates/:id', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.put('/api/admin/email-templates/:id', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const template = await storage.updateEmailTemplate(req.params.id, req.body);
       res.json(template);
@@ -1039,7 +1039,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Publish email template
-  app.post('/api/admin/email-templates/:id/publish', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.post('/api/admin/email-templates/:id/publish', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const user = req.user;
       if (!user?.id) {
@@ -1055,7 +1055,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get template versions
-  app.get('/api/admin/email-templates/:id/versions', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.get('/api/admin/email-templates/:id/versions', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const versions = await storage.getEmailTemplateVersions(req.params.id);
       res.json(versions);
@@ -1066,7 +1066,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create template version (for history tracking)
-  app.post('/api/admin/email-templates/:id/versions', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.post('/api/admin/email-templates/:id/versions', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const user = req.user;
       if (!user?.id) {
@@ -1088,7 +1088,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get email settings
-  app.get('/api/admin/email-settings', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.get('/api/admin/email-settings', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const settings = await storage.getEmailSettings();
       res.json(settings || {});
@@ -1099,7 +1099,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update email settings
-  app.put('/api/admin/email-settings', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.put('/api/admin/email-settings', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const settings = await storage.updateEmailSettings(req.body);
       res.json(settings);
@@ -1110,7 +1110,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Render template with variables (for preview)
-  app.post('/api/admin/email-templates/:key/render', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.post('/api/admin/email-templates/:key/render', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const { variables = {}, locale = 'en', scopeType = 'global', scopeId } = req.body;
       
@@ -1132,7 +1132,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Send test email using template
-  app.post('/api/admin/email-templates/:key/test-send', authMiddleware, requireSdpRole('sdp_super_admin'), async (req, res) => {
+  app.post('/api/admin/email-templates/:key/test-send', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
     try {
       const { to, variables = {}, locale = 'en', scopeType = 'global', scopeId } = req.body;
       
@@ -6243,12 +6243,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const contract = await storage.getContract(id);
       if (!contract) return res.status(404).json({ message: "Contract not found" });
 
-      const { description, lineType, rate, amount, currency, frequency, isActive, sortOrder, notes } = req.body;
+      const { description, lineType, rate, amount, currency, frequency, paidBy, isActive, sortOrder, notes } = req.body;
       if (!description || !description.trim()) {
         return res.status(400).json({ message: "Description is required" });
       }
       if (!lineType) {
         return res.status(400).json({ message: "Line type is required" });
+      }
+      // `paidBy === 'host_client'` only makes sense when the contract is for a host client
+      if (paidBy === 'host_client' && !(contract as any).isForClient) {
+        return res.status(400).json({ message: "Cannot bill the host client on a contract that isn't for a client" });
       }
 
       const line = await storage.createContractBillingLine({
@@ -6259,6 +6263,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         amount: (amount !== '' && amount !== null && amount !== undefined) ? String(amount) : null,
         currency: currency || contract.currency,
         frequency: frequency || 'per_timesheet_period',
+        paidBy: paidBy === 'host_client' ? 'host_client' : 'business',
         isActive: isActive ?? true,
         sortOrder: sortOrder ?? 0,
         notes: notes || null,
@@ -6286,8 +6291,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch('/api/contracts/:id/billing-lines/:lineId', authMiddleware, sdpOnlyMiddleware, async (req: any, res) => {
     try {
-      const { lineId } = req.params;
+      const { id: contractRouteId, lineId } = req.params;
       const { id, contractId, createdAt, updatedAt, ...updates } = req.body;
+      if (updates.paidBy === 'host_client') {
+        const contract = await storage.getContract(contractRouteId);
+        if (!contract || !(contract as any).isForClient) {
+          return res.status(400).json({ message: "Cannot bill the host client on a contract that isn't for a client" });
+        }
+      }
       const line = await storage.updateContractBillingLine(lineId, updates);
       res.json(line);
     } catch (error: any) {
@@ -6508,6 +6519,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error recalling contract:", error);
       res.status(500).json({ message: "Failed to recall contract" });
+    }
+  });
+
+  // Renegotiate / reissue a fully-signed contract. Marks the existing signed instance as
+  // expired (preserves audit trail) and clears the contract-row signing fields so the
+  // contract returns to a draft state — admins can then edit, refresh, and re-send for signing.
+  app.post('/api/contracts/:id/renegotiate', authMiddleware, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      const userType = req.user?.userType;
+
+      const contract = await storage.getContract(id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+
+      // Permission: SDP internal OR the owning business (same gate as recall / send-for-signing)
+      if (userType !== 'sdp_internal') {
+        const business = await storage.getBusinessByOwnerId(userId);
+        if (!business || contract.businessId !== business.id) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+      }
+
+      // Sanity guard: only meaningful for fully-signed contracts
+      if (!contract.signedAt) {
+        return res.status(400).json({ message: "Contract is not signed — use Edit / Recall instead" });
+      }
+
+      // Clear the signing audit fields on the contracts row + reset status to draft so the
+      // modal returns to its editable state. contractDocument is intentionally left intact
+      // so the admin can see the prior version while editing.
+      // (contract_instances has no contractId column to filter on; the existing recall flow
+      //  follows the same approach — derived status falls back to the contracts row.)
+      await storage.updateContract(id, {
+        signedAt: null,
+        signatureText: null,
+        signingToken: null,
+        signingIpAddress: null,
+        signingLocation: null,
+        signingUserAgent: null,
+        emailSentAt: null,
+        emailViewedAt: null,
+        status: 'draft',
+      } as any);
+
+      const updated = await storage.getContract(id);
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Error renegotiating contract:", error);
+      res.status(500).json({ message: "Failed to renegotiate contract" });
     }
   });
 
@@ -7055,22 +7116,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
               // Fetch SDP billing lines for this contract
               const contractBillingLines = await storage.getContractBillingLines(contract.id);
               const activeBillingLines = contractBillingLines.filter((bl: any) => bl.isActive);
+              // Split by payer. Lines with paidBy missing/null default to 'business' for backward compat.
+              const businessBillingLines = activeBillingLines.filter((bl: any) => (bl.paidBy ?? 'business') !== 'host_client');
+              const hostClientBillingLines = activeBillingLines.filter((bl: any) => bl.paidBy === 'host_client');
 
-              // Compute SDP→Business invoice total = workerCost + billing line contributions
+              // Helper: turn a billing line into { amount, lineItem }
+              const computeBillingLineAmount = (bl: any) => {
+                if (bl.lineType === 'percentage_of_pay' || bl.lineType === 'fixed_percentage') {
+                  return workerCost * (parseFloat(bl.rate || '0') / 100);
+                }
+                return parseFloat(bl.amount || bl.rate || '0');
+              };
+
+              // Compute SDP→Business invoice total = workerCost + business-payable billing line contributions
               let sdpInvoiceTotal = workerCost;
               const sdpBillingLineItems: { description: string; quantity: string; unitPrice: string; amount: string; sortOrder: number }[] = [];
               // Base worker cost line first
               workerCostLineItems.forEach((li, i) => sdpBillingLineItems.push({ ...li, sortOrder: i }));
               let blSortIdx = workerCostLineItems.length;
-              for (const bl of activeBillingLines) {
-                let blAmount = 0;
-                if (bl.lineType === 'percentage_of_pay') {
-                  blAmount = workerCost * (parseFloat(bl.rate || '0') / 100);
-                } else if (bl.lineType === 'fixed_percentage') {
-                  blAmount = workerCost * (parseFloat(bl.rate || '0') / 100);
-                } else {
-                  blAmount = parseFloat(bl.amount || bl.rate || '0');
-                }
+              for (const bl of businessBillingLines) {
+                const blAmount = computeBillingLineAmount(bl);
                 sdpInvoiceTotal += blAmount;
                 sdpBillingLineItems.push({ description: bl.description, quantity: '1', unitPrice: blAmount.toFixed(2), amount: blAmount.toFixed(2), sortOrder: blSortIdx++ });
               }
@@ -7160,6 +7225,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     customerBillingAmount = totalHours * customerRate;
                     clientLineItems.push({ description: `${totalHours}h @ ${contract.customerCurrency || contract.currency} ${customerRate}/hr`, quantity: totalHours.toString(), unitPrice: customerRate.toFixed(2), amount: customerBillingAmount.toFixed(2), sortOrder: 0 });
                   }
+                }
+              }
+
+              // Append any host-client-payable billing lines (e.g. margin fee billed to host client)
+              // to the client invoice. Will be routed to the right invoice category below
+              // based on billingMode (customer_billing for invoice_through_platform, business_to_client otherwise).
+              if (hostClientBillingLines.length > 0) {
+                let hcSortIdx = clientLineItems.length;
+                for (const bl of hostClientBillingLines) {
+                  const amt = computeBillingLineAmount(bl);
+                  customerBillingAmount += amt;
+                  clientLineItems.push({ description: bl.description, quantity: '1', unitPrice: amt.toFixed(2), amount: amt.toFixed(2), sortOrder: hcSortIdx++ });
                 }
               }
 

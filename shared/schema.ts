@@ -634,6 +634,7 @@ export const contractBillingLines = pgTable("contract_billing_lines", {
   amount: decimal("amount", { precision: 12, scale: 2 }), // computed or override amount
   currency: varchar("currency", { length: 3 }),
   frequency: varchar("frequency"), // 'per_timesheet_period' | 'monthly' | 'annual'
+  paidBy: varchar("paid_by").default('business'), // 'business' | 'host_client' — who this line is billed to
   isActive: boolean("is_active").default(true),
   sortOrder: integer("sort_order").default(0),
   notes: text("notes"),

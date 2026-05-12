@@ -70,7 +70,7 @@ function ContractStatusBadge({ contract }: { contract: any }) {
   );
 }
 
-function SdpBillingLinesPanel({ contractId }: { contractId: string }) {
+function SdpBillingLinesPanel({ contractId, isForClient }: { contractId: string; isForClient?: boolean }) {
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
   const [editingLine, setEditingLine] = useState<any>(null);
@@ -129,6 +129,7 @@ function SdpBillingLinesPanel({ contractId }: { contractId: string }) {
     amount: '',
     currency: 'USD',
     frequency: 'per_timesheet_period',
+    paidBy: 'business',
     isActive: true,
     sortOrder: billingLines.length,
     notes: '',
@@ -209,7 +210,21 @@ function SdpBillingLinesPanel({ contractId }: { contractId: string }) {
               </SelectContent>
             </Select>
           </div>
-          <div className="flex items-end">
+          <div>
+            <label className="text-xs font-medium text-gray-600 mb-1 block">Paid By</label>
+            <Select value={form.paidBy || 'business'} onValueChange={v => setForm({ ...form, paidBy: v })}>
+              <SelectTrigger className="h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="business">Employing Business</SelectItem>
+                {isForClient && (
+                  <SelectItem value="host_client">Host Client</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="col-span-2 flex items-end">
             <div className="flex items-center gap-2 h-8">
               <Switch checked={form.isActive} onCheckedChange={v => setForm({ ...form, isActive: v })} />
               <span className="text-xs text-gray-600">{form.isActive ? 'Active' : 'Inactive'}</span>
@@ -260,11 +275,16 @@ function SdpBillingLinesPanel({ contractId }: { contractId: string }) {
                 ) : (
                   <div key={line.id} className="flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-medium truncate">{line.description}</span>
                         <Badge variant={line.isActive ? 'default' : 'secondary'} className="text-xs flex-shrink-0">
                           {line.isActive ? 'Active' : 'Off'}
                         </Badge>
+                        {line.paidBy === 'host_client' && (
+                          <Badge variant="outline" className="text-[10px] flex-shrink-0 border-emerald-300 text-emerald-700 bg-emerald-50">
+                            Host Client
+                          </Badge>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 mt-0.5">
                         <span className="text-xs text-muted-foreground">
@@ -968,6 +988,8 @@ export default function ContractsPage() {
   // Send contract for signing mutation
   const [showRecallDialog, setShowRecallDialog] = useState(false);
   const [contractToRecall, setContractToRecall] = useState<any>(null);
+  const [showRenegotiateDialog, setShowRenegotiateDialog] = useState(false);
+  const [contractToRenegotiate, setContractToRenegotiate] = useState<any>(null);
 
   const sendForSigningMutation = useMutation({
     mutationFn: async (contractId: string) => {
@@ -1032,7 +1054,7 @@ export default function ContractsPage() {
       });
       setShowRecallDialog(false);
       setContractToRecall(null);
-      queryClient.invalidateQueries({ 
+      queryClient.invalidateQueries({
         predicate: (query) => {
           const key = query.queryKey;
           return Array.isArray(key) && typeof key[0] === 'string' && key[0].startsWith('/api/contracts');
@@ -1043,6 +1065,35 @@ export default function ContractsPage() {
       toast({
         title: "Error",
         description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Renegotiate / reissue a fully-signed contract. Unlocks the contract back to a draft state,
+  // preserving the previously-signed instance as audit history.
+  const renegotiateContractMutation = useMutation({
+    mutationFn: async (contractId: string) => {
+      return await apiRequest("POST", `/api/contracts/${contractId}/renegotiate`);
+    },
+    onSuccess: () => {
+      toast({
+        title: "Contract Reopened",
+        description: "The signed contract has been unlocked for editing. The previous signed version is preserved as audit history.",
+      });
+      setShowRenegotiateDialog(false);
+      setContractToRenegotiate(null);
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey;
+          return Array.isArray(key) && typeof key[0] === 'string' && key[0].startsWith('/api/contracts');
+        }
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Renegotiate Failed",
+        description: error?.message || 'Could not reopen the contract.',
         variant: "destructive",
       });
     },
@@ -1906,7 +1957,7 @@ export default function ContractsPage() {
 
               {/* SDP Billing Lines Panel — SDP internal only */}
               {((user as any)?.userType === 'sdp_internal' || (user as any)?.userType === 'sdp_super_admin') && (
-                <SdpBillingLinesPanel contractId={selectedContract.id} />
+                <SdpBillingLinesPanel contractId={selectedContract.id} isForClient={!!selectedContract.isForClient} />
               )}
 
               {/* Actions - Different for workers vs business users */}
@@ -1956,10 +2007,25 @@ export default function ContractsPage() {
                       <>
                         {/* Edit or Recall based on lock state */}
                         {isFullySigned ? (
-                          <div className="flex items-center gap-2 px-3 py-2 bg-green-50 text-green-700 rounded-md" data-testid="badge-signed-locked">
-                            <Lock className="h-4 w-4" />
-                            <span className="text-sm font-medium">Signed & Locked</span>
-                          </div>
+                          <>
+                            <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-md text-sm" data-testid="badge-signed-locked">
+                              <Lock className="h-4 w-4" />
+                              <span className="font-medium">Signed &amp; Locked</span>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-orange-400 text-orange-700 hover:bg-orange-50"
+                              data-testid="button-renegotiate-contract"
+                              onClick={() => {
+                                setContractToRenegotiate(selectedContract);
+                                setShowRenegotiateDialog(true);
+                              }}
+                            >
+                              <RotateCcw className="mr-2 h-4 w-4" />
+                              Renegotiate
+                            </Button>
+                          </>
                         ) : isLocked ? (
                           <Button
                             variant="outline"
@@ -2184,6 +2250,39 @@ export default function ContractsPage() {
                 data-testid="button-confirm-recall"
               >
                 {recallContractMutation.isPending ? 'Recalling...' : 'Yes, Recall Contract'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Renegotiate Confirmation Dialog */}
+      <Dialog open={showRenegotiateDialog} onOpenChange={setShowRenegotiateDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCcw className="h-5 w-5 text-orange-600" />
+              Renegotiate Contract
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-secondary-600">
+              This will unlock the signed contract for editing. The previously-signed version is preserved as audit history, but the worker will need to sign the revised contract once you re-send it.
+            </p>
+            <p className="text-sm font-medium text-secondary-800">
+              Contract: {contractToRenegotiate?.contractName || contractToRenegotiate?.customRoleTitle || contractToRenegotiate?.roleTitle?.title || 'Contract'} — {contractToRenegotiate?.worker?.firstName} {contractToRenegotiate?.worker?.lastName}
+            </p>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => { setShowRenegotiateDialog(false); setContractToRenegotiate(null); }}>
+                Cancel
+              </Button>
+              <Button
+                className="bg-orange-600 hover:bg-orange-700 text-white"
+                disabled={renegotiateContractMutation.isPending}
+                onClick={() => contractToRenegotiate && renegotiateContractMutation.mutate(contractToRenegotiate.id)}
+                data-testid="button-confirm-renegotiate"
+              >
+                {renegotiateContractMutation.isPending ? 'Reopening...' : 'Yes, Reopen for Editing'}
               </Button>
             </div>
           </div>
