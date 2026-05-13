@@ -17,6 +17,7 @@ import { CreateConsolidatedInvoiceModal } from "@/components/modals/create-conso
 import { EditSdpInvoiceModal } from "@/components/modals/edit-sdp-invoice-modal";
 import MarkAsPaidModal from "@/components/modals/mark-as-paid-modal";
 import { MarginPaymentModal } from "@/components/modals/margin-payment-modal";
+import { InvoiceDetailsModal } from "@/components/modals/invoice-details-modal";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { User, Country, Business, Timesheet } from "@shared/schema";
@@ -139,6 +140,7 @@ export default function SdpInvoices() {
   const [selectedInvoiceForPayment, setSelectedInvoiceForPayment] = useState<SdpInvoice | null>(null);
   const [showMarginPaymentModal, setShowMarginPaymentModal] = useState(false);
   const [selectedInvoiceForMargin, setSelectedInvoiceForMargin] = useState<SdpInvoice | null>(null);
+  const [selectedInvoiceForDetails, setSelectedInvoiceForDetails] = useState<SdpInvoice | null>(null);
   const [selectedCountry, setSelectedCountry] = useState<string>("");
   const [selectedBusiness, setSelectedBusiness] = useState<string>("");
   const [activeCategory, setActiveCategory] = useState<string>("all");
@@ -769,7 +771,12 @@ export default function SdpInvoices() {
                 const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons];
                 
                 return (
-                  <Card key={invoice.id} className="hover:shadow-md transition-shadow" data-testid={`card-sdp-invoice-${invoice.id}`}>
+                  <Card
+                    key={invoice.id}
+                    className="hover:shadow-md hover:border-primary/30 transition-all cursor-pointer"
+                    data-testid={`card-sdp-invoice-${invoice.id}`}
+                    onClick={() => setSelectedInvoiceForDetails(invoice)}
+                  >
                     <CardHeader className="pb-3">
                       <div className="flex items-center justify-between">
                         <div>
@@ -1002,11 +1009,11 @@ export default function SdpInvoices() {
                         </div>
                       </div>
 
-                      <div className="border-t pt-4">
+                      <div className="border-t pt-4" onClick={(e) => e.stopPropagation()}>
                         <div className="text-xs text-secondary-500 mb-2">
                           Created by {invoice.createdByUser.firstName} {invoice.createdByUser.lastName}
                         </div>
-                        
+
                         {invoice.status === 'draft' && (
                           <div className="space-y-2">
                             <div className="flex gap-2">
@@ -1230,6 +1237,12 @@ export default function SdpInvoices() {
           invoice={selectedInvoiceForMargin}
         />
       )}
+
+      <InvoiceDetailsModal
+        invoice={selectedInvoiceForDetails}
+        open={!!selectedInvoiceForDetails}
+        onOpenChange={(open) => { if (!open) setSelectedInvoiceForDetails(null); }}
+      />
     </div>
   );
 }

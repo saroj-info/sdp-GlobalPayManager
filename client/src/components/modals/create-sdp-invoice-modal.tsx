@@ -89,24 +89,10 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
     const businessCountryId = toBusiness?.countryId || toBusiness?.accessibleCountries?.[0];
     const isCrossBorder = businessCountryId && businessCountryId !== data.fromCountryId;
     
-    // Use form's GST rate if provided, otherwise use country defaults
-    let gstRate = 0;
-    if (!isCrossBorder) {
-      if (data.gstVatRate && !isNaN(parseFloat(data.gstVatRate))) {
-        gstRate = parseFloat(data.gstVatRate);
-      } else {
-        // Fallback to country defaults only if no user input
-        const gstRates: Record<string, number> = {
-          'Australia': 10,
-          'New Zealand': 15,
-          'United Kingdom': 20,
-          'Canada': 5,
-          'Singapore': 7
-        };
-        gstRate = gstRates[fromCountry?.name] || 0;
-      }
-    }
-    
+    // Tax = whatever the user typed. No country-based hardcoded fallback.
+    const gstRate = data.gstVatRate && !isNaN(parseFloat(data.gstVatRate))
+      ? parseFloat(data.gstVatRate)
+      : 0;
     const gstAmount = (subtotal * gstRate) / 100;
     const total = subtotal + gstAmount;
     
@@ -173,7 +159,7 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
     resolver: zodResolver(createSdpInvoiceSchema),
     defaultValues: {
       currency: "USD",
-      gstVatRate: "10",
+      gstVatRate: "",
       serviceType: "employment_services",
       invoiceDate: new Date().toISOString().split('T')[0],
       dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -251,21 +237,11 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
   });
   const openPOs = (purchaseOrders as any[]).filter((po: any) => po.status === "open");
 
-  // Update cross-border status and auto-populate GST rate when country or business changes
+  // Update cross-border status when country or business changes.
+  // (GST rate is no longer auto-populated — operator types it explicitly, or leaves it blank for no tax.)
   useEffect(() => {
     const selectedFromCountry = countries.find((c: any) => c.id === fromCountryId);
     const selectedBusiness = businesses.find((b: any) => b.id === toBusinessId);
-    
-    if (selectedFromCountry) {
-      // Auto-populate GST rate from country config if rate is still at default and not manually changed
-      const countryGstRate = selectedFromCountry.gstRate ? String(parseFloat(selectedFromCountry.gstRate)) : null;
-      if (countryGstRate) {
-        const currentRate = form.getValues('gstVatRate');
-        if (!currentRate || currentRate === '10') {
-          form.setValue('gstVatRate', countryGstRate);
-        }
-      }
-    }
 
     if (selectedFromCountry && selectedBusiness) {
       // Determine business country (use primary country or first accessible)

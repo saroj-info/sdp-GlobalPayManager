@@ -6,6 +6,7 @@ import bcrypt from "bcrypt";
 import * as OTPAuth from "otpauth";
 import * as twoFactorAuth from "./twoFactorAuth";
 import { storage } from "./storage";
+import { registerTimesheetApprovalRoutes } from "./modules/timesheet-approval";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -6528,18 +6529,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/contracts/:id/renegotiate', authMiddleware, async (req: any, res) => {
     try {
       const { id } = req.params;
-      const userId = req.user?.id;
       const userType = req.user?.userType;
 
       const contract = await storage.getContract(id);
       if (!contract) return res.status(404).json({ message: "Contract not found" });
 
-      // Permission: SDP internal OR the owning business (same gate as recall / send-for-signing)
+      // Permission: SDP internal users only (super_admin / admin / agent).
+      // Business users can no longer unilaterally reopen a signed contract — they need to ask SDP.
       if (userType !== 'sdp_internal') {
-        const business = await storage.getBusinessByOwnerId(userId);
-        if (!business || contract.businessId !== business.id) {
-          return res.status(403).json({ message: "Unauthorized" });
-        }
+        return res.status(403).json({ message: "Only SDP users can renegotiate signed contracts" });
       }
 
       // Sanity guard: only meaningful for fully-signed contracts
@@ -6959,496 +6957,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch('/api/timesheets/:id/status', authMiddleware, async (req: any, res) => {
-    try {
-      const { id } = req.params;
-      const { status, rejectionReason } = req.body;
-      const userId = req.user?.id;
-      const userType = req.user?.userType;
-      
-      // Get timesheet details before updating status
-      const allTimesheets = await storage.getAllTimesheets();
-      const timesheet = allTimesheets.find(t => t.id === id);
-      
-      if (!timesheet) {
-        return res.status(404).json({ message: "Timesheet not found" });
-      }
-
-      // Authorization: enforce the contract's `timesheetApproverRole` if set, fall back to legacy "any of {SDP, business, host client}" otherwise.
-      if (userType === 'worker') {
-        return res.status(403).json({ message: "Workers cannot approve timesheets" });
-      }
-      const authContract: any = await storage.getContractById(timesheet.contractId);
-      if (!authContract) return res.status(404).json({ message: "Contract not found" });
-      const approverRole: string | null = authContract.timesheetApproverRole || null;
-      const labels: Record<string, string> = { sdp: 'SDP', business: 'Employing Business', host_client: 'Host Client' };
-      const denyMsg = approverRole ? `Only ${labels[approverRole] || approverRole} can approve this timesheet` : "Unauthorized to update this timesheet status";
-
-      if (userType === 'sdp_internal') {
-        if (approverRole && approverRole !== 'sdp') {
-          return res.status(403).json({ message: denyMsg });
-        }
-      } else if (userType === 'business_user') {
-        const business = await storage.getBusinessByOwnerId(userId);
-        if (!business) return res.status(404).json({ message: "Business not found" });
-        const isEmployingBusiness = authContract.businessId === business.id;
-        const isHostClient = authContract.customerBusinessId === business.id;
-        if (!approverRole) {
-          // Legacy: keep prior behaviour (employing business or host client may approve)
-          if (!isEmployingBusiness && !isHostClient) {
-            return res.status(403).json({ message: denyMsg });
-          }
-        } else if (approverRole === 'business' && !isEmployingBusiness) {
-          return res.status(403).json({ message: denyMsg });
-        } else if (approverRole === 'host_client' && !isHostClient) {
-          return res.status(403).json({ message: denyMsg });
-        } else if (approverRole === 'sdp') {
-          return res.status(403).json({ message: denyMsg });
-        }
-      }
-
-      await storage.updateTimesheetStatus(id, status, userId, rejectionReason);
-      console.log(`[invoice] PATCH /timesheets/${id}/status → status='${status}' contractId=${timesheet.contractId}`);
-
-      // If approving a timesheet, auto-generate invoices based on contract billingMode
-      if (status === 'approved') {
-        const contract = await storage.getContractById(timesheet.contractId);
-
-        console.log("contract", contract);
-        console.log(`[invoice] approved branch reached — contract found=${!!contract} isForClient=${contract?.isForClient} billingMode=${(contract as any)?.billingMode} invoiceCustomer=${contract?.invoiceCustomer} rateType=${contract?.rateType}`);
-
-        // Pure salary contracts with no host-client billing skip auto-invoicing — payroll handles
-        // them. Salary contracts with isForClient still generate the client-facing invoice (via
-        // customerBillingRate / fixedBillingAmount), but skip the SDP→Business worker-cost invoice
-        // since the worker is paid via payroll, not per-period invoicing.
-        if (contract && contract.rateType === 'annual' && !contract.isForClient) {
-          console.log(`Salary contract ${contract.id}: no client billing, skipping auto-invoice on timesheet approval`);
-        } else if (contract && contract.isForClient) {
-          // Determine effective billing mode: use explicit billingMode if set, fall back to legacy invoiceCustomer boolean
-          const billingMode = (contract as any).billingMode || (contract.invoiceCustomer ? 'invoice_through_platform' : null);
-          
-          if (billingMode) {
-            try {
-              const rateType = contract.rateType || 'hourly';
-              const rateStructure = (contract as any).rateStructure || 'single';
-              const clientBillingType = (contract as any).clientBillingType || 'rate_based';
-              const workerRate = parseFloat(contract.rate);
-              console.log(`[invoice] start contract=${contract.id} timesheet=${timesheet.id} billingMode=${billingMode} rateType=${rateType} rateStructure=${rateStructure} clientBillingType=${clientBillingType} workerRate=${workerRate} isForClient=${contract.isForClient}`);
-              if (isNaN(workerRate)) {
-                throw new Error(`Contract ${contract.id} has invalid/missing rate — cannot auto-generate invoice`);
-              }
-
-              // Fetch contract rate lines for multiple-rate calculations
-              let rateLines: any[] = [];
-              if (rateStructure === 'multiple') {
-                rateLines = await storage.getContractRateLines(contract.id);
-                console.log(`[invoice] multi-rate contract — ${rateLines.length} rate lines:`, rateLines.map((r: any) => ({ id: r.id, name: r.projectName, rate: r.rate, clientRate: r.clientRate, isDefault: r.isDefault })));
-                console.log(`[invoice] timesheet entries (${timesheet.entries.length}):`, timesheet.entries.map((e: any) => ({ date: e.date, hours: e.hoursWorked, days: e.daysWorked, projectRateLineId: e.projectRateLineId })));
-              }
-
-              // Build a map of rateLineId → rate for quick lookup
-              const rateLineMap = new Map<string, number>(
-                rateLines.map((rl: any) => [rl.id, parseFloat(rl.rate)])
-              );
-
-              // Calculate worker cost.
-              // For salary (annual) contracts the worker is paid via payroll, not per-period
-              // invoicing — leave workerCost at 0 and skip the worker-cost line items so the
-              // SDP→Business invoice (if any) and the suggestedMargin calculation behave sanely.
-              let workerCost = 0;
-              const workerCostLineItems: { description: string; quantity: string; unitPrice: string; amount: string; sortOrder: number }[] = [];
-
-              if (rateType === 'annual') {
-                // intentionally skip — workerCost stays 0
-              } else if (rateStructure === 'multiple' && rateLines.length > 0) {
-                // Group entries by their rate line
-                const rateGroups = new Map<string, { hours: number; days: number; rate: number; label: string }>();
-                for (const entry of timesheet.entries) {
-                  console.log(`[invoice] processing timesheet entry — date=${entry.date} hours=${entry.hoursWorked} days=${entry.daysWorked} projectRateLineId=${entry.projectRateLineId}`);
-                  const rateLineId = entry.projectRateLineId;
-                  const entryRate = rateLineId ? (rateLineMap.get(rateLineId) ?? workerRate) : workerRate;
-                  console.log(`[invoice] entry rate determined as ${entryRate} (rateLineId=${rateLineId})`);
-                  const rl = rateLines.find((r: any) => r.id === rateLineId);
-                  const label = rl?.description || 'Standard Rate';
-                  const key = rateLineId || 'default';
-                  if (!rateGroups.has(key)) rateGroups.set(key, { hours: 0, days: 0, rate: entryRate, label });
-                  const g = rateGroups.get(key)!;
-                  if (rateType === 'daily') {
-                    const days = parseFloat(entry.daysWorked || '0') || 0;
-                    g.days += days;
-                    workerCost += days * entryRate;
-                  } else {
-                    const hours = parseFloat(entry.hoursWorked || '0') || 0;
-                    g.hours += hours;
-                    workerCost += hours * entryRate;
-                  }
-                }
-                let sortIdx = 0;
-                for (const [, g] of rateGroups) {
-                  if (rateType === 'daily' && g.days > 0) {
-                    const amt = g.days * g.rate;
-                    workerCostLineItems.push({ description: `${g.label} — ${g.days}d @ ${contract.currency} ${g.rate}/day`, quantity: g.days.toString(), unitPrice: g.rate.toFixed(2), amount: amt.toFixed(2), sortOrder: sortIdx++ });
-                  } else if (g.hours > 0) {
-                    const amt = g.hours * g.rate;
-                    workerCostLineItems.push({ description: `${g.label} — ${g.hours}h @ ${contract.currency} ${g.rate}/hr`, quantity: g.hours.toString(), unitPrice: g.rate.toFixed(2), amount: amt.toFixed(2), sortOrder: sortIdx++ });
-                  }
-                }
-              } else if (rateType === 'daily') {
-                const totalDays = timesheet.entries.reduce((sum: number, e: any) => {
-                  const d = parseFloat(e.daysWorked || '0'); return sum + (isNaN(d) ? 0 : d);
-                }, 0);
-                workerCost = totalDays * workerRate;
-                workerCostLineItems.push({ description: `${totalDays}d @ ${contract.currency} ${workerRate}/day`, quantity: totalDays.toString(), unitPrice: workerRate.toFixed(2), amount: workerCost.toFixed(2), sortOrder: 0 });
-              } else {
-                const totalHoursCalc = timesheet.entries.reduce((sum: number, e: any) => {
-                  const h = parseFloat(e.hoursWorked || '0'); return sum + (isNaN(h) ? 0 : h);
-                }, 0);
-                workerCost = totalHoursCalc * workerRate;
-                workerCostLineItems.push({ description: `${totalHoursCalc}h @ ${contract.currency} ${workerRate}/hr`, quantity: totalHoursCalc.toString(), unitPrice: workerRate.toFixed(2), amount: workerCost.toFixed(2), sortOrder: 0 });
-              }
-
-              // Salary contracts may legitimately have workerCost=0 here (paid via payroll);
-              // only treat zero/negative as an error when the worker is paid per-period.
-              if (rateType !== 'annual' && workerCost <= 0) {
-                throw new Error('Cannot create invoice for timesheet with zero or negative worker cost');
-              }
-
-              // Fetch SDP billing lines for this contract
-              const contractBillingLines = await storage.getContractBillingLines(contract.id);
-              const activeBillingLines = contractBillingLines.filter((bl: any) => bl.isActive);
-              // Split by payer. Lines with paidBy missing/null default to 'business' for backward compat.
-              const businessBillingLines = activeBillingLines.filter((bl: any) => (bl.paidBy ?? 'business') !== 'host_client');
-              const hostClientBillingLines = activeBillingLines.filter((bl: any) => bl.paidBy === 'host_client');
-
-              // Helper: turn a billing line into { amount, lineItem }
-              const computeBillingLineAmount = (bl: any) => {
-                if (bl.lineType === 'percentage_of_pay' || bl.lineType === 'fixed_percentage') {
-                  return workerCost * (parseFloat(bl.rate || '0') / 100);
-                }
-                return parseFloat(bl.amount || bl.rate || '0');
-              };
-
-              // Compute SDP→Business invoice content.
-              // Worker cost is bundled here ONLY when billingMode === 'auto_invoice' AND the contract
-              // is non-salary. In invoice_through_platform / invoice_separately the worker cost flows
-              // through other paths (or is paid via payroll for salary contracts), so the SDP→Business
-              // invoice contains *only* the business-payable billing lines (margin, statutory fees).
-              const includeWorkerCostInSdpInvoice = billingMode === 'auto_invoice' && rateType !== 'annual';
-              let sdpInvoiceTotal = 0;
-              const sdpBillingLineItems: { description: string; quantity: string; unitPrice: string; amount: string; sortOrder: number }[] = [];
-              if (includeWorkerCostInSdpInvoice) {
-                workerCostLineItems.forEach((li, i) => sdpBillingLineItems.push({ ...li, sortOrder: i }));
-                sdpInvoiceTotal += workerCost;
-              }
-              let blSortIdx = sdpBillingLineItems.length;
-              for (const bl of businessBillingLines) {
-                const blAmount = computeBillingLineAmount(bl);
-                sdpInvoiceTotal += blAmount;
-                sdpBillingLineItems.push({ description: bl.description, quantity: '1', unitPrice: blAmount.toFixed(2), amount: blAmount.toFixed(2), sortOrder: blSortIdx++ });
-              }
-
-              // Calculate client billing amount
-              let customerBillingAmount = 0;
-              const clientLineItems: { description: string; quantity: string; unitPrice: string; amount: string; sortOrder: number }[] = [];
-
-              if (clientBillingType === 'fixed_price') {
-                customerBillingAmount = parseFloat((contract as any).fixedBillingAmount || '0');
-                clientLineItems.push({ description: `Fixed period billing — ${timesheet.periodStart} to ${timesheet.periodEnd}`, quantity: '1', unitPrice: customerBillingAmount.toFixed(2), amount: customerBillingAmount.toFixed(2), sortOrder: 0 });
-              } else {
-                // Rate-based client billing
-                const topLevelCustomerRate = contract.customerBillingRate ? parseFloat(contract.customerBillingRate) : 0;
-                // Fallback when neither the specific entry's rate line nor the contract have a client rate:
-                // use the default rate line's clientRate, or the first line's clientRate.
-                const defaultLineClientRate = (() => {
-                  const def = rateLines.find((r: any) => r.isDefault && r.clientRate);
-                  if (def) return parseFloat(def.clientRate);
-                  const firstWith = rateLines.find((r: any) => r.clientRate);
-                  return firstWith ? parseFloat(firstWith.clientRate) : 0;
-                })();
-                const customerRate = topLevelCustomerRate || defaultLineClientRate;
-
-                // Use the contract's tracking unit (which prefers customerBillingRateType when
-                // isForClient) so the invoice math matches what the worker logged in the form.
-                const trackingUnit = getTrackingUnit(contract as any);
-                const HOURS_PER_DAY = 8;
-                if (rateStructure === 'multiple' && rateLines.length > 0) {
-                  // Use per-entry rates for client invoice too
-                  const rateGroups = new Map<string, { hours: number; days: number; rate: number; label: string }>();
-                  for (const entry of timesheet.entries) {
-                    const rateLineId = entry.projectRateLineId;
-                    const rl = rateLines.find((r: any) => r.id === rateLineId);
-                    const entryRate = rl ? (rl.clientRate ? parseFloat(rl.clientRate) : customerRate) : customerRate;
-                    const label = rl?.description || 'Standard Rate';
-                    const key = rateLineId || 'default';
-                    if (!rateGroups.has(key)) rateGroups.set(key, { hours: 0, days: 0, rate: entryRate, label });
-                    const g = rateGroups.get(key)!;
-                    const entryHours = parseFloat(entry.hoursWorked || '0') || 0;
-                    const entryDays = parseFloat(entry.daysWorked || '0') || 0;
-                    if (trackingUnit === 'daily') {
-                      // Prefer days; if the worker logged hours instead (e.g. legacy timesheet
-                      // for a hourly→daily switched contract), convert at 8h/day.
-                      const days = entryDays > 0 ? entryDays : (entryHours > 0 ? entryHours / HOURS_PER_DAY : 0);
-                      g.days += days;
-                      customerBillingAmount += days * entryRate;
-                    } else {
-                      const hours = entryHours > 0 ? entryHours : (entryDays > 0 ? entryDays * HOURS_PER_DAY : 0);
-                      g.hours += hours;
-                      customerBillingAmount += hours * entryRate;
-                    }
-                  }
-                  let idx = 0;
-                  for (const [, g] of rateGroups) {
-                    if (trackingUnit === 'daily' && g.days > 0) {
-                      const amt = g.days * g.rate;
-                      clientLineItems.push({ description: `${g.label} — ${g.days}d`, quantity: g.days.toString(), unitPrice: g.rate.toFixed(2), amount: amt.toFixed(2), sortOrder: idx++ });
-                    } else if (g.hours > 0) {
-                      const amt = g.hours * g.rate;
-                      clientLineItems.push({ description: `${g.label} — ${g.hours}h`, quantity: g.hours.toString(), unitPrice: g.rate.toFixed(2), amount: amt.toFixed(2), sortOrder: idx++ });
-                    }
-                  }
-                } else {
-                  const sumHours = timesheet.entries.reduce((sum: number, e: any) => {
-                    const h = parseFloat(e.hoursWorked || '0'); return sum + (isNaN(h) ? 0 : h);
-                  }, 0);
-                  const sumDays = timesheet.entries.reduce((sum: number, e: any) => {
-                    const d = parseFloat(e.daysWorked || '0'); return sum + (isNaN(d) ? 0 : d);
-                  }, 0);
-                  // Backwards-compat safety net: legacy annual timesheets used presence-only entries.
-                  // If the worker logged neither hours nor days, count days where isPresent=true.
-                  const presentDays = (sumHours === 0 && sumDays === 0)
-                    ? timesheet.entries.reduce((sum: number, e: any) => sum + (e.isPresent ? 1 : 0), 0)
-                    : 0;
-
-                  if (trackingUnit === 'daily') {
-                    const totalDays = sumDays > 0
-                      ? sumDays
-                      : sumHours > 0 ? sumHours / HOURS_PER_DAY : presentDays;
-                    customerBillingAmount = totalDays * customerRate;
-                    clientLineItems.push({ description: `${totalDays}d @ ${contract.customerCurrency || contract.currency} ${customerRate}/day`, quantity: totalDays.toString(), unitPrice: customerRate.toFixed(2), amount: customerBillingAmount.toFixed(2), sortOrder: 0 });
-                  } else {
-                    const totalHours = sumHours > 0
-                      ? sumHours
-                      : sumDays > 0 ? sumDays * HOURS_PER_DAY : presentDays * HOURS_PER_DAY;
-                    customerBillingAmount = totalHours * customerRate;
-                    clientLineItems.push({ description: `${totalHours}h @ ${contract.customerCurrency || contract.currency} ${customerRate}/hr`, quantity: totalHours.toString(), unitPrice: customerRate.toFixed(2), amount: customerBillingAmount.toFixed(2), sortOrder: 0 });
-                  }
-                }
-              }
-
-              // Append any host-client-payable billing lines (e.g. margin fee billed to host client)
-              // to the client invoice. Will be routed to the right invoice category below
-              // based on billingMode (customer_billing for invoice_through_platform, business_to_client otherwise).
-              if (hostClientBillingLines.length > 0) {
-                let hcSortIdx = clientLineItems.length;
-                for (const bl of hostClientBillingLines) {
-                  const amt = computeBillingLineAmount(bl);
-                  customerBillingAmount += amt;
-                  clientLineItems.push({ description: bl.description, quantity: '1', unitPrice: amt.toFixed(2), amount: amt.toFixed(2), sortOrder: hcSortIdx++ });
-                }
-              }
-
-              const suggestedMargin = customerBillingAmount - workerCost;
-              console.log(`[invoice] computed workerCost=${workerCost} customerBillingAmount=${customerBillingAmount} margin=${suggestedMargin} currency=${contract.customerCurrency || contract.currency}`);
-              const invoiceDate = new Date();
-              const paymentTermsDays = parseInt(contract.paymentTerms || '30');
-              const dueDate = new Date(invoiceDate);
-              dueDate.setDate(dueDate.getDate() + paymentTermsDays);
-              const currency = contract.customerCurrency || contract.currency;
-              const allInvoices = await storage.getAllSdpInvoices();
-              
-              // Helper: create a Business→HostClient invoice (category: business_to_client)
-              const createB2CInvoice = async () => {
-                if (!contract.customerBusinessId) {
-                  console.warn(`[invoice] Skipping B2C invoice for contract ${contract.id} — customerBusinessId is not set.`);
-                  return;
-                }
-                // Nothing to bill yet (rate-based contract with no customer rate set, or a 0-hour timesheet).
-                // Skip silently — the operator can fix the contract config or add hours and re-approve later.
-                if (clientBillingType !== 'fixed_price' && customerBillingAmount <= 0) {
-                  console.warn(`[invoice] Skipping B2C invoice for contract ${contract.id} — billable amount is 0 (set customerBillingRate / clientRate, or log hours on the timesheet).`);
-                  return;
-                }
-                const existing = allInvoices.find(inv =>
-                  inv.timesheetId === timesheet.id && inv.invoiceCategory === 'business_to_client'
-                );
-                if (existing) { console.log(`B2C invoice already exists for timesheet ${id}, skipping`); return; }
-                const invNum = await storage.generateSdpInvoiceNumber(contract.countryId);
-                // Look up business and host client names for clear descriptions
-                const fromBiz = await storage.getBusinessById(contract.businessId);
-                const toHostClient = await storage.getBusinessById(contract.customerBusinessId!);
-                const fromBizName = fromBiz?.name || 'Business';
-                const toHostName = toHostClient?.name || 'Host Client';
-                const inv = await storage.createSdpInvoice({
-                  invoiceNumber: invNum,
-                  invoiceDate,
-                  dueDate,
-                  invoiceCategory: 'business_to_client',
-                  fromCountryId: contract.countryId,
-                  fromBusinessId: contract.businessId,
-                  toBusinessId: contract.customerBusinessId,
-                  serviceType: `Business Billing - ${contract.employmentType}`,
-                  description: `Invoice from ${fromBizName} to ${toHostName}. Payable by: ${toHostName}. Period: ${timesheet.periodStart} to ${timesheet.periodEnd}`,
-                  subtotal: customerBillingAmount.toFixed(2),
-                  currency,
-                  totalAmount: customerBillingAmount.toFixed(2),
-                  status: 'draft',
-                  createdBy: userId,
-                  timesheetId: timesheet.id,
-                  contractId: contract.id,
-                  workerId: contract.workerId,
-                  periodStart: timesheet.periodStart,
-                  periodEnd: timesheet.periodEnd,
-                } as any);
-                await storage.createSdpInvoiceLineItems(inv.id, clientLineItems);
-                console.log(`Auto-generated B2C invoice ${invNum} for timesheet ${id}`);
-              };
-              
-              // Helper: create SDP→HostClient invoice (category: customer_billing)
-              const createCustomerBillingInvoice = async () => {
-                if (!contract.customerBusinessId) {
-                  console.warn(`[invoice] Skipping customer_billing invoice for contract ${contract.id} — customerBusinessId is not set.`);
-                  return;
-                }
-                // Nothing to bill yet (no customerBillingRate / clientRate, or 0-hour timesheet).
-                // Skip silently — operator can fix the contract config or add hours and re-approve later.
-                if (clientBillingType !== 'fixed_price' && customerBillingAmount <= 0) {
-                  console.warn(`[invoice] Skipping customer_billing invoice for contract ${contract.id} — billable amount is 0 (set customerBillingRate / clientRate, or log hours on the timesheet).`);
-                  return;
-                }
-                if (!contract.customerCurrency) {
-                  console.warn(`[invoice] Skipping customer_billing invoice for contract ${contract.id} — customerCurrency is not set.`);
-                  return;
-                }
-                const existing = allInvoices.find(inv =>
-                  inv.timesheetId === timesheet.id && inv.invoiceCategory === 'customer_billing'
-                );
-                if (existing) { console.log(`Customer billing invoice already exists for timesheet ${id}, skipping`); return; }
-                const invNum = await storage.generateSdpInvoiceNumber(contract.countryId);
-                // Look up host client name for clear description
-                const custBizTo = await storage.getBusinessById(contract.customerBusinessId!);
-                const custHostName = custBizTo?.name || 'Host Client';
-                // Look up SDP country entity name
-                const sdpCountry = await storage.getCountryById(contract.countryId);
-                const sdpEntityName = sdpCountry?.companyName || `SDP ${sdpCountry?.name || 'Entity'}`;
-                const inv = await storage.createSdpInvoice({
-                  invoiceNumber: invNum,
-                  invoiceDate,
-                  dueDate,
-                  invoiceCategory: 'customer_billing',
-                  fromCountryId: contract.countryId,
-                  toBusinessId: contract.customerBusinessId,
-                  fromBusinessId: contract.businessId,
-                  serviceType: `Customer Billing - ${contract.employmentType}`,
-                  description: `Invoice from ${sdpEntityName} to ${custHostName}. Payable by: ${custHostName}. SDP acts as billing agent. Period: ${timesheet.periodStart} to ${timesheet.periodEnd}`,
-                  subtotal: customerBillingAmount.toFixed(2),
-                  currency,
-                  totalAmount: customerBillingAmount.toFixed(2),
-                  suggestedMargin: suggestedMargin.toFixed(2),
-                  status: 'draft',
-                  createdBy: userId,
-                  timesheetId: timesheet.id,
-                  contractId: contract.id,
-                  workerId: contract.workerId,
-                  periodStart: timesheet.periodStart,
-                  periodEnd: timesheet.periodEnd,
-                } as any);
-                await storage.createSdpInvoiceLineItems(inv.id, clientLineItems);
-                console.log(`Auto-generated customer billing invoice ${invNum} for timesheet ${id}`);
-              };
-
-              // Helper: create SDP→Business invoice (category: sdp_services)
-              // Total includes worker cost + all active billing line contributions
-              const createSdpToBusinessInvoice = async () => {
-                const existingWorkerCost = allInvoices.find(inv =>
-                  inv.timesheetId === timesheet.id && inv.invoiceCategory === 'sdp_services' &&
-                  inv.toBusinessId === contract.businessId
-                );
-                if (existingWorkerCost) { console.log(`SDP service invoice already exists for timesheet ${id}, skipping`); return; }
-                const invNum = await storage.generateSdpInvoiceNumber(contract.countryId);
-                // Find an open PO for this contract to auto-link
-                const contractPOs = await storage.getPurchaseOrdersByContract(contract.id);
-                const openPO = contractPOs.find((p: any) => p.status === 'open');
-                // Look up business and SDP entity names for clear description
-                const sdpBizTo = await storage.getBusinessById(contract.businessId);
-                const sdpBizName = sdpBizTo?.name || 'Business';
-                const sdpCountryEntity = await storage.getCountryById(contract.countryId);
-                const sdpName = sdpCountryEntity?.companyName || `SDP ${sdpCountryEntity?.name || 'Entity'}`;
-                const inv = await storage.createSdpInvoice({
-                  invoiceNumber: invNum,
-                  invoiceDate,
-                  dueDate,
-                  invoiceCategory: 'sdp_services',
-                  fromCountryId: contract.countryId,
-                  toBusinessId: contract.businessId,
-                  serviceType: `Employment Services - ${contract.employmentType}`,
-                  description: `Invoice from ${sdpName} to ${sdpBizName}. Payable by: ${sdpBizName}. Worker cost + SDP fees. Period: ${timesheet.periodStart} to ${timesheet.periodEnd}`,
-                  subtotal: sdpInvoiceTotal.toFixed(2),
-                  currency: contract.currency,
-                  totalAmount: sdpInvoiceTotal.toFixed(2),
-                  status: 'draft',
-                  createdBy: userId,
-                  timesheetId: timesheet.id,
-                  contractId: contract.id,
-                  workerId: contract.workerId,
-                  periodStart: timesheet.periodStart,
-                  periodEnd: timesheet.periodEnd,
-                  purchaseOrderId: openPO?.id ?? null,
-                } as any);
-                await storage.createSdpInvoiceLineItems(inv.id, sdpBillingLineItems);
-                // Update PO invoiced amount if linked
-                if (openPO) {
-                  await storage.updatePurchaseOrderInvoicedAmount(openPO.id, sdpInvoiceTotal);
-                }
-                console.log(`Auto-generated SDP service invoice ${invNum} for timesheet ${id} (total: ${sdpInvoiceTotal.toFixed(2)})`);
-              };
-              
-              // Route to correct invoice generation based on billingMode.
-              // SDP→Business invoice is created whenever there's content for it — either
-              // (a) auto_invoice non-salary: worker cost + business billing lines, or
-              // (b) any mode with business-payable billing lines: fees-only invoice.
-              if (billingMode === 'invoice_through_platform') {
-                // SDP → Host Client (SDP acts as billing entity) — always
-                await createCustomerBillingInvoice();
-                if (sdpBillingLineItems.length > 0) {
-                  // Business-payable billing lines → separate SDP→Business invoice
-                  await createSdpToBusinessInvoice();
-                }
-              } else if (billingMode === 'invoice_separately') {
-                // Business → Host Client (business invoices the client)
-                await createB2CInvoice();
-                if (sdpBillingLineItems.length > 0) {
-                  // Business-payable billing lines → separate SDP→Business invoice
-                  await createSdpToBusinessInvoice();
-                }
-              } else if (billingMode === 'auto_invoice') {
-                // Non-salary: SDP→Business (worker cost + business billing lines). Salary: only
-                // SDP→Business if there are business billing lines (worker paid via payroll).
-                if (sdpBillingLineItems.length > 0) {
-                  await createSdpToBusinessInvoice();
-                } else {
-                  console.log(`[invoice] No SDP→Business content for contract ${contract.id} (salary contract with no business billing lines)`);
-                }
-                await createB2CInvoice();
-              }
-            } catch (invoiceError: any) {
-              console.error('[invoice] FAILED to auto-generate invoice on timesheet approval — message:', invoiceError?.message);
-              console.error('[invoice] stack:', invoiceError?.stack);
-              // Don't fail the timesheet approval if invoice generation fails
-            }
-          } else {
-            console.log(`[invoice] skipping auto-invoice — contract ${contract?.id} has no billingMode and invoiceCustomer=${contract?.invoiceCustomer}`);
-          }
-        } else if (contract) {
-          console.log(`[invoice] skipping auto-invoice — contract ${contract.id} isForClient=false`);
-        }
-      }
-      
-      res.json({ message: "Timesheet status updated successfully" });
-    } catch (error: any) {
-      console.error("Error updating timesheet status:", error);
-      res.status(400).json({ message: "Failed to update timesheet status" });
-    }
-  });
+  // Timesheet status updates — owned by the timesheet-approval module
+  // (auth + math + invoice generation all live in server/modules/timesheet-approval/)
+  registerTimesheetApprovalRoutes(app, authMiddleware);
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {
@@ -8739,6 +8250,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         serviceType,
         description,
         subtotal,
+        gstVatRate: rawGstVatRate,
+        gstVatAmount: rawGstVatAmount,
         currency,
         invoiceDate,
         dueDate,
@@ -8766,21 +8279,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const businessCountry = (toBusiness as any).countryId || toBusiness.accessibleCountries?.[0];
       const isCrossBorder = businessCountry && businessCountry !== fromCountryId;
 
-      // Server-side GST/VAT calculation
+      // Tax handling — use what the user submitted; no hardcoded country fallback.
+      // If a rate (%) is provided but no amount → derive amount from rate.
+      // If an amount is provided → use as-is.
+      // If neither is provided → tax is zero.
       const subtotalAmount = parseFloat(subtotal);
-      let gstVatRate = 0;
-      let gstVatAmount = 0;
-
-      if (!isCrossBorder) {
-        // Apply local GST/VAT rates based on country (simplified - real rates would come from country config)
-        const countryGstRates: Record<string, number> = {
-          'aus': 10,  // Australia
-          'nzl': 15,  // New Zealand
-          'gbr': 20,  // UK VAT
-          'irl': 23,  // Ireland VAT
-          'sgp': 8,   // Singapore GST
-        };
-        gstVatRate = countryGstRates[fromCountry.code.toLowerCase()] || 10;
+      const parsedRate = parseFloat(rawGstVatRate ?? '');
+      const parsedAmount = parseFloat(rawGstVatAmount ?? '');
+      let gstVatRate = Number.isFinite(parsedRate) ? parsedRate : 0;
+      let gstVatAmount = Number.isFinite(parsedAmount) ? parsedAmount : 0;
+      if (!Number.isFinite(parsedAmount) && Number.isFinite(parsedRate) && parsedRate > 0) {
         gstVatAmount = subtotalAmount * (gstVatRate / 100);
       }
 

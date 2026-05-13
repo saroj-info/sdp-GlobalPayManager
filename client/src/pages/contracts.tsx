@@ -2012,19 +2012,22 @@ export default function ContractsPage() {
                               <Lock className="h-4 w-4" />
                               <span className="font-medium">Signed &amp; Locked</span>
                             </div>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="border-orange-400 text-orange-700 hover:bg-orange-50"
-                              data-testid="button-renegotiate-contract"
-                              onClick={() => {
-                                setContractToRenegotiate(selectedContract);
-                                setShowRenegotiateDialog(true);
-                              }}
-                            >
-                              <RotateCcw className="mr-2 h-4 w-4" />
-                              Renegotiate
-                            </Button>
+                            {/* Renegotiation is an SDP-only action. Business users can request it but cannot trigger themselves. */}
+                            {(user as any)?.userType === 'sdp_internal' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-orange-400 text-orange-700 hover:bg-orange-50"
+                                data-testid="button-renegotiate-contract"
+                                onClick={() => {
+                                  setContractToRenegotiate(selectedContract);
+                                  setShowRenegotiateDialog(true);
+                                }}
+                              >
+                                <RotateCcw className="mr-2 h-4 w-4" />
+                                Renegotiate
+                              </Button>
+                            )}
                           </>
                         ) : isLocked ? (
                           <Button
