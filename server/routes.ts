@@ -7128,12 +7128,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 return parseFloat(bl.amount || bl.rate || '0');
               };
 
-              // Compute SDP→Business invoice total = workerCost + business-payable billing line contributions
-              let sdpInvoiceTotal = workerCost;
+              // Compute SDP→Business invoice content.
+              // Worker cost is bundled here ONLY when billingMode === 'auto_invoice' AND the contract
+              // is non-salary. In invoice_through_platform / invoice_separately the worker cost flows
+              // through other paths (or is paid via payroll for salary contracts), so the SDP→Business
+              // invoice contains *only* the business-payable billing lines (margin, statutory fees).
+              const includeWorkerCostInSdpInvoice = billingMode === 'auto_invoice' && rateType !== 'annual';
+              let sdpInvoiceTotal = 0;
               const sdpBillingLineItems: { description: string; quantity: string; unitPrice: string; amount: string; sortOrder: number }[] = [];
-              // Base worker cost line first
-              workerCostLineItems.forEach((li, i) => sdpBillingLineItems.push({ ...li, sortOrder: i }));
-              let blSortIdx = workerCostLineItems.length;
+              if (includeWorkerCostInSdpInvoice) {
+                workerCostLineItems.forEach((li, i) => sdpBillingLineItems.push({ ...li, sortOrder: i }));
+                sdpInvoiceTotal += workerCost;
+              }
+              let blSortIdx = sdpBillingLineItems.length;
               for (const bl of businessBillingLines) {
                 const blAmount = computeBillingLineAmount(bl);
                 sdpInvoiceTotal += blAmount;
@@ -7395,20 +7402,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 console.log(`Auto-generated SDP service invoice ${invNum} for timesheet ${id} (total: ${sdpInvoiceTotal.toFixed(2)})`);
               };
               
-              // Route to correct invoice generation based on billingMode
+              // Route to correct invoice generation based on billingMode.
+              // SDP→Business invoice is created whenever there's content for it — either
+              // (a) auto_invoice non-salary: worker cost + business billing lines, or
+              // (b) any mode with business-payable billing lines: fees-only invoice.
               if (billingMode === 'invoice_through_platform') {
-                // SDP → Host Client (SDP acts as billing entity)
+                // SDP → Host Client (SDP acts as billing entity) — always
                 await createCustomerBillingInvoice();
+                if (sdpBillingLineItems.length > 0) {
+                  // Business-payable billing lines → separate SDP→Business invoice
+                  await createSdpToBusinessInvoice();
+                }
               } else if (billingMode === 'invoice_separately') {
                 // Business → Host Client (business invoices the client)
                 await createB2CInvoice();
+                if (sdpBillingLineItems.length > 0) {
+                  // Business-payable billing lines → separate SDP→Business invoice
+                  await createSdpToBusinessInvoice();
+                }
               } else if (billingMode === 'auto_invoice') {
-                // Two invoices: SDP → Business (worker cost + billing lines), Business → Host Client (client billing).
-                // Salary contracts skip the SDP→Business invoice — that worker pay is handled via payroll.
-                if (rateType !== 'annual') {
+                // Non-salary: SDP→Business (worker cost + business billing lines). Salary: only
+                // SDP→Business if there are business billing lines (worker paid via payroll).
+                if (sdpBillingLineItems.length > 0) {
                   await createSdpToBusinessInvoice();
                 } else {
-                  console.log(`[invoice] Salary contract ${contract.id}: skipping SDP→Business invoice (payroll handles salary)`);
+                  console.log(`[invoice] No SDP→Business content for contract ${contract.id} (salary contract with no business billing lines)`);
                 }
                 await createB2CInvoice();
               }
