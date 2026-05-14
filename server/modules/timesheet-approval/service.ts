@@ -158,9 +158,14 @@ async function buildBillingSnapshot(args: {
     end: timesheet.periodEnd,
   });
 
+  // Percentage base for % billing lines. Salary contracts have workerCost=0 (paid via payroll)
+  // — fall back to the customer billing amount so "% of pay" doesn't silently evaluate to 0.
+  // For non-salary contracts workerCost > 0 → existing behaviour preserved.
+  const percentageBase = workerCost > 0 ? workerCost : customer.amount;
+
   // Append host-client-payable billing lines (pure)
   const enriched = appendHostClientBillingLines({
-    workerCost,
+    percentageBase,
     customerBillingAmount: customer.amount,
     clientLineItems: customer.lineItems,
     hostClientBillingLines: hostClientBillingLines as any,
@@ -173,6 +178,7 @@ async function buildBillingSnapshot(args: {
     workerCost,
     workerCostLineItems,
     businessBillingLines: businessBillingLines as any,
+    percentageBase,
   });
 
   const invoiceDate = new Date();

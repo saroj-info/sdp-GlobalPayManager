@@ -257,10 +257,15 @@ export function computeCustomerBilling(
 
 // ─── Billing lines (SDP service fees / margin etc.) ─────────────────────────
 
-/** A single billing line's monetary amount. Percentage types multiply against workerCost. */
-export function computeBillingLineAmount(bl: BillingLine, workerCost: number): number {
+/**
+ * A single billing line's monetary amount. Percentage types multiply against `percentageBase`,
+ * which is normally the period's worker cost — but for salary contracts (workerCost = 0 because
+ * payroll handles the worker), the orchestrator passes the customer billing amount instead, so
+ * "% of pay" semantically becomes "% of revenue billed this period".
+ */
+export function computeBillingLineAmount(bl: BillingLine, percentageBase: number): number {
   if (bl.lineType === "percentage_of_pay" || bl.lineType === "fixed_percentage") {
-    return workerCost * (num(bl.rate) / 100);
+    return percentageBase * (num(bl.rate) / 100);
   }
   return num(bl.amount || bl.rate);
 }
@@ -287,8 +292,11 @@ export function computeSdpServicesContent(args: {
   workerCost: number;
   workerCostLineItems: InvoiceLineItem[];
   businessBillingLines: BillingLine[];
+  /** Base used for percentage billing lines. For non-salary contracts this is workerCost;
+   *  for salary+isForClient contracts it's the customer billing amount (orchestrator decides). */
+  percentageBase: number;
 }): { total: number; lineItems: InvoiceLineItem[] } {
-  const { billingMode, rateType, workerCost, workerCostLineItems, businessBillingLines } = args;
+  const { billingMode, rateType, workerCost, workerCostLineItems, businessBillingLines, percentageBase } = args;
   const includeWorkerCost = billingMode === "auto_invoice" && rateType !== "annual";
   const lineItems: InvoiceLineItem[] = [];
   let total = 0;
@@ -300,7 +308,7 @@ export function computeSdpServicesContent(args: {
 
   let idx = lineItems.length;
   for (const bl of businessBillingLines) {
-    const amt = computeBillingLineAmount(bl, workerCost);
+    const amt = computeBillingLineAmount(bl, percentageBase);
     total += amt;
     lineItems.push({
       description: bl.description,
@@ -319,12 +327,13 @@ export function computeSdpServicesContent(args: {
  * Mutates nothing — returns a new array + updated total.
  */
 export function appendHostClientBillingLines(args: {
-  workerCost: number;
+  /** Base used for percentage billing lines — see `computeBillingLineAmount`. */
+  percentageBase: number;
   customerBillingAmount: number;
   clientLineItems: InvoiceLineItem[];
   hostClientBillingLines: BillingLine[];
 }): { amount: number; lineItems: InvoiceLineItem[] } {
-  const { workerCost, customerBillingAmount, clientLineItems, hostClientBillingLines } = args;
+  const { percentageBase, customerBillingAmount, clientLineItems, hostClientBillingLines } = args;
   if (hostClientBillingLines.length === 0) {
     return { amount: customerBillingAmount, lineItems: clientLineItems };
   }
@@ -332,7 +341,7 @@ export function appendHostClientBillingLines(args: {
   let total = customerBillingAmount;
   let idx = out.length;
   for (const bl of hostClientBillingLines) {
-    const amt = computeBillingLineAmount(bl, workerCost);
+    const amt = computeBillingLineAmount(bl, percentageBase);
     total += amt;
     out.push({
       description: bl.description,
