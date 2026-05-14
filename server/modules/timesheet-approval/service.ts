@@ -158,10 +158,15 @@ async function buildBillingSnapshot(args: {
     end: timesheet.periodEnd,
   });
 
-  // Percentage base for % billing lines. Salary contracts have workerCost=0 (paid via payroll)
-  // — fall back to the customer billing amount so "% of pay" doesn't silently evaluate to 0.
-  // For non-salary contracts workerCost > 0 → existing behaviour preserved.
-  const percentageBase = workerCost > 0 ? workerCost : customer.amount;
+  // Percentage base for % billing lines. Rule:
+  //   - Contracts for a host client (isForClient=true) ALWAYS use the customer billing amount
+  //     as the base — fees scale with what's billed out, consistently across hourly/daily/annual.
+  //   - Direct contracts (no host client) use workerCost.
+  // Falls back the other way if either is zero, so a misconfigured contract doesn't silently
+  // produce zero fees when the other base is non-zero.
+  const percentageBase = contract.isForClient
+    ? (customer.amount > 0 ? customer.amount : workerCost)
+    : (workerCost > 0 ? workerCost : customer.amount);
 
   // Append host-client-payable billing lines (pure)
   const enriched = appendHostClientBillingLines({
