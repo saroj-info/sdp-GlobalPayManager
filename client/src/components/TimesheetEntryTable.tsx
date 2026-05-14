@@ -145,6 +145,11 @@ export function TimesheetEntryTable({
     );
   }
 
+  // Set of yyyy-MM-dd strings for every date currently in the visible period. Used by the
+  // "Copy to Tue–Fri" buttons so they only push entries for dates that actually render —
+  // otherwise hidden rows for out-of-period weekdays inflate the period total.
+  const periodDateStrs = new Set(periodDates.map((d) => format(d, "yyyy-MM-dd")));
+
   return (
     <div className="space-y-1">
       {periodDates.map((date) => {
@@ -156,6 +161,16 @@ export function TimesheetEntryTable({
           : total > 0;
         const dayLabel = format(date, "EEE d MMM");
         const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+        // How many of the next 4 days (Tue–Fri) are in the period — drives both the
+        // visibility of the copy button and what the click handler actually writes.
+        const inPeriodTueFri: string[] = [];
+        for (let offset = 1; offset <= 4; offset++) {
+          const t = new Date(date);
+          t.setDate(date.getDate() + offset);
+          const ts = format(t, "yyyy-MM-dd");
+          if (periodDateStrs.has(ts)) inPeriodTueFri.push(ts);
+        }
+        const hasTueFriDaysToCopy = inPeriodTueFri.length > 0;
 
         return (
           <div
@@ -176,20 +191,17 @@ export function TimesheetEntryTable({
                 )}
               </div>
               <div className="flex items-center gap-1">
-                {rateType === "hourly" && date.getDay() === 1 && dayEntries.length > 0 && dayEntries[0].startTime && dayEntries[0].endTime && (
+                {rateType === "hourly" && date.getDay() === 1 && dayEntries.length > 0 && dayEntries[0].startTime && dayEntries[0].endTime && hasTueFriDaysToCopy && (
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
                     className="h-7 text-xs text-primary hover:text-primary"
-                    title="Copy this day's hours to Tue–Fri"
+                    title="Copy this day's hours to the remaining weekdays in this period"
                     onClick={() => {
                       const src = dayEntries[0];
                       const next = [...entries];
-                      for (let offset = 1; offset <= 4; offset++) {
-                        const target = new Date(date);
-                        target.setDate(date.getDate() + offset);
-                        const tStr = format(target, "yyyy-MM-dd");
+                      for (const tStr of inPeriodTueFri) {
                         const filtered = next.filter((e) => e.date !== tStr);
                         const h = calcHours(src.startTime || "", src.endTime || "", src.breakHours || "");
                         filtered.push({
@@ -212,20 +224,17 @@ export function TimesheetEntryTable({
                     Copy to Tue–Fri
                   </Button>
                 )}
-                {isAnnualForHourlyClient && date.getDay() === 1 && dayEntries.length > 0 && parseFloat(dayEntries[0].hoursWorked || "0") > 0 && (
+                {isAnnualForHourlyClient && date.getDay() === 1 && dayEntries.length > 0 && parseFloat(dayEntries[0].hoursWorked || "0") > 0 && hasTueFriDaysToCopy && (
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
                     className="h-7 text-xs text-primary hover:text-primary"
-                    title="Copy this day's hours to Tue–Fri"
+                    title="Copy this day's hours to the remaining weekdays in this period"
                     onClick={() => {
                       const src = dayEntries[0];
                       const next = [...entries];
-                      for (let offset = 1; offset <= 4; offset++) {
-                        const target = new Date(date);
-                        target.setDate(date.getDate() + offset);
-                        const tStr = format(target, "yyyy-MM-dd");
+                      for (const tStr of inPeriodTueFri) {
                         const filtered = next.filter((e) => e.date !== tStr);
                         filtered.push({
                           date: tStr,
