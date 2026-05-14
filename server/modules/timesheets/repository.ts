@@ -9,18 +9,22 @@
  */
 
 import { db } from "../../db";
-import { timesheets, workers, businesses, contracts, countries } from "@shared/schema";
-import { and, or, eq, ilike, sql, asc, desc, type SQL } from "drizzle-orm";
+import { timesheets, timesheetEntries, workers, businesses, contracts, countries } from "@shared/schema";
+import { and, or, eq, ilike, inArray, sql, asc, desc, type SQL } from "drizzle-orm";
 import type { SortKey, TimesheetListQuery, TimesheetListResult, TimesheetListScope } from "./types";
 
 function orderClause(sortBy: SortKey) {
   switch (sortBy) {
     case "period_start": return [desc(timesheets.periodStart)];
-    case "status":       return [asc(timesheets.status), desc(timesheets.periodEnd)];
+    case "period_end":   return [desc(timesheets.periodEnd)];
+    case "status":       return [asc(timesheets.status), desc(timesheets.createdAt)];
     case "submitted":    return [desc(timesheets.submittedAt), desc(timesheets.createdAt)];
     case "worker":       return [asc(workers.firstName), asc(workers.lastName)];
-    case "period_end":
-    default:             return [desc(timesheets.periodEnd)];
+    // `recent` (default): most-recently-created first. Surfaces freshly-submitted
+    // timesheets on page 1 regardless of which period they cover — which is what
+    // operators care about when scanning the list.
+    case "recent":
+    default:             return [desc(timesheets.createdAt)];
   }
 }
 
@@ -102,7 +106,29 @@ export async function fetchTimesheetList(
     country: r.countries || undefined,
     countryId: r.contracts?.countryId || undefined,
     countryName: r.countries?.name || undefined,
+    entries: [] as any[],
   }));
+
+  // Attach entries for the page slice (separate query so the main list join
+  // doesn't multiply rows). Ordered by date ASC so the UI can render entries
+  // chronologically without a client-side sort.
+  if (items.length > 0) {
+    const ids = items.map(i => i.id);
+    const entries = await db
+      .select()
+      .from(timesheetEntries)
+      .where(inArray(timesheetEntries.timesheetId, ids))
+      .orderBy(asc(timesheetEntries.date));
+    const byTimesheet = new Map<string, any[]>();
+    for (const e of entries) {
+      const list = byTimesheet.get(e.timesheetId) ?? [];
+      list.push(e);
+      byTimesheet.set(e.timesheetId, list);
+    }
+    for (const item of items) {
+      item.entries = byTimesheet.get(item.id) ?? [];
+    }
+  }
 
   // 2. Status counts (ignoring the status filter so badges show true totals across statuses)
   const countRows = await db

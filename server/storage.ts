@@ -1846,8 +1846,9 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(timesheetAttachments, eq(timesheets.id, timesheetAttachments.timesheetId))
       .leftJoin(workers, eq(timesheets.workerId, workers.id))
       .leftJoin(countries, eq(workers.countryId, countries.id))
-      .where(eq(timesheets.workerId, workerId));
-    
+      .where(eq(timesheets.workerId, workerId))
+      .orderBy(desc(timesheets.createdAt));
+
     const timesheetMap = new Map<string, Timesheet & { entries: TimesheetEntry[]; attachments: TimesheetAttachment[]; countryId?: string; countryName?: string }>();
     
     for (const row of timesheetData) {
@@ -1897,8 +1898,9 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(countries, eq(workers.countryId, countries.id))
       .leftJoin(contracts, eq(timesheets.contractId, contracts.id))
       .leftJoin(customerBusinesses, eq(contracts.customerBusinessId, customerBusinesses.id))
-      .where(eq(timesheets.businessId, businessId));
-    
+      .where(eq(timesheets.businessId, businessId))
+      .orderBy(desc(timesheets.createdAt));
+
     const timesheetMap = new Map<string, Timesheet & { worker: Worker; entries: TimesheetEntry[]; attachments: TimesheetAttachment[]; countryId?: string; countryName?: string; customerBusinessId?: string; customerBusinessName?: string }>();
     
     for (const row of timesheetData) {
@@ -2108,8 +2110,9 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(timesheetAttachments, eq(timesheets.id, timesheetAttachments.timesheetId))
       .leftJoin(countries, eq(workers.countryId, countries.id))
       .leftJoin(contracts, eq(timesheets.contractId, contracts.id))
-      .leftJoin(customerBusinesses, eq(contracts.customerBusinessId, customerBusinesses.id));
-    
+      .leftJoin(customerBusinesses, eq(contracts.customerBusinessId, customerBusinesses.id))
+      .orderBy(desc(timesheets.createdAt));
+
     const timesheetMap = new Map<string, Timesheet & { worker: Worker; business: Business; entries: TimesheetEntry[]; attachments: TimesheetAttachment[]; countryId?: string; countryName?: string; customerBusinessId?: string; customerBusinessName?: string }>();
     
     for (const row of timesheetData) {

@@ -46,6 +46,35 @@ import {
 } from '../../../shared/timesheetPeriodCalculator';
 import { getTrackingUnit } from '../../../shared/contractHelpers';
 
+// Returns a unit-aware summary string for a timesheet ("8h" or "5d") based on
+// the underlying contract's tracking unit. Daily/annual contracts may have
+// entries that store `hoursWorked` (worker logged hours) without `daysWorked`
+// being populated — so for those we fall back to counting entries that show
+// any activity (hours > 0, days > 0, or isPresent) as one day each.
+function formatTimesheetTotal(timesheet: any): string {
+  const unit = getTrackingUnit(timesheet?.contract);
+  const entries = timesheet?.entries || [];
+  const summedHours = entries.reduce(
+    (a: number, e: any) => a + (parseFloat(e.hoursWorked || '0') || 0),
+    0,
+  );
+  const summedDays = entries.reduce(
+    (a: number, e: any) => a + (parseFloat(e.daysWorked || '0') || 0),
+    0,
+  );
+  const presentDays = entries.filter((e: any) =>
+    (parseFloat(e.hoursWorked || '0') || 0) > 0 ||
+    (parseFloat(e.daysWorked || '0') || 0) > 0 ||
+    e.isPresent,
+  ).length;
+  const totalHours = parseFloat(timesheet?.totalHours || '0') || summedHours;
+  const totalDays = parseFloat(timesheet?.totalDays || '0') || summedDays || presentDays;
+  if (unit === 'daily' || unit === 'annual') {
+    return `${totalDays > 0 ? totalDays.toFixed(0) : '0'}d`;
+  }
+  return `${totalHours > 0 ? totalHours.toFixed(1) : '0'}h`;
+}
+
 // ─── Schema ────────────────────────────────────────────────────────────────
 
 const timesheetSchema = z.object({
@@ -385,7 +414,7 @@ export default function Timesheets() {
       return { timesheet, submitted: !!submitAfterCreate };
     },
     onSuccess: (res: any) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] });
+      invalidateTimesheetQueries();
       setShowCreateTimesheet(false);
       setSelectedWorkerId('');
       setSelectedContractId('');
@@ -409,7 +438,7 @@ export default function Timesheets() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] });
+      invalidateTimesheetQueries();
       toast({ title: "Submitted", description: "Timesheet submitted for approval." });
     },
     onError: (error: any) => {
@@ -417,12 +446,33 @@ export default function Timesheets() {
     },
   });
 
-  // Approval auto-creates SDP and (sometimes) business→client invoices server-side,
-  // so we invalidate every invoice list query alongside /api/timesheets.
+  // Predicate-based invalidation. React Query compares the first queryKey array
+  // entry by string equality, so a plain `queryKey: ['/api/timesheets']` MISSES
+  // `['/api/timesheets/list', params]` — they're different strings. Use these
+  // helpers everywhere we mutate timesheets / invoices.
+  const invalidateTimesheetQueries = () => {
+    queryClient.invalidateQueries({
+      predicate: (q) => {
+        const first = q.queryKey[0];
+        return typeof first === 'string' && first.startsWith('/api/timesheets');
+      },
+    });
+  };
+
+  // Use this on mutations that ALSO trigger auto-invoice creation server-side
+  // (approve/reject) — invoice list pages need to refresh too.
   const invalidateTimesheetAndInvoiceQueries = () => {
-    queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] });
-    queryClient.invalidateQueries({ queryKey: ['/api/sdp-invoices'] });
-    queryClient.invalidateQueries({ queryKey: ['/api/invoices'] });
+    queryClient.invalidateQueries({
+      predicate: (q) => {
+        const first = q.queryKey[0];
+        if (typeof first !== 'string') return false;
+        return (
+          first.startsWith('/api/timesheets') ||
+          first.startsWith('/api/sdp-invoices') ||
+          first.startsWith('/api/invoices')
+        );
+      },
+    });
   };
 
   const approveTimesheetMutation = useMutation({
@@ -463,7 +513,7 @@ export default function Timesheets() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] });
+      invalidateTimesheetQueries();
       toast({ title: "Deleted", description: "Timesheet deleted." });
     },
     onError: (error: any) => {
@@ -925,19 +975,10 @@ export default function Timesheets() {
     const initials = isWorker
       ? `T${(timesheet.entries?.length || 0)}`.slice(0, 2)
       : `${timesheet.worker?.firstName?.[0] || ''}${timesheet.worker?.lastName?.[0] || ''}`.toUpperCase() || 'W';
-    // Sum hours/days from actual entries (the persisted totals can be 0 for daily timesheets).
-    const entryTotals = (timesheet.entries || []).reduce(
-      (acc: { hours: number; days: number }, e: any) => ({
-        hours: acc.hours + (parseFloat(e.hoursWorked || '0') || 0),
-        days: acc.days + (parseFloat(e.daysWorked || '0') || 0),
-      }),
-      { hours: 0, days: 0 }
-    );
-    const totalHours = parseFloat(timesheet.totalHours || '0') || entryTotals.hours;
-    const totalDays = parseFloat(timesheet.totalDays || '0') || entryTotals.days;
-    const totalDisplay = totalDays > 0
-      ? `${totalDays.toFixed(1)}d`
-      : `${totalHours > 0 ? totalHours.toFixed(1) : '0'}h`;
+    // Unit-aware display ("8h" or "5d") — based on the contract's tracking
+    // unit, not just whether `totalDays` happens to be non-zero. Important for
+    // daily contracts where the worker logs `hoursWorked` per entry.
+    const totalDisplay = formatTimesheetTotal(timesheet);
 
     return (
       <Card className={`flex flex-col h-full border-l-4 ${STATUS_LEFT[s] || 'border-l-gray-300'} ${provided ? 'bg-blue-50/30' : ''} hover:shadow-md transition-shadow`}>
@@ -1198,7 +1239,7 @@ export default function Timesheets() {
           {!isWorker && <span className="text-sm font-medium">{timesheet.worker?.firstName} {timesheet.worker?.lastName} · </span>}
           <span className="text-sm text-muted-foreground">{pStart} – {pEnd}</span>
         </div>
-        <div className="text-sm text-muted-foreground w-20 text-right">{timesheet.totalHours || 0}h</div>
+        <div className="text-sm text-muted-foreground w-20 text-right">{formatTimesheetTotal(timesheet)}</div>
         {!isWorker && <div className="text-xs text-muted-foreground w-32 truncate">{timesheet.business?.name}</div>}
         <Badge className={`text-xs border ${STATUS_COLORS[s] || STATUS_COLORS.draft} flex items-center gap-1 w-24 justify-center`}>
           <StatusIcon status={s} />

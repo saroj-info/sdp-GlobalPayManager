@@ -502,7 +502,16 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/contracts'] });
+      // Predicate-based invalidation so every variant of the contracts queryKey
+      // refetches — `/api/contracts`, `/api/contracts/list`, `/api/contracts/:id/change-log`, etc.
+      // A plain `queryKey: ['/api/contracts']` would miss `/api/contracts/list` since
+      // React Query compares the first array element by string equality.
+      queryClient.invalidateQueries({
+        predicate: (q) => {
+          const first = q.queryKey[0];
+          return typeof first === 'string' && first.startsWith('/api/contracts');
+        },
+      });
       queryClient.invalidateQueries({ queryKey: ['/api/contract-instances'] });
       queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
       // Invalidate role titles to show newly created custom role titles immediately

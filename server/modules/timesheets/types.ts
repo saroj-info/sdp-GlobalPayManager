@@ -8,7 +8,7 @@ export interface AuthUser {
   userType: string;
 }
 
-export type SortKey = "period_end" | "period_start" | "status" | "submitted" | "worker";
+export type SortKey = "recent" | "period_end" | "period_start" | "status" | "submitted" | "worker";
 
 export interface TimesheetListQuery {
   page: number;

@@ -4,7 +4,7 @@ import type { Express, RequestHandler } from "express";
 import { listTimesheets } from "./service";
 import type { SortKey, TimesheetListQuery } from "./types";
 
-const ALLOWED_SORT_KEYS: SortKey[] = ["period_end", "period_start", "status", "submitted", "worker"];
+const ALLOWED_SORT_KEYS: SortKey[] = ["recent", "period_end", "period_start", "status", "submitted", "worker"];
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 
@@ -15,7 +15,9 @@ function toPositiveInt(v: any, fallback: number): number {
 
 function parseQuery(req: any): TimesheetListQuery {
   const q = req.query ?? {};
-  const sortBy: SortKey = ALLOWED_SORT_KEYS.includes(q.sortBy) ? q.sortBy : "period_end";
+  // Default to `recent` (createdAt DESC) so freshly-submitted timesheets surface on page 1
+  // regardless of which period they cover. Operators care about "what just landed".
+  const sortBy: SortKey = ALLOWED_SORT_KEYS.includes(q.sortBy) ? q.sortBy : "recent";
   return {
     page: toPositiveInt(q.page, 1),
     pageSize: Math.min(MAX_PAGE_SIZE, toPositiveInt(q.pageSize, DEFAULT_PAGE_SIZE)),
