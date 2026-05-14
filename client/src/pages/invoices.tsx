@@ -7,6 +7,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { Plus, FileText, Clock, DollarSign, CheckCircle, XCircle, AlertCircle, Building, Globe, CreditCard, LayoutGrid, List } from "lucide-react";
 import { Loader, PageLoader } from "@/components/ui/loader";
+import { DataPagination } from "@/components/ui/data-pagination";
+import { usePagination } from "@/hooks/usePagination";
 import { apiRequest } from "@/lib/queryClient";
 import { CreateInvoiceModal } from "@/components/modals/create-invoice-modal";
 import { SdpInvoicePaymentModal } from "@/components/modals/sdp-invoice-payment-modal";
@@ -267,6 +269,13 @@ export default function Invoices() {
     });
   }, [sdpInvoices, sdpSortBy]);
 
+  // Client-side pagination for each tab. Each tab has its own page state so switching
+  // tabs doesn't reset your position in the others.
+  const INVOICES_PAGE_SIZE = 12;
+  const contractorPagination = usePagination(sortedContractorInvoices, { pageSize: INVOICES_PAGE_SIZE });
+  const sdpPagination = usePagination(sortedSdpInvoices, { pageSize: INVOICES_PAGE_SIZE });
+  const clientPagination = usePagination(clientInvoices as any[], { pageSize: INVOICES_PAGE_SIZE });
+
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
       await apiRequest("PATCH", `/api/invoices/${id}/status`, { status });
@@ -487,7 +496,7 @@ export default function Invoices() {
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {sortedContractorInvoices.map((invoice) => {
+                            {contractorPagination.pageItems.map((invoice: any) => {
                               const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons];
                               return (
                                 <TableRow key={invoice.id} data-testid={`row-contractor-invoice-${invoice.id}`}>
@@ -577,7 +586,7 @@ export default function Invoices() {
                     ) : (
                       /* Card View */
                       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                        {sortedContractorInvoices.map((invoice) => {
+                        {contractorPagination.pageItems.map((invoice: any) => {
                           const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons];
                           
                           return (
@@ -820,8 +829,16 @@ export default function Invoices() {
                     )}
                   </>
                 )}
+                <DataPagination
+                  page={contractorPagination.page}
+                  totalPages={contractorPagination.totalPages}
+                  totalItems={contractorPagination.totalItems}
+                  pageSize={INVOICES_PAGE_SIZE}
+                  onPageChange={contractorPagination.setPage}
+                  label="invoices"
+                />
               </TabsContent>
-              
+
               <TabsContent value="sdp" className="mt-6">
                 <div className="rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2 mb-4 text-sm text-amber-900">
                   <span className="font-medium">Bills you owe.</span>{' '}
@@ -893,7 +910,7 @@ export default function Invoices() {
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {sortedSdpInvoices.map((invoice) => {
+                            {sdpPagination.pageItems.map((invoice: any) => {
                               const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons] || FileText;
                               return (
                                 <TableRow key={invoice.id} data-testid={`row-sdp-invoice-${invoice.id}`}>
@@ -951,7 +968,7 @@ export default function Invoices() {
                     ) : (
                       /* Card View */
                       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                        {sortedSdpInvoices.map((invoice) => {
+                        {sdpPagination.pageItems.map((invoice: any) => {
                         const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons] || FileText;
                         
                         return (
@@ -1135,6 +1152,14 @@ export default function Invoices() {
                     )}
                   </>
                 )}
+                <DataPagination
+                  page={sdpPagination.page}
+                  totalPages={sdpPagination.totalPages}
+                  totalItems={sdpPagination.totalItems}
+                  pageSize={INVOICES_PAGE_SIZE}
+                  onPageChange={sdpPagination.setPage}
+                  label="invoices"
+                />
               </TabsContent>
 
               <TabsContent value="client" className="mt-6">
@@ -1227,7 +1252,7 @@ export default function Invoices() {
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {clientInvoices.map((invoice: any) => {
+                            {clientPagination.pageItems.map((invoice: any) => {
                               const isAutoGenerated = invoice.invoiceCategory === 'customer_billing';
                               return (
                                 <TableRow key={invoice.id}>
@@ -1280,7 +1305,7 @@ export default function Invoices() {
                       </div>
                     ) : (
                   <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                    {clientInvoices.map((invoice: any) => {
+                    {clientPagination.pageItems.map((invoice: any) => {
                       const isAutoGenerated = invoice.invoiceCategory === 'customer_billing';
                       const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons] || FileText;
                       const totalLabel = invoice.timesheet
@@ -1412,6 +1437,14 @@ export default function Invoices() {
                   )}
                   </>
                 )}
+                <DataPagination
+                  page={clientPagination.page}
+                  totalPages={clientPagination.totalPages}
+                  totalItems={clientPagination.totalItems}
+                  pageSize={INVOICES_PAGE_SIZE}
+                  onPageChange={clientPagination.setPage}
+                  label="invoices"
+                />
               </TabsContent>
             </Tabs>
           ) : (

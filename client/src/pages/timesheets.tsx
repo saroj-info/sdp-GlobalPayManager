@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { TimesheetEntryTable, type TimesheetEntryValue } from "@/components/TimesheetEntryTable";
 import { PageLoader } from "@/components/ui/loader";
+import { DataPagination } from "@/components/ui/data-pagination";
 import {
   Select,
   SelectContent,
@@ -161,10 +162,56 @@ export default function Timesheets() {
     isWorker ? "Submit and track your work hours" : "Review and approve worker timesheets"
   );
 
-  const { data: timesheets = [], isLoading: isLoadingTimesheets } = useQuery<any[]>({
-    queryKey: ['/api/timesheets'],
+  // Server-paginated timesheets list. Status counts come down with the response so
+  // the badges still show real totals across statuses.
+  const [timesheetsPage, setTimesheetsPage] = useState(1);
+  const TIMESHEETS_PAGE_SIZE = 20;
+
+  // Reset to page 1 when any filter / sort changes (otherwise the user might be stranded
+  // on a now-empty page).
+  useEffect(() => {
+    setTimesheetsPage(1);
+  }, [statusFilter, searchQuery, countryFilter, hostClientFilter, businessFilter]);
+
+  const timesheetsListParams = useMemo(() => ({
+    page: timesheetsPage,
+    pageSize: TIMESHEETS_PAGE_SIZE,
+    status: statusFilter !== 'all' ? statusFilter : undefined,
+    search: searchQuery.trim() || undefined,
+    countryId: countryFilter || undefined,
+    hostClientName: hostClientFilter || undefined,
+    businessId: businessFilter || undefined,
+  }), [timesheetsPage, statusFilter, searchQuery, countryFilter, hostClientFilter, businessFilter]);
+
+  const { data: timesheetListData, isLoading: isLoadingTimesheets } = useQuery<{
+    items: any[];
+    total: number;
+    page: number;
+    pageSize: number;
+    statusCounts: { all: number; draft: number; submitted: number; approved: number; rejected: number };
+  }>({
+    queryKey: ['/api/timesheets/list', timesheetsListParams],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      qs.set('page', String(timesheetsListParams.page));
+      qs.set('pageSize', String(timesheetsListParams.pageSize));
+      if (timesheetsListParams.status) qs.set('status', timesheetsListParams.status);
+      if (timesheetsListParams.search) qs.set('search', timesheetsListParams.search);
+      if (timesheetsListParams.countryId) qs.set('countryId', timesheetsListParams.countryId);
+      if (timesheetsListParams.hostClientName) qs.set('hostClientName', timesheetsListParams.hostClientName);
+      if (timesheetsListParams.businessId) qs.set('businessId', timesheetsListParams.businessId);
+      return (await apiRequest('GET', `/api/timesheets/list?${qs.toString()}`)).json();
+    },
     enabled: isAuthenticated,
+    // Keep the previous page on screen during filter / search / sort / page
+    // refetches so inputs don't unmount and lose focus mid-typing.
+    placeholderData: keepPreviousData,
   });
+
+  const timesheets = timesheetListData?.items ?? [];
+  const totalTimesheets = timesheetListData?.total ?? 0;
+  const totalTimesheetPages = Math.max(1, Math.ceil(totalTimesheets / TIMESHEETS_PAGE_SIZE));
+  const serverStatusCounts = timesheetListData?.statusCounts;
 
   const { data: workerContracts = [] } = useQuery<any[]>({
     queryKey: ['/api/contracts'],
@@ -529,40 +576,21 @@ export default function Timesheets() {
 
   const activeFilterCount = [searchQuery, countryFilter, hostClientFilter, businessFilter].filter(Boolean).length;
 
+  // Status badges use server-computed counts (true totals across statuses), falling back
+  // to a page-slice derivation while the first request is in flight.
   const statusCounts = useMemo(() => {
+    if (serverStatusCounts) return serverStatusCounts as Record<string, number>;
     const counts: Record<string, number> = { all: 0, draft: 0, submitted: 0, approved: 0, rejected: 0 };
     ownTimesheets.forEach((t) => {
       counts.all++;
       if (counts[t.status] !== undefined) counts[t.status]++;
     });
     return counts;
-  }, [ownTimesheets]);
+  }, [serverStatusCounts, ownTimesheets]);
 
-  const filteredTimesheets = useMemo(() => {
-    let result = statusFilter === 'all' ? ownTimesheets : ownTimesheets.filter((t) => t.status === statusFilter);
-
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      result = result.filter((t) => {
-        const workerName = `${t.worker?.firstName ?? ''} ${t.worker?.lastName ?? ''}`.toLowerCase();
-        return workerName.includes(q);
-      });
-    }
-
-    if (countryFilter) {
-      result = result.filter((t) => t.countryId === countryFilter || t.countryName === countryFilter);
-    }
-
-    if (hostClientFilter) {
-      result = result.filter((t) => t.customerBusinessName === hostClientFilter);
-    }
-
-    if (businessFilter && isSDP) {
-      result = result.filter((t) => t.business?.name === businessFilter || t.businessId === businessFilter);
-    }
-
-    return result;
-  }, [ownTimesheets, statusFilter, searchQuery, countryFilter, hostClientFilter, businessFilter, isSDP]);
+  // Filtering / pagination are server-side now — `ownTimesheets` is already the current
+  // page slice (excluding provided rows). Keep this alias to minimise churn in the JSX.
+  const filteredTimesheets = ownTimesheets;
 
   const clearAllFilters = () => {
     setSearchQuery('');
@@ -588,7 +616,7 @@ export default function Timesheets() {
 
   // ── Loading ────────────────────────────────────────────────────────────────
 
-  if (isLoading || isLoadingTimesheets) {
+  if (isLoading || (isLoadingTimesheets && !timesheetListData)) {
     return <PageLoader label="Loading timesheets" />;
   }
 
@@ -1704,6 +1732,20 @@ export default function Timesheets() {
             </div>
           );
 
+          const ownListWithPagination = (
+            <>
+              {ownList}
+              <DataPagination
+                page={timesheetsPage}
+                totalPages={totalTimesheetPages}
+                totalItems={totalTimesheets}
+                pageSize={TIMESHEETS_PAGE_SIZE}
+                onPageChange={setTimesheetsPage}
+                label="timesheets"
+              />
+            </>
+          );
+
           // When this is a business and there ARE provided timesheets, show the two lists in tabs.
           if (isBusiness && providedTimesheets.length > 0) {
             return (
@@ -1722,7 +1764,7 @@ export default function Timesheets() {
                 </TabsList>
 
                 <TabsContent value="own" className="mt-4">
-                  {ownList}
+                  {ownListWithPagination}
                 </TabsContent>
 
                 <TabsContent value="provided" className="mt-4 space-y-3">
@@ -1738,7 +1780,7 @@ export default function Timesheets() {
           }
 
           // No provided timesheets (or not a business) — just render the own list directly.
-          return ownList;
+          return ownListWithPagination;
         })()}
       </div>
     </div>

@@ -7,6 +7,9 @@ import * as OTPAuth from "otpauth";
 import * as twoFactorAuth from "./twoFactorAuth";
 import { storage } from "./storage";
 import { registerTimesheetApprovalRoutes } from "./modules/timesheet-approval";
+import { registerWorkforceRoutes } from "./modules/workforce";
+import { registerContractsRoutes } from "./modules/contracts";
+import { registerTimesheetsListRoutes } from "./modules/timesheets";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -100,134 +103,14 @@ function generateSigningToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
-// Helper function to normalize date fields
-function normalizeDateFields(obj: Record<string, any>) {
-  const dateFields = ['endDate', 'signedAt', 'emailSentAt', 'workerSignedAt', 'businessSignedAt', 'sentAt', 'expiresAt', 'declinedAt', 'createdAt'];
-  const normalized = { ...obj };
-  
-  for (const field of dateFields) {
-    if (normalized[field] && typeof normalized[field] === 'string') {
-      normalized[field] = new Date(normalized[field]);
-    }
-  }
-  
-  return normalized;
-}
-
-// Helper function to add remuneration lines to contracts
-// requesterUserType: if provided and is a business user, salary contracts in pending_sdp_review will have remuneration lines suppressed
-async function addRemunerationLinesToContracts<T extends { id: string; rateType?: string | null; status?: string | null }>(
-  contracts: T[],
-  requesterUserType?: string
-): Promise<(T & { remunerationLines: any[] })[]> {
-  if (contracts.length === 0) return [];
-  
-  const contractIds = contracts.map(c => c.id);
-  const allRemunerationLines = await Promise.all(
-    contractIds.map(id => storage.getRemunerationLinesByContractId(id))
-  );
-  
-  const remunerationLinesByContractId = new Map<string, any[]>();
-  contractIds.forEach((id, index) => {
-    remunerationLinesByContractId.set(id, allRemunerationLines[index]);
-  });
-  
-  const isBusinessUser = requesterUserType && requesterUserType !== 'sdp_internal' && requesterUserType !== 'sdp_super_admin';
-
-  return contracts.map(contract => {
-    // Suppress remuneration lines for salary contracts in pending_sdp_review for business users
-    if (isBusinessUser && contract.rateType === 'annual' && contract.status === 'pending_sdp_review') {
-      return { ...contract, remunerationLines: [] };
-    }
-    return {
-      ...contract,
-      remunerationLines: remunerationLinesByContractId.get(contract.id) || []
-    };
-  });
-}
-
-// Helper to attach per-project rate lines to multi-rate contracts so the listing UI
-// can show the actual prices instead of the placeholder top-level rate.
-async function addRateLinesToContracts<T extends { id: string; rateStructure?: string | null }>(
-  contracts: T[]
-): Promise<(T & { rateLines: any[] })[]> {
-  if (contracts.length === 0) return [];
-  const multiRateIds = contracts.filter(c => c.rateStructure === 'multiple').map(c => c.id);
-  if (multiRateIds.length === 0) {
-    return contracts.map(c => ({ ...c, rateLines: [] }));
-  }
-  const rateLineLookups = await Promise.all(
-    multiRateIds.map(id => storage.getContractRateLines(id).catch(() => []))
-  );
-  const byContractId = new Map<string, any[]>();
-  multiRateIds.forEach((id, i) => byContractId.set(id, rateLineLookups[i]));
-  return contracts.map(c => ({ ...c, rateLines: byContractId.get(c.id) || [] }));
-}
-
-// Helper to add SDP billing lines to contracts — SDP internal users only
-async function addBillingLinesToContracts<T extends { id: string }>(contracts: T[]): Promise<(T & { billingLines: any[] })[]> {
-  if (contracts.length === 0) return [];
-  const contractIds = contracts.map(c => c.id);
-  const allBillingLines = await Promise.all(
-    contractIds.map(id => storage.getContractBillingLines(id))
-  );
-  const billingLinesByContractId = new Map<string, any[]>();
-  contractIds.forEach((id, index) => {
-    billingLinesByContractId.set(id, allBillingLines[index]);
-  });
-  return contracts.map(contract => ({
-    ...contract,
-    billingLines: billingLinesByContractId.get(contract.id) || []
-  }));
-}
-
-// Helper function to add derived status to contracts
-async function addDerivedStatusToContracts<T extends Record<string, any>>(contracts: T[]) {
-  // PERFORMANCE FIX: Fetch all contract instances once instead of in the loop (N+1 fix)
-  const allInstances = await storage.getContractInstances();
-  
-  // Index instances by businessId|workerId|countryId for O(1) lookup
-  const instancesByKey = new Map<string, any[]>();
-  for (const instance of allInstances) {
-    const key = `${instance.businessId}|${instance.workerId}|${instance.countryId}`;
-    if (!instancesByKey.has(key)) {
-      instancesByKey.set(key, []);
-    }
-    instancesByKey.get(key)!.push(instance);
-  }
-  
-  const contractsWithStatus = contracts.map((contract) => {
-    try {
-      // Look up instances for this contract from the indexed map
-      const key = `${contract.businessId}|${contract.workerId}|${contract.countryId}`;
-      const instances = instancesByKey.get(key) || [];
-      
-      // Normalize date fields to ensure proper Date object comparison
-      const normalizedContract = normalizeDateFields(contract);
-      const normalizedInstances = instances.map(normalizeDateFields);
-      
-      // Compute derived status using our helper
-      const derivedStatus = getDerivedContractStatus(normalizedContract as any, normalizedInstances as any);
-      
-      return {
-        ...contract,
-        derivedSignatureStatus: derivedStatus.signatureStatus,
-        termExpired: derivedStatus.termExpired,
-        sourceInstance: derivedStatus.sourceInstance
-      };
-    } catch (error: any) {
-      console.error(`Error deriving status for contract ${contract.id}:`, error);
-      // Return original contract if status derivation fails
-      return {
-        ...contract,
-        derivedSignatureStatus: 'draft',
-        termExpired: false
-      };
-    }
-  });
-  
-  return contractsWithStatus;
-}
+// Contract enrichment helpers were moved to server/modules/contracts/enrichment.ts.
+// Re-imported here so the legacy `GET /api/contracts` handler below keeps working.
+import {
+  addDerivedStatusToContracts,
+  addRemunerationLinesToContracts,
+  addRateLinesToContracts,
+  addBillingLinesToContracts,
+} from "./modules/contracts";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup session middleware FIRST before any routes
@@ -6960,6 +6843,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Timesheet status updates — owned by the timesheet-approval module
   // (auth + math + invoice generation all live in server/modules/timesheet-approval/)
   registerTimesheetApprovalRoutes(app, authMiddleware);
+
+  // Workforce listing (paginated) — owned by the workforce module
+  // (auth scope + SQL-level filter/sort/paginate live in server/modules/workforce/)
+  registerWorkforceRoutes(app, authMiddleware);
+
+  // Contracts listing (paginated) — owned by the contracts module
+  // (auth scope + SQL filter/sort/paginate + per-page enrichment in server/modules/contracts/)
+  registerContractsRoutes(app, authMiddleware);
+
+  // Timesheets listing (paginated) — owned by the timesheets module
+  registerTimesheetsListRoutes(app, authMiddleware);
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {

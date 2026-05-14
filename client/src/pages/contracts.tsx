@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -20,6 +20,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { getContractStatusLabel, getContractStatusVariant } from "@shared/contractHelpers";
 import { generatePeriodSchedule } from "@shared/timesheetPeriodCalculator";
+import { DataPagination } from "@/components/ui/data-pagination";
 
 interface ContractInstance {
   id: string;
@@ -887,6 +888,19 @@ export default function ContractsPage() {
   const [preselectedWorkerId, setPreselectedWorkerId] = useState<string | undefined>(undefined);
   const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
   const [sortBy, setSortBy] = useState<'worker' | 'role' | 'country' | 'status' | 'date'>('date');
+  const [contractsPage, setContractsPage] = useState(1);
+  const CONTRACTS_PAGE_SIZE = 12;
+
+  // Map the page's filter labels onto the server's status param.
+  // 'signed' and 'pending_signature' are derived from signing audit columns
+  // server-side, not values of the contract_status enum.
+  const statusFilterToServer: Record<string, string | undefined> = {
+    all: undefined,
+    pending_sdp_review: "pending_sdp_review",
+    active: "active",
+    signed: "signed",
+    pending_signature: "pending_signature",
+  };
   const { user, isAuthenticated, isLoading } = useAuth();
   const { toast } = useToast();
   const [location, setLocation] = useLocation();
@@ -919,60 +933,48 @@ export default function ContractsPage() {
     enabled: (user as any)?.userType === 'sdp_internal' && isOnContractsPage,
   });
 
-  // Fetch contract instances - only when on contracts page
-  const { data: allContracts, isLoading: isLoadingContracts } = useQuery<any[]>({
-    queryKey: filterBusiness && filterBusiness !== "all" ? ['/api/contracts/business', filterBusiness] : ['/api/contracts'],
+  // Reset page when any filter / sort changes.
+  useEffect(() => {
+    setContractsPage(1);
+  }, [filterBusiness, filterStatus, sortBy]);
+
+  const contractsListParams = useMemo(() => ({
+    page: contractsPage,
+    pageSize: CONTRACTS_PAGE_SIZE,
+    sortBy,
+    status: statusFilterToServer[filterStatus],
+    businessId: filterBusiness !== "all" ? filterBusiness : undefined,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [contractsPage, sortBy, filterStatus, filterBusiness]);
+
+  // Server-paginated contract list. Filters / sort / page travel via queryKey so
+  // React Query refetches on any change.
+  const { data: contractListData, isLoading: isLoadingContracts } = useQuery<{
+    items: any[]; total: number; page: number; pageSize: number;
+  }>({
+    queryKey: ['/api/contracts/list', contractsListParams],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      qs.set('page', String(contractsListParams.page));
+      qs.set('pageSize', String(contractsListParams.pageSize));
+      qs.set('sortBy', contractsListParams.sortBy);
+      if (contractsListParams.status) qs.set('status', contractsListParams.status);
+      if (contractsListParams.businessId) qs.set('businessId', contractsListParams.businessId);
+      return (await apiRequest('GET', `/api/contracts/list?${qs.toString()}`)).json();
+    },
     enabled: isAuthenticated && isOnContractsPage,
+    // Keep the previous page on screen during filter / search / sort / page
+    // refetches so inputs don't unmount and lose focus mid-typing.
+    placeholderData: keepPreviousData,
   });
 
-  // Filter and sort contracts
-  const filteredAndSortedContracts = useMemo(() => {
-    // Filter contracts by status
-    const filtered = allContracts?.filter((contract: any) => {
-      if (filterStatus === "all") return true;
-      
-      const status = contract.status || contract.derivedSignatureStatus || 'draft';
-      
-      switch (filterStatus) {
-        case "pending_sdp_review":
-          return status === "pending_sdp_review";
-        case "active":
-          return status === "active" || (status === "signed" && !contract.termExpired);
-        case "signed":
-          return status === "signed" || contract.derivedSignatureStatus === "signed";
-        case "pending_signature":
-          return status === "pending" || contract.derivedSignatureStatus === "pending";
-        default:
-          return true;
-      }
-    }) || [];
-    
-    // Sort contracts
-    const sorted = [...filtered].sort((a, b) => {
-      switch (sortBy) {
-        case 'worker':
-          const aWorkerName = `${a.worker?.firstName} ${a.worker?.lastName}`;
-          const bWorkerName = `${b.worker?.firstName} ${b.worker?.lastName}`;
-          return aWorkerName.localeCompare(bWorkerName);
-        case 'role':
-          const aRole = a.contractName || a.customRoleTitle || a.roleTitle?.name || '';
-          const bRole = b.contractName || b.customRoleTitle || b.roleTitle?.name || '';
-          return aRole.localeCompare(bRole);
-        case 'country':
-          return (a.country?.name || '').localeCompare(b.country?.name || '');
-        case 'status':
-          const aStatus = a.derivedSignatureStatus || a.status || 'draft';
-          const bStatus = b.derivedSignatureStatus || b.status || 'draft';
-          return aStatus.localeCompare(bStatus);
-        case 'date':
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-        default:
-          return 0;
-      }
-    });
-    
-    return sorted;
-  }, [allContracts, filterStatus, sortBy]);
+  const allContracts = contractListData?.items ?? [];
+  const totalContracts = contractListData?.total ?? 0;
+  const totalContractPages = Math.max(1, Math.ceil(totalContracts / CONTRACTS_PAGE_SIZE));
+
+  // Filtering / sorting / pagination are all server-side now. Keep this alias to
+  // minimise churn in the JSX below.
+  const filteredAndSortedContracts = allContracts;
 
   // Fetch workers and countries for contract wizard - only when on contracts page
   const { data: workers = [] } = useQuery<any[]>({
@@ -1119,8 +1121,11 @@ export default function ContractsPage() {
     );
   }
 
-  // Show loading state
-  if (isLoading || isLoadingContracts) {
+  // Show the full-page loader only for the very first load. Subsequent
+  // refetches (filter/search/sort/page changes) are handled by
+  // placeholderData: keepPreviousData so the page renders in place and the
+  // search input keeps focus.
+  if (isLoading || (isLoadingContracts && !contractListData)) {
     return <PageLoader label="Loading contracts" />;
   }
 
@@ -1520,6 +1525,15 @@ export default function ContractsPage() {
               )}
             </div>
           )}
+
+          <DataPagination
+            page={contractsPage}
+            totalPages={totalContractPages}
+            totalItems={totalContracts}
+            pageSize={CONTRACTS_PAGE_SIZE}
+            onPageChange={setContractsPage}
+            label="contracts"
+          />
 
           {/* Contract Wizard Modal - Same as Dashboard */}
           <ContractWizardModal

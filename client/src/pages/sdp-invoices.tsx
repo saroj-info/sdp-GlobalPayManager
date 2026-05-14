@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
-import { Plus, FileText, Clock, DollarSign, CheckCircle, XCircle, AlertCircle, Building, Globe, Edit, Send, Mail, ArrowRight, Download, RefreshCw, RotateCcw, LayoutGrid, List, Search, Filter, Layers, Trash2, Ban } from "lucide-react";
+import { Plus, FileText, Clock, DollarSign, CheckCircle, XCircle, AlertCircle, Building, Globe, Edit, Send, Mail, ArrowRight, Download, RefreshCw, RotateCcw, LayoutGrid, List, Search, Layers, Trash2, Ban } from "lucide-react";
 import { PageLoader } from "@/components/ui/loader";
 import { generateInvoicePdf } from "@/lib/generateInvoicePdf";
 import { apiRequest } from "@/lib/queryClient";
@@ -18,6 +18,8 @@ import { EditSdpInvoiceModal } from "@/components/modals/edit-sdp-invoice-modal"
 import MarkAsPaidModal from "@/components/modals/mark-as-paid-modal";
 import { MarginPaymentModal } from "@/components/modals/margin-payment-modal";
 import { InvoiceDetailsModal } from "@/components/modals/invoice-details-modal";
+import { DataPagination } from "@/components/ui/data-pagination";
+import { usePagination } from "@/hooks/usePagination";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { User, Country, Business, Timesheet } from "@shared/schema";
@@ -146,10 +148,6 @@ export default function SdpInvoices() {
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
   const [searchQuery, setSearchQuery] = useState('');
-  const [showFilters, setShowFilters] = useState(false);
-  const [workerFilter, setWorkerFilter] = useState('');
-  const [businessFilter, setBusinessFilter] = useState('');
-  const [countryFilter, setCountryFilter] = useState('');
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth() as { user: User | undefined; isLoading: boolean; isAuthenticated: boolean; authReady: boolean; error: any };
@@ -406,35 +404,27 @@ export default function SdpInvoices() {
     return sdpInvoices;
   }, [activeCategory, sdpInvoices, sdpOwnInvoices, customerBillingInvoices, businessToClientInvoices]);
 
-  const filterOptions = useMemo(() => {
-    const workers = new Set<string>();
-    const biz = new Set<string>();
-    const countries = new Set<string>();
-    sdpInvoices.forEach((inv: any) => {
-      if (inv.workerName) workers.add(inv.workerName);
-      if (inv.toBusiness?.name) biz.add(inv.toBusiness.name);
-      if (inv.fromCountry?.name) countries.add(inv.fromCountry.name);
-    });
-    return { workers: [...workers].sort(), businesses: [...biz].sort(), countries: [...countries].sort() };
-  }, [sdpInvoices]);
-
-  const activeFilterCount = [workerFilter, businessFilter, countryFilter].filter(Boolean).length;
-
   const displayedInvoices = useMemo(() => {
     const q = searchQuery.toLowerCase();
-    return filteredByCategory.filter((inv: any) => {
-      const matchesSearch = !q ||
-        inv.invoiceNumber.toLowerCase().includes(q) ||
-        (inv.toBusiness?.name || '').toLowerCase().includes(q) ||
-        (inv.fromCountry?.name || '').toLowerCase().includes(q) ||
-        (inv.workerName || '').toLowerCase().includes(q) ||
-        (inv.description || '').toLowerCase().includes(q);
-      const matchesWorker = !workerFilter || (inv.workerName || '') === workerFilter;
-      const matchesBusiness = !businessFilter || (inv.toBusiness?.name || '') === businessFilter;
-      const matchesCountry = !countryFilter || (inv.fromCountry?.name || '') === countryFilter;
-      return matchesSearch && matchesWorker && matchesBusiness && matchesCountry;
-    });
-  }, [filteredByCategory, searchQuery, workerFilter, businessFilter, countryFilter]);
+    if (!q) return filteredByCategory;
+    return filteredByCategory.filter((inv: any) =>
+      inv.invoiceNumber.toLowerCase().includes(q) ||
+      (inv.toBusiness?.name || '').toLowerCase().includes(q) ||
+      (inv.fromCountry?.name || '').toLowerCase().includes(q) ||
+      (inv.workerName || '').toLowerCase().includes(q) ||
+      (inv.description || '').toLowerCase().includes(q)
+    );
+  }, [filteredByCategory, searchQuery]);
+
+  // Client-side pagination. Page resets to 1 when the filtered result set shrinks.
+  const SDP_INVOICES_PAGE_SIZE = 12;
+  const {
+    pageItems: pagedInvoices,
+    page: invoicesPage,
+    setPage: setInvoicesPage,
+    totalPages: invoicesTotalPages,
+    totalItems: invoicesTotalItems,
+  } = usePagination(displayedInvoices, { pageSize: SDP_INVOICES_PAGE_SIZE });
 
   // Access check after all hooks — prevents Rules of Hooks violation
   if (user && user.userType !== 'sdp_internal') {
@@ -454,11 +444,11 @@ export default function SdpInvoices() {
 
   return (
     <div className="p-6">
-      {/* Top toolbar */}
+      {/* Top toolbar — left cluster (search + filters) and right cluster (view + actions). */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        {/* Search + Filters */}
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <div className="relative flex-1 max-w-xs">
+        {/* Left cluster: Search + SDP Entity + Business */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative w-72">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search invoice number, worker, business…"
@@ -467,22 +457,6 @@ export default function SdpInvoices() {
               className="pl-8 h-9 text-sm"
             />
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-9 gap-1.5"
-            onClick={() => setShowFilters(!showFilters)}
-          >
-            <Filter className="h-4 w-4" />
-            Filters
-            {activeFilterCount > 0 && (
-              <span className="ml-1 bg-primary text-primary-foreground rounded-full text-xs px-1.5">{activeFilterCount}</span>
-            )}
-          </Button>
-        </div>
-
-        {/* SDP Entity + Business top filters */}
-        <div className="flex items-center gap-2">
           <Select value={selectedCountry || '__all__'} onValueChange={(v) => setSelectedCountry(v === '__all__' ? '' : v)}>
             <SelectTrigger className="w-[180px] h-9 text-sm" data-testid="select-country-filter">
               <SelectValue placeholder="All SDP Entities" />
@@ -507,9 +481,9 @@ export default function SdpInvoices() {
           </Select>
         </div>
 
-        {/* Grid/List + Action buttons */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center border rounded-lg p-0.5">
+        {/* Right cluster: view toggle + action buttons */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center border rounded-lg p-0.5 h-9">
             <Button variant={viewMode === 'card' ? 'default' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setViewMode('card')}>
               <LayoutGrid className="h-4 w-4" />
             </Button>
@@ -526,7 +500,7 @@ export default function SdpInvoices() {
             <Layers className="h-4 w-4 mr-2" />
             Consolidated Invoice
           </Button>
-          <Button 
+          <Button
             onClick={() => setShowCreateModal(true)}
             className="bg-primary-600 hover:bg-primary-700 h-9"
             data-testid="button-create-sdp-invoice"
@@ -537,55 +511,6 @@ export default function SdpInvoices() {
         </div>
       </div>
 
-      {/* Expandable filter panel */}
-      {showFilters && (
-        <div className="bg-muted/40 border rounded-lg p-4 mb-4 flex flex-wrap gap-4 items-end">
-          <div className="space-y-1 min-w-[160px]">
-            <label className="text-xs font-medium text-muted-foreground">Worker</label>
-            <Select value={workerFilter || '__all__'} onValueChange={(v) => setWorkerFilter(v === '__all__' ? '' : v)}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="All workers" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">All workers</SelectItem>
-                {filterOptions.workers.map((w) => <SelectItem key={w} value={w}>{w}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1 min-w-[160px]">
-            <label className="text-xs font-medium text-muted-foreground">Business</label>
-            <Select value={businessFilter || '__all__'} onValueChange={(v) => setBusinessFilter(v === '__all__' ? '' : v)}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="All businesses" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">All businesses</SelectItem>
-                {filterOptions.businesses.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1 min-w-[160px]">
-            <label className="text-xs font-medium text-muted-foreground">Country</label>
-            <Select value={countryFilter || '__all__'} onValueChange={(v) => setCountryFilter(v === '__all__' ? '' : v)}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="All countries" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">All countries</SelectItem>
-                {filterOptions.countries.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          {activeFilterCount > 0 && (
-            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => { setWorkerFilter(''); setBusinessFilter(''); setCountryFilter(''); }}>
-              Clear all filters
-            </Button>
-          )}
-        </div>
-      )}
-
-      {/* Active filter pills */}
-      {activeFilterCount > 0 && !showFilters && (
-        <div className="flex flex-wrap gap-2 mb-4">
-          {workerFilter && <Badge variant="secondary" className="gap-1 cursor-pointer" onClick={() => setWorkerFilter('')}>Worker: {workerFilter} ×</Badge>}
-          {businessFilter && <Badge variant="secondary" className="gap-1 cursor-pointer" onClick={() => setBusinessFilter('')}>Business: {businessFilter} ×</Badge>}
-          {countryFilter && <Badge variant="secondary" className="gap-1 cursor-pointer" onClick={() => setCountryFilter('')}>Country: {countryFilter} ×</Badge>}
-        </div>
-      )}
 
           {/* Available Timesheets for Invoice Creation — hidden, kept for future use
           {availableTimesheets.length > 0 && (
@@ -668,8 +593,8 @@ export default function SdpInvoices() {
                 <FileText className="h-12 w-12 text-secondary-400 mb-4" />
                 <h3 className="text-lg font-medium text-secondary-900 mb-2">No invoices found</h3>
                 <p className="text-secondary-600 text-center max-w-md">
-                  {searchQuery || activeFilterCount > 0
-                    ? 'No invoices match the current search or filters.'
+                  {searchQuery
+                    ? 'No invoices match the current search.'
                     : activeCategory === 'all'
                     ? 'Create your first SDP invoice to start billing businesses for employment services.'
                     : activeCategory === 'customer_billing'
@@ -698,7 +623,7 @@ export default function SdpInvoices() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {displayedInvoices.map((invoice: any) => {
+                  {pagedInvoices.map((invoice: any) => {
                     const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons] || FileText;
                     return (
                       <TableRow key={invoice.id} className={invoice.status === 'cancelled' ? 'opacity-60' : ''}>
@@ -767,7 +692,7 @@ export default function SdpInvoices() {
             </div>
           ) : (
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {displayedInvoices.map((invoice: any) => {
+              {pagedInvoices.map((invoice: any) => {
                 const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons];
                 
                 return (
@@ -1189,6 +1114,15 @@ export default function SdpInvoices() {
               })}
             </div>
           )}
+
+          <DataPagination
+            page={invoicesPage}
+            totalPages={invoicesTotalPages}
+            totalItems={invoicesTotalItems}
+            pageSize={SDP_INVOICES_PAGE_SIZE}
+            onPageChange={setInvoicesPage}
+            label="invoices"
+          />
 
       {showCreateModal && (
         <CreateSdpInvoiceModal

@@ -1,17 +1,30 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { AddWorkerModal } from "@/components/modals/add-worker-modal";
 import { ViewWorkerModal } from "@/components/modals/view-worker-modal";
 import { useLocation } from "wouter";
 import { usePageHeader, useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
 import { LayoutGrid, List, ArrowUpDown, Building2 } from "lucide-react";
 import { PageLoader } from "@/components/ui/loader";
+import { DataPagination } from "@/components/ui/data-pagination";
+import { apiRequest } from "@/lib/queryClient";
+
+// Map the page's `client` sort option onto the server's `business` sort key
+// (the server uses the column name, the page uses the user-facing label).
+const SORT_TO_SERVER: Record<string, string> = {
+  name: "name",
+  country: "country",
+  type: "type",
+  client: "business",
+};
+
+const PAGE_SIZE = 20;
 
 export default function Workforce() {
   const [, setLocation] = useLocation();
@@ -23,6 +36,13 @@ export default function Workforce() {
   const [filterBusiness, setFilterBusiness] = useState("all");
   const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
   const [sortBy, setSortBy] = useState<'name' | 'country' | 'type' | 'client'>('name');
+  const [page, setPage] = useState(1);
+
+  // Reset page to 1 when any filter / sort changes — otherwise the user might
+  // be stranded on a now-empty page after narrowing the result set.
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, filterCountry, filterType, filterBusiness, sortBy]);
   
   usePageHeader("Workforce", "Manage your employees and contractors");
   const { countries } = useAuthenticatedLayout();
@@ -37,9 +57,42 @@ export default function Workforce() {
     enabled: (user as any)?.userType === 'sdp_internal',
   });
 
-  const { data: workers = [], isLoading: isLoadingWorkers } = useQuery({
-    queryKey: filterBusiness && filterBusiness !== "all" ? ["/api/workers/business", filterBusiness] : ["/api/workers"],
+  // Server-side filtered + sorted + paginated. Filters live in the queryKey so
+  // React Query refetches when any of them changes.
+  const listParams = useMemo(() => ({
+    page,
+    pageSize: PAGE_SIZE,
+    search: searchTerm.trim() || undefined,
+    countryId: filterCountry !== "all" ? filterCountry : undefined,
+    workerType: filterType !== "all" ? filterType : undefined,
+    businessId: filterBusiness !== "all" ? filterBusiness : undefined,
+    sortBy: SORT_TO_SERVER[sortBy] ?? "name",
+  }), [page, searchTerm, filterCountry, filterType, filterBusiness, sortBy]);
+
+  const { data: workerListData, isLoading: isLoadingWorkers } = useQuery<{
+    items: any[]; total: number; page: number; pageSize: number;
+  }>({
+    queryKey: ["/api/workers/list", listParams],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      qs.set("page", String(listParams.page));
+      qs.set("pageSize", String(listParams.pageSize));
+      qs.set("sortBy", listParams.sortBy);
+      if (listParams.search) qs.set("search", listParams.search);
+      if (listParams.countryId) qs.set("countryId", listParams.countryId);
+      if (listParams.workerType) qs.set("workerType", listParams.workerType);
+      if (listParams.businessId) qs.set("businessId", listParams.businessId);
+      return (await apiRequest("GET", `/api/workers/list?${qs.toString()}`)).json();
+    },
+    // Keep the previous page on screen while a new filter/sort/page is fetched.
+    // Without this, every keystroke in the search input would unmount the
+    // search field (because the page would return PageLoader) and lose focus.
+    placeholderData: keepPreviousData,
   });
+
+  const workers = workerListData?.items ?? [];
+  const totalWorkers = workerListData?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalWorkers / PAGE_SIZE));
 
   // Fetch workers provided TO this business by other businesses (host client scenario)
   const { data: providedWorkers = [] } = useQuery<any[]>({
@@ -65,41 +118,14 @@ export default function Workforce() {
 
   const accessibleCountries = countries || [];
 
-  const filteredAndSortedWorkers = useMemo(() => {
-    // Filter workers
-    const filtered = (workers as any[]).filter((worker: any) => {
-      const matchesSearch = searchTerm === "" || 
-        `${worker.firstName} ${worker.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        worker.email.toLowerCase().includes(searchTerm.toLowerCase());
-      
-      const matchesCountry = filterCountry === "all" || filterCountry === "" || worker.countryId === filterCountry;
-      const matchesType = filterType === "all" || filterType === "" || worker.workerType === filterType;
-      
-      return matchesSearch && matchesCountry && matchesType;
-    });
-    
-    // Sort workers
-    const sorted = [...filtered].sort((a, b) => {
-      switch (sortBy) {
-        case 'name':
-          return `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`);
-        case 'country':
-          return a.country.name.localeCompare(b.country.name);
-        case 'type':
-          return a.workerType.localeCompare(b.workerType);
-        case 'client':
-          const aBusinessName = (businesses as any[]).find(business => business.id === a.businessId)?.name || '';
-          const bBusinessName = (businesses as any[]).find(business => business.id === b.businessId)?.name || '';
-          return aBusinessName.localeCompare(bBusinessName);
-        default:
-          return 0;
-      }
-    });
-    
-    return sorted;
-  }, [workers, searchTerm, filterCountry, filterType, sortBy, businesses]);
+  // Filtering, sorting, and pagination all happen server-side now. `workers` is already
+  // the current page slice. Keep this alias for minimal churn in the JSX below.
+  const filteredAndSortedWorkers = workers;
 
-  if (isLoadingWorkers) {
+  // Only show the full-page loader for the very first load. On subsequent
+  // refetches (filter/search/sort/page changes) keepPreviousData hands us the
+  // prior page so we can re-render in place without remounting the input.
+  if (isLoadingWorkers && !workerListData) {
     return <PageLoader label="Loading workforce" />;
   }
 
@@ -410,6 +436,15 @@ export default function Workforce() {
               )}
             </div>
           )}
+
+          <DataPagination
+            page={page}
+            totalPages={totalPages}
+            totalItems={totalWorkers}
+            pageSize={PAGE_SIZE}
+            onPageChange={setPage}
+            label="workers"
+          />
 
           {/* Provided Workers Section — shown only for businesses that are host clients */}
           {hasProvidedWorkers && (
