@@ -99,6 +99,24 @@ interface SdpInvoice {
   } | null;
 }
 
+// Older invoices have line-item descriptions like:
+//   "Fixed period billing — Fri May 15 2026 00:00:00 GMT+0000 (Coordinated Universal Time) to Thu Jun 11 2026 ..."
+// because the server stored Date objects coerced via template literal. Reformat
+// those at render time so the card stays readable. New invoices get YYYY-MM-DD
+// from the server already (calculations.ts/fmtDate).
+function formatLineItemDescription(description: string | null | undefined): string {
+  if (!description) return '';
+  // Match any verbose `Date.toString()` chunk and replace with YYYY-MM-DD.
+  return description.replace(
+    /([A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{4}) \d{2}:\d{2}:\d{2} GMT[+-]\d{4} \([^)]*\)/g,
+    (_match, head) => {
+      const d = new Date(head);
+      if (isNaN(d.getTime())) return head;
+      return d.toISOString().slice(0, 10);
+    },
+  );
+}
+
 // Format a timesheet's total worked time based on the contract's rate type (hours vs days)
 function formatTimesheetTotal(ts: { totalHours?: string | null; totalDays?: string | null } | null | undefined, rateType?: string | null): string {
   if (!ts) return '';
@@ -691,14 +709,14 @@ export default function SdpInvoices() {
               </Table>
             </div>
           ) : (
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-fr">
               {pagedInvoices.map((invoice: any) => {
                 const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons];
                 
                 return (
                   <Card
                     key={invoice.id}
-                    className="hover:shadow-md hover:border-primary/30 transition-all cursor-pointer"
+                    className="flex flex-col overflow-hidden hover:shadow-md hover:border-primary/30 transition-all cursor-pointer"
                     data-testid={`card-sdp-invoice-${invoice.id}`}
                     onClick={() => setSelectedInvoiceForDetails(invoice)}
                   >
@@ -755,7 +773,7 @@ export default function SdpInvoices() {
                       </CardDescription>
                     </CardHeader>
                     
-                    <CardContent className="space-y-4">
+                    <CardContent className="space-y-4 flex-1 flex flex-col">
                       <div className="space-y-2">
                         {invoice.invoiceCategory !== 'business_to_client' && (
                           <div className="flex justify-between text-sm">
@@ -785,76 +803,86 @@ export default function SdpInvoices() {
                           </span>
                         </div>
 
-                        {invoice.workerName && (
-                          <div className="flex justify-between text-sm">
-                            <span className="text-secondary-600">Worker:</span>
-                            <span>{invoice.workerName}</span>
-                          </div>
-                        )}
+                        <div className="flex justify-between text-sm">
+                          <span className="text-secondary-600">Worker:</span>
+                          <span>{invoice.workerName || '—'}</span>
+                        </div>
 
-                        {invoice.contract && (
-                          <div className="text-sm">
-                            <div className="flex justify-between">
-                              <span className="text-secondary-600">Contract:</span>
-                              <span className="text-right">
-                                {invoice.contract.contractName || invoice.contract.jobTitle || 'N/A'}
-                                {invoice.contract.rateStructure !== 'multiple' && invoice.contract.rate && (
-                                  <span className="text-xs text-gray-500 ml-1">
-                                    ({invoice.contract.currency} {invoice.contract.rate}/{invoice.contract.rateType})
-                                  </span>
-                                )}
-                                {invoice.contract.rateStructure === 'multiple' && (
-                                  <span className="text-xs text-gray-500 ml-1">
-                                    (Multiple rates · {Array.isArray(invoice.contract.rateLines) ? invoice.contract.rateLines.length : 0})
-                                  </span>
-                                )}
-                              </span>
-                            </div>
-                            {/* Multi-rate breakdown — show every project rate so the admin can see
-                                where each invoice line item came from and not assume the contract's
-                                top-level rate is what was billed. */}
-                            {invoice.contract.rateStructure === 'multiple'
-                              && Array.isArray(invoice.contract.rateLines)
-                              && invoice.contract.rateLines.length > 0 && (
-                              <div className="mt-1 ml-2 border-l-2 border-secondary-200 pl-2 space-y-0.5">
-                                {invoice.contract.rateLines.map((rl: any) => {
-                                  const unit = rl.rateType === 'daily' ? 'day'
-                                    : rl.rateType === 'hourly' ? 'hr'
-                                    : rl.rateType;
-                                  return (
-                                    <div key={rl.id} className="flex justify-between text-xs">
-                                      <span className="text-secondary-600 truncate">
-                                        {rl.projectName || rl.description || 'Rate line'}
-                                        {rl.isDefault && (
-                                          <span className="ml-1 text-[9px] text-gray-500 border border-gray-300 rounded px-1 py-0">Default</span>
-                                        )}
-                                      </span>
-                                      <span className="font-medium tabular-nums whitespace-nowrap">
-                                        {rl.currency || invoice.contract.currency} {parseFloat(rl.rate || '0').toLocaleString()}/{unit}
-                                        {rl.clientRate && parseFloat(rl.clientRate) > 0 && (
-                                          <span className="text-[10px] text-gray-500 ml-1">(client {rl.currency || invoice.contract.currency} {parseFloat(rl.clientRate).toLocaleString()})</span>
-                                        )}
-                                      </span>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {invoice.timesheet && (
-                          <div className="flex justify-between text-sm">
-                            <span className="text-secondary-600">Timesheet:</span>
-                            <span className="text-right">
-                              {formatDate(invoice.timesheet.periodStart)} - {formatDate(invoice.timesheet.periodEnd)}
-                              {(() => {
-                                const label = formatTimesheetTotal(invoice.timesheet, invoice.contract?.rateType);
-                                return label ? <span className="text-xs text-gray-500 ml-1">({label})</span> : null;
-                              })()}
+                        <div className="text-sm">
+                          <div className="flex justify-between gap-2">
+                            <span className="text-secondary-600 flex-shrink-0">Contract:</span>
+                            <span
+                              className="text-right truncate min-w-0"
+                              title={
+                                invoice.contract
+                                  ? `${invoice.contract.contractName || invoice.contract.jobTitle || 'N/A'}${invoice.contract.rate ? ` (${invoice.contract.currency} ${invoice.contract.rate}/${invoice.contract.rateType})` : ''}`
+                                  : ''
+                              }
+                            >
+                              {invoice.contract ? (
+                                <>
+                                  {invoice.contract.contractName || invoice.contract.jobTitle || 'N/A'}
+                                  {invoice.contract.rateStructure !== 'multiple' && invoice.contract.rate && (
+                                    <span className="text-xs text-gray-500 ml-1">
+                                      ({invoice.contract.currency} {invoice.contract.rate}/{invoice.contract.rateType})
+                                    </span>
+                                  )}
+                                  {invoice.contract.rateStructure === 'multiple' && (
+                                    <span className="text-xs text-gray-500 ml-1">
+                                      (Multiple rates · {Array.isArray(invoice.contract.rateLines) ? invoice.contract.rateLines.length : 0})
+                                    </span>
+                                  )}
+                                </>
+                              ) : '—'}
                             </span>
                           </div>
-                        )}
+                          {/* Multi-rate breakdown — show every project rate so the admin can see
+                              where each invoice line item came from and not assume the contract's
+                              top-level rate is what was billed. */}
+                          {invoice.contract
+                            && invoice.contract.rateStructure === 'multiple'
+                            && Array.isArray(invoice.contract.rateLines)
+                            && invoice.contract.rateLines.length > 0 && (
+                            <div className="mt-1 ml-2 border-l-2 border-secondary-200 pl-2 space-y-0.5">
+                              {invoice.contract.rateLines.map((rl: any) => {
+                                const unit = rl.rateType === 'daily' ? 'day'
+                                  : rl.rateType === 'hourly' ? 'hr'
+                                  : rl.rateType;
+                                return (
+                                  <div key={rl.id} className="flex justify-between text-xs">
+                                    <span className="text-secondary-600 truncate">
+                                      {rl.projectName || rl.description || 'Rate line'}
+                                      {rl.isDefault && (
+                                        <span className="ml-1 text-[9px] text-gray-500 border border-gray-300 rounded px-1 py-0">Default</span>
+                                      )}
+                                    </span>
+                                    <span className="font-medium tabular-nums whitespace-nowrap">
+                                      {rl.currency || invoice.contract.currency} {parseFloat(rl.rate || '0').toLocaleString()}/{unit}
+                                      {rl.clientRate && parseFloat(rl.clientRate) > 0 && (
+                                        <span className="text-[10px] text-gray-500 ml-1">(client {rl.currency || invoice.contract.currency} {parseFloat(rl.clientRate).toLocaleString()})</span>
+                                      )}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex justify-between text-sm">
+                          <span className="text-secondary-600">Timesheet:</span>
+                          <span className="text-right">
+                            {invoice.timesheet ? (
+                              <>
+                                {formatDate(invoice.timesheet.periodStart)} - {formatDate(invoice.timesheet.periodEnd)}
+                                {(() => {
+                                  const label = formatTimesheetTotal(invoice.timesheet, invoice.contract?.rateType);
+                                  return label ? <span className="text-xs text-gray-500 ml-1">({label})</span> : null;
+                                })()}
+                              </>
+                            ) : '—'}
+                          </span>
+                        </div>
 
                         <div className="flex justify-between text-sm">
                           <span className="text-secondary-600">Service:</span>
@@ -863,14 +891,14 @@ export default function SdpInvoices() {
                           </span>
                         </div>
 
-                        {invoice.periodStart && invoice.periodEnd && (
-                          <div className="flex justify-between text-sm">
-                            <span className="text-secondary-600">Period:</span>
-                            <span data-testid={`text-period-${invoice.id}`}>
-                              {formatDate(invoice.periodStart)} - {formatDate(invoice.periodEnd)}
-                            </span>
-                          </div>
-                        )}
+                        <div className="flex justify-between text-sm">
+                          <span className="text-secondary-600">Period:</span>
+                          <span data-testid={`text-period-${invoice.id}`}>
+                            {invoice.periodStart && invoice.periodEnd
+                              ? `${formatDate(invoice.periodStart)} - ${formatDate(invoice.periodEnd)}`
+                              : '—'}
+                          </span>
+                        </div>
                         
                         <div className="flex justify-between text-sm">
                           <span className="text-secondary-600">Due Date:</span>
@@ -896,7 +924,9 @@ export default function SdpInvoices() {
                           <div className="space-y-2">
                             {invoice.lineItems.map((item: any, index: number) => (
                               <div key={item.id || index} className="text-xs space-y-1 bg-gray-50 p-2 rounded">
-                                <div className="font-medium">{item.description}</div>
+                                <div className="font-medium break-words" title={item.description}>
+                                  {formatLineItemDescription(item.description)}
+                                </div>
                                 <div className="flex justify-between text-secondary-600">
                                   <span>{item.quantity} × {formatCurrency(String(item.unitPrice), invoice.currency)}</span>
                                   <span className="font-medium text-secondary-900">{formatCurrency(String(item.amount), invoice.currency)}</span>
@@ -934,7 +964,7 @@ export default function SdpInvoices() {
                         </div>
                       </div>
 
-                      <div className="border-t pt-4" onClick={(e) => e.stopPropagation()}>
+                      <div className="border-t pt-4 mt-auto" onClick={(e) => e.stopPropagation()}>
                         <div className="text-xs text-secondary-500 mb-2">
                           Created by {invoice.createdByUser.firstName} {invoice.createdByUser.lastName}
                         </div>

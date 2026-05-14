@@ -99,6 +99,14 @@
     @apply font-sans antialiased bg-background text-foreground;
     font-family: 'Inter', system-ui, sans-serif;
   }
+
+  /* AuthenticatedLayout adds `.app-shell` to <body> while mounted so only <main>
+     scrolls. Public pages (Landing, Login) keep natural body scroll. */
+  body.app-shell,
+  body.app-shell #root {
+    height: 100vh;
+    overflow: hidden;
+  }
 }
 
 /* Custom utility classes for SDP Global Pay */

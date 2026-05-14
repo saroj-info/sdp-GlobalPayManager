@@ -16,6 +16,14 @@ const num = (v: any): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/** Format a Date/ISO string as `YYYY-MM-DD` for line-item descriptions. */
+const fmtDate = (d: any): string => {
+  if (!d) return "";
+  const date = d instanceof Date ? d : new Date(d);
+  if (isNaN(date.getTime())) return String(d);
+  return date.toISOString().slice(0, 10);
+};
+
 interface RateLine {
   id: string;
   rate: string;
@@ -154,7 +162,7 @@ export function computeCustomerBilling(
       amount,
       lineItems: [
         {
-          description: `Fixed period billing — ${period.start} to ${period.end}`,
+          description: `Fixed period billing — ${fmtDate(period.start)} to ${fmtDate(period.end)}`,
           quantity: "1",
           unitPrice: amount.toFixed(2),
           amount: amount.toFixed(2),

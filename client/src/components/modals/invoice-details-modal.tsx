@@ -26,6 +26,20 @@ const STATUS_COLORS: Record<string, string> = {
 const fmt = (d: string | Date | undefined | null) =>
   d ? new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 
+// Strip verbose `Date.toString()` chunks embedded in older line-item descriptions
+// (e.g. "Fri May 15 2026 00:00:00 GMT+0000 (Coordinated Universal Time)") and
+// replace with YYYY-MM-DD. Server now uses fmtDate for new invoices.
+const cleanLineItemDescription = (desc: string | null | undefined): string => {
+  if (!desc) return "";
+  return desc.replace(
+    /([A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{4}) \d{2}:\d{2}:\d{2} GMT[+-]\d{4} \([^)]*\)/g,
+    (_m, head) => {
+      const d = new Date(head);
+      return isNaN(d.getTime()) ? head : d.toISOString().slice(0, 10);
+    },
+  );
+};
+
 const money = (amt: any, currency = "") => {
   const n = parseFloat(amt ?? "0");
   if (!Number.isFinite(n)) return "—";
@@ -188,7 +202,7 @@ export function InvoiceDetailsModal({ invoice, open, onOpenChange }: InvoiceDeta
                 <tbody>
                   {lineItems.map((li: any, idx: number) => (
                     <tr key={li.id ?? idx} className="border-t">
-                      <td className="px-4 py-2">{li.description}</td>
+                      <td className="px-4 py-2 break-words" title={li.description}>{cleanLineItemDescription(li.description)}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{li.quantity}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{money(li.unitPrice, currency)}</td>
                       <td className="px-4 py-2 text-right tabular-nums font-medium">{money(li.amount, currency)}</td>
