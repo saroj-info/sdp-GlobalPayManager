@@ -417,13 +417,21 @@ export default function Timesheets() {
     },
   });
 
+  // Approval auto-creates SDP and (sometimes) business→client invoices server-side,
+  // so we invalidate every invoice list query alongside /api/timesheets.
+  const invalidateTimesheetAndInvoiceQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] });
+    queryClient.invalidateQueries({ queryKey: ['/api/sdp-invoices'] });
+    queryClient.invalidateQueries({ queryKey: ['/api/invoices'] });
+  };
+
   const approveTimesheetMutation = useMutation({
     mutationFn: async (id: string) => {
       const res = await apiRequest('PATCH', `/api/timesheets/${id}/status`, { status: 'approved' });
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] });
+      invalidateTimesheetAndInvoiceQueries();
       toast({ title: "Approved", description: "Timesheet approved." });
     },
     onError: (error: any) => {
@@ -439,7 +447,7 @@ export default function Timesheets() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/timesheets'] });
+      invalidateTimesheetAndInvoiceQueries();
       toast({ title: "Rejected", description: "Timesheet rejected." });
     },
     onError: (error: any) => {

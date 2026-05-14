@@ -115,7 +115,7 @@ import {
   type InsertPurchaseOrder,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, inArray, sql, isNull, isNotNull } from "drizzle-orm";
+import { eq, and, or, inArray, sql, isNull, isNotNull, desc } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 // Interface for storage operations
@@ -2548,7 +2548,8 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(workers, eq(invoices.contractorId, workers.id))
       .leftJoin(countries, eq(workers.countryId, countries.id))
       .leftJoin(businesses, eq(invoices.businessId, businesses.id))
-      .where(eq(invoices.businessId, businessId));
+      .where(eq(invoices.businessId, businessId))
+      .orderBy(desc(invoices.createdAt));
 
     return result.map(row => ({
       ...row.invoices,
@@ -2567,7 +2568,8 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(workers, eq(invoices.contractorId, workers.id))
       .leftJoin(countries, eq(workers.countryId, countries.id))
       .leftJoin(businesses, eq(invoices.businessId, businesses.id))
-      .where(eq(invoices.contractorId, contractorId));
+      .where(eq(invoices.contractorId, contractorId))
+      .orderBy(desc(invoices.createdAt));
 
     return result.map(row => ({
       ...row.invoices,
@@ -2585,7 +2587,8 @@ export class DatabaseStorage implements IStorage {
       .from(invoices)
       .leftJoin(workers, eq(invoices.contractorId, workers.id))
       .leftJoin(countries, eq(workers.countryId, countries.id))
-      .leftJoin(businesses, eq(invoices.businessId, businesses.id));
+      .leftJoin(businesses, eq(invoices.businessId, businesses.id))
+      .orderBy(desc(invoices.createdAt));
 
     return result.map(row => ({
       ...row.invoices,
@@ -3243,7 +3246,8 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
       .leftJoin(users, eq(sdpInvoices.createdBy, users.id))
       .leftJoin(workerAlias, eq((sdpInvoices as any).workerId, workerAlias.id))
       .leftJoin(poAlias, eq((sdpInvoices as any).purchaseOrderId, poAlias.id))
-      .where(eq(sdpInvoices.toBusinessId, businessId));
+      .where(eq(sdpInvoices.toBusinessId, businessId))
+      .orderBy(desc(sdpInvoices.createdAt));
 
     return result.map(row => ({
       ...row.sdp_invoices,
@@ -3267,7 +3271,8 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
       .leftJoin(users, eq(sdpInvoices.createdBy, users.id))
       .leftJoin(workerAlias, eq((sdpInvoices as any).workerId, workerAlias.id))
       .leftJoin(poAlias, eq((sdpInvoices as any).purchaseOrderId, poAlias.id))
-      .where(eq(sdpInvoices.fromCountryId, countryId));
+      .where(eq(sdpInvoices.fromCountryId, countryId))
+      .orderBy(desc(sdpInvoices.createdAt));
 
     return result.map(row => ({
       ...row.sdp_invoices,
@@ -3292,7 +3297,8 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
       .leftJoin(fromBusinesses, eq(sdpInvoices.fromBusinessId, fromBusinesses.id))
       .leftJoin(users, eq(sdpInvoices.createdBy, users.id))
       .leftJoin(workerAlias, eq((sdpInvoices as any).workerId, workerAlias.id))
-      .leftJoin(poAlias, eq((sdpInvoices as any).purchaseOrderId, poAlias.id));
+      .leftJoin(poAlias, eq((sdpInvoices as any).purchaseOrderId, poAlias.id))
+      .orderBy(desc(sdpInvoices.createdAt));
 
     return result.map(row => ({
       ...row.sdp_invoices,

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -47,6 +47,7 @@ const editSdpInvoiceSchema = z.object({
   periodEnd: z.string().optional(),
   isCrossBorder: z.boolean().optional(),
   businessCountry: z.string().optional(),
+  notes: z.string().optional(),
 });
 
 interface LineItem {
@@ -153,36 +154,28 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
     }));
   }, []);
 
-  // Calculate invoice totals for preview
+  // Calculate invoice totals for preview.
+  // Tax rule: apply ONLY when the user provides a numeric GST/VAT rate in the
+  // input. No country-based fallback. Cross-border invoices skip tax entirely.
   const calculatePreviewTotals = (data: EditSdpInvoiceForm) => {
     const subtotal = calculateSubtotal();
     const fromCountry = countries.find((c: any) => c.id === data.fromCountryId);
     const toBusiness = businesses.find((b: any) => b.id === data.toBusinessId);
-    
+
     const businessCountryId = toBusiness?.countryId || toBusiness?.accessibleCountries?.[0];
     const isCrossBorder = businessCountryId && businessCountryId !== data.fromCountryId;
-    
+
     let gstRate = 0;
-    if (!isCrossBorder) {
-      if (data.gstVatRate && !isNaN(parseFloat(data.gstVatRate))) {
-        gstRate = parseFloat(data.gstVatRate);
-      } else {
-        const gstRates: Record<string, number> = {
-          'Australia': 10,
-          'New Zealand': 15,
-          'United Kingdom': 20,
-          'Canada': 5,
-          'Singapore': 7
-        };
-        gstRate = gstRates[fromCountry?.name] || 0;
-      }
+    if (!isCrossBorder && data.gstVatRate !== undefined && data.gstVatRate !== '') {
+      const parsed = parseFloat(data.gstVatRate);
+      if (!isNaN(parsed) && parsed > 0) gstRate = parsed;
     }
-    
+
     const gstAmount = (subtotal * gstRate) / 100;
     const total = subtotal + gstAmount;
-    
+
     const businessCountry = countries.find((c: any) => c.id === businessCountryId);
-    
+
     return {
       subtotal,
       gstRate,
@@ -216,7 +209,7 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
       toBusinessId: invoice?.toBusinessId || "",
       serviceType: invoice?.serviceType || "employment_services",
       description: invoice?.description || "",
-      gstVatRate: invoice?.gstVatRate || "10",
+      gstVatRate: invoice?.gstVatRate ?? "",
       currency: invoice?.currency || "USD",
       invoiceDate: invoice?.invoiceDate ? formatDateForInput(invoice.invoiceDate) : "",
       dueDate: invoice?.dueDate ? formatDateForInput(invoice.dueDate) : "",
@@ -224,15 +217,24 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
       periodEnd: invoice?.periodEnd ? formatDateForInput(invoice.periodEnd) : "",
       isCrossBorder: invoice?.isCrossBorder || false,
       businessCountry: invoice?.businessCountry || "",
+      notes: invoice?.notes || "",
     },
   });
 
   const updateInvoiceMutation = useMutation({
     mutationFn: async (data: EditSdpInvoiceForm) => {
-      const subtotal = calculateSubtotal();
+      // Recompute totals from the latest form/line-item state so we never
+      // persist a stale total when the user edits prices or the GST rate.
+      const totals = calculatePreviewTotals(data);
       const payload = {
         ...data,
-        subtotal: subtotal.toString(),
+        // gstVatRate: empty input → '0' (no tax applied)
+        gstVatRate: totals.gstRate.toFixed(2),
+        gstVatAmount: totals.gstAmount.toFixed(2),
+        subtotal: totals.subtotal.toFixed(2),
+        totalAmount: totals.total.toFixed(2),
+        isCrossBorder: totals.isCrossBorder,
+        businessCountry: totals.toBusinessCountry,
         lineItems: lineItems.map((item, index) => ({
           description: item.description,
           quantity: item.quantity,
@@ -271,21 +273,6 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
   };
 
   const formData = form.watch();
-  const { fromCountryId: watchedFromCountryId } = formData;
-
-  // Auto-populate GST rate from country config when country changes
-  useEffect(() => {
-    if (!watchedFromCountryId) return;
-    const selectedCountry = countries.find((c: any) => c.id === watchedFromCountryId);
-    if (selectedCountry?.gstRate) {
-      const countryRate = String(parseFloat(selectedCountry.gstRate));
-      const currentRate = form.getValues('gstVatRate');
-      if (!currentRate || currentRate === '10') {
-        form.setValue('gstVatRate', countryRate);
-      }
-    }
-  }, [watchedFromCountryId, countries, form]);
-
   const previewTotals = calculatePreviewTotals(formData);
 
   return (
@@ -489,11 +476,27 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
                       </Card>
                     ))}
                     
-                    <div className="flex justify-between items-center pt-2 border-t">
-                      <span className="font-medium">Subtotal:</span>
-                      <span className="text-lg font-semibold" data-testid="text-calculated-subtotal">
-                        {formData.currency} {calculateSubtotal().toFixed(2)}
-                      </span>
+                    <div className="pt-2 border-t space-y-1">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-secondary-700">Subtotal:</span>
+                        <span className="text-sm font-medium" data-testid="text-calculated-subtotal">
+                          {formData.currency} {previewTotals.subtotal.toFixed(2)}
+                        </span>
+                      </div>
+                      {!previewTotals.isCrossBorder && previewTotals.gstRate > 0 && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-secondary-700">GST/VAT ({previewTotals.gstRate}%):</span>
+                          <span className="text-sm font-medium" data-testid="text-calculated-gst">
+                            {formData.currency} {previewTotals.gstAmount.toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center pt-1 border-t">
+                        <span className="font-medium">Total:</span>
+                        <span className="text-lg font-semibold" data-testid="text-calculated-total">
+                          {formData.currency} {previewTotals.total.toFixed(2)}
+                        </span>
+                      </div>
                     </div>
                   </div>
 
@@ -530,13 +533,14 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
                       name="gstVatRate"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>GST/VAT Rate (%)</FormLabel>
+                          <FormLabel>GST/VAT Rate (%) <span className="text-xs text-muted-foreground">— leave empty for no tax</span></FormLabel>
                           <FormControl>
-                            <Input 
-                              type="number" 
-                              step="0.01" 
-                              placeholder="10.00"
+                            <Input
+                              type="number"
+                              step="0.01"
+                              placeholder="0.00"
                               {...field}
+                              value={field.value ?? ''}
                               data-testid="input-gst-rate"
                             />
                           </FormControl>
@@ -611,8 +615,8 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
                         <FormItem>
                           <FormLabel>Service Period End (Optional)</FormLabel>
                           <FormControl>
-                            <Input 
-                              type="date" 
+                            <Input
+                              type="date"
                               {...field}
                               data-testid="input-period-end"
                             />
@@ -622,6 +626,26 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
                       )}
                     />
                   </div>
+
+                  <FormField
+                    control={form.control}
+                    name="notes"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Notes (Optional)</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            placeholder="Internal notes or payment terms…"
+                            rows={3}
+                            {...field}
+                            value={field.value ?? ''}
+                            data-testid="input-notes"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                 </div>
               </div>
 
@@ -682,7 +706,7 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
                     <span>Subtotal:</span>
                     <span>{formData.currency} {previewTotals.subtotal.toFixed(2)}</span>
                   </div>
-                  {!previewTotals.isCrossBorder && (
+                  {!previewTotals.isCrossBorder && previewTotals.gstRate > 0 && (
                     <div className="flex justify-between items-center">
                       <span>GST/VAT ({previewTotals.gstRate}%):</span>
                       <span>{formData.currency} {previewTotals.gstAmount.toFixed(2)}</span>
