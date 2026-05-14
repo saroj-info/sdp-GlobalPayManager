@@ -1018,28 +1018,26 @@ export default function Invoices() {
                                     </div>
                                   </>
                                 )}
-                                {(invoice as any).contract?.rateType && (
-                                  isHostClientBusiness
-                                    ? (
-                                      // Host clients see only the rate they are billed at — never the worker's actual pay.
-                                      // Labelled "Billing Rate" so the same label is never overloaded with two meanings.
-                                      (invoice as any).contract.customerBillingRate && (
-                                        <div className="flex justify-between text-sm">
-                                          <span className="text-secondary-600">Billing Rate:</span>
-                                          <span>{(invoice as any).contract.customerCurrency || (invoice as any).contract.currency} {parseFloat((invoice as any).contract.customerBillingRate).toFixed(2)}/{(invoice as any).contract.customerBillingRateType || ((invoice as any).contract.rateType === 'daily' ? 'day' : 'hr')}</span>
-                                        </div>
-                                      )
-                                    )
-                                    : (
-                                      // SDP and employing business see the actual worker pay rate
-                                      (invoice as any).contract.rate && (
-                                        <div className="flex justify-between text-sm">
-                                          <span className="text-secondary-600">Worker Rate:</span>
-                                          <span>{(invoice as any).contract.currency} {parseFloat((invoice as any).contract.rate).toFixed(2)}/{(invoice as any).contract.rateType === 'daily' ? 'day' : (invoice as any).contract.rateType === 'hourly' ? 'hr' : (invoice as any).contract.rateType}</span>
-                                        </div>
-                                      )
-                                    )
-                                )}
+                                {/*
+                                  Display the rate frozen at invoice-creation time:
+                                  - currency  → invoice.currency (snapshot column)
+                                  - rate      → first line item's unitPrice (stored row)
+                                  - unit      → invoice.contract.rateType (live; rarely changes)
+                                  This stops the displayed rate from shifting after the contract is renegotiated.
+                                */}
+                                {(() => {
+                                  const firstLi = (invoice as any).lineItems?.[0];
+                                  const frozenUnitPrice = firstLi?.unitPrice ? parseFloat(firstLi.unitPrice) : null;
+                                  if (frozenUnitPrice === null || !Number.isFinite(frozenUnitPrice)) return null;
+                                  const rt = (invoice as any).contract?.rateType;
+                                  const unit = rt === 'daily' ? 'day' : rt === 'hourly' ? 'hr' : (rt || 'unit');
+                                  return (
+                                    <div className="flex justify-between text-sm">
+                                      <span className="text-secondary-600">{isHostClientBusiness ? 'Billing Rate' : 'Worker Rate'}:</span>
+                                      <span>{invoice.currency} {frozenUnitPrice.toFixed(2)}/{unit}</span>
+                                    </div>
+                                  );
+                                })()}
                                 <div className="flex justify-between text-sm">
                                   <span className="text-secondary-600">Service:</span>
                                   <span className="capitalize text-right truncate max-w-[60%]">{invoice.serviceType.replace(/_/g, ' ')}</span>
@@ -1373,12 +1371,21 @@ export default function Invoices() {
                                   <span>{totalLabel}</span>
                                 </div>
                               )}
-                              {invoice.contract?.rateType && invoice.contract?.customerBillingRate && (
-                                <div className="flex justify-between text-sm">
-                                  <span className="text-secondary-600">Client Rate:</span>
-                                  <span>{invoice.contract.customerCurrency || invoice.currency} {parseFloat(invoice.contract.customerBillingRate).toFixed(2)}/{invoice.contract.rateType === 'daily' ? 'day' : invoice.contract.rateType === 'hourly' ? 'hr' : invoice.contract.rateType}</span>
-                                </div>
-                              )}
+                              {(() => {
+                                // Read the rate from the stored invoice snapshot, not the live
+                                // contract — otherwise renegotiation rewrites historical invoices.
+                                const firstLi = (invoice as any).lineItems?.[0];
+                                const frozenUnitPrice = firstLi?.unitPrice ? parseFloat(firstLi.unitPrice) : null;
+                                if (frozenUnitPrice === null || !Number.isFinite(frozenUnitPrice)) return null;
+                                const rt = invoice.contract?.rateType;
+                                const unit = rt === 'daily' ? 'day' : rt === 'hourly' ? 'hr' : (rt || 'unit');
+                                return (
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-secondary-600">Client Rate:</span>
+                                    <span>{invoice.currency} {frozenUnitPrice.toFixed(2)}/{unit}</span>
+                                  </div>
+                                );
+                              })()}
                               <div className="flex justify-between text-sm">
                                 <span className="text-secondary-600">Invoice Date:</span>
                                 <span>{invoice.invoiceDate ? formatDate(invoice.invoiceDate) : '—'}</span>

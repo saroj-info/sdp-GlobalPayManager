@@ -9,6 +9,10 @@ import { storage } from "./storage";
 import { registerTimesheetApprovalRoutes } from "./modules/timesheet-approval";
 import { registerWorkforceRoutes } from "./modules/workforce";
 import { registerContractsRoutes } from "./modules/contracts";
+import { logContractChanges, TRACKED_CONTRACT_FIELDS } from "./modules/contracts/changeLog";
+import { contractChangeLog, users as usersTable } from "@shared/schema";
+import { desc, eq as drizzleEq } from "drizzle-orm";
+import { db as drizzleDb } from "./db";
 import { registerTimesheetsListRoutes } from "./modules/timesheets";
 
 // Simple in-memory rate limiting for login attempts
@@ -5663,6 +5667,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updatedContract = await storage.updateContract(id, updateData as any);
 
+      // Write a row per changed field to the change-log. Fire-and-forget
+      // (catch + log) so a logging hiccup never aborts a contract update.
+      try {
+        await logContractChanges({
+          contractId: id,
+          before: existingContract as any,
+          after: updateData as any,
+          changedBy: userId ?? null,
+        });
+      } catch (logErr) {
+        console.error("Failed to write contract change-log:", logErr);
+      }
+
       // Handle remuneration lines if provided
       const remunerationLines = req.body.remunerationLines;
       if (remunerationLines !== undefined) {
@@ -6025,6 +6042,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Contract Rate Lines routes
+  // Audit log of contract field edits (newest first). Joined with users so the
+  // UI can show "changed by Name" without a second lookup.
+  app.get('/api/contracts/:id/change-log', authMiddleware, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const contract = await storage.getContract(id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+
+      // Same authorisation gate as other contract reads: SDP internal can see
+      // everything; business users only see their own contracts.
+      const userType = req.user?.userType;
+      if (userType !== 'sdp_internal') {
+        const business = await storage.getBusinessByOwnerId(req.user?.id);
+        if (!business || (contract.businessId !== business.id && (contract as any).customerBusinessId !== business.id)) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+      }
+
+      const rows = await drizzleDb
+        .select({
+          id: contractChangeLog.id,
+          fieldName: contractChangeLog.fieldName,
+          oldValue: contractChangeLog.oldValue,
+          newValue: contractChangeLog.newValue,
+          changedAt: contractChangeLog.changedAt,
+          changedByUserId: contractChangeLog.changedBy,
+          changedByFirstName: usersTable.firstName,
+          changedByLastName: usersTable.lastName,
+          changedByEmail: usersTable.email,
+        })
+        .from(contractChangeLog)
+        .leftJoin(usersTable, drizzleEq(contractChangeLog.changedBy, usersTable.id))
+        .where(drizzleEq(contractChangeLog.contractId, id))
+        .orderBy(desc(contractChangeLog.changedAt));
+
+      // Decorate with the human-friendly label the UI cares about.
+      const labelByKey = new Map(TRACKED_CONTRACT_FIELDS.map((f) => [f.key, f.label]));
+      const items = rows.map((r) => ({
+        ...r,
+        fieldLabel: labelByKey.get(r.fieldName) ?? r.fieldName,
+        changedByName: r.changedByFirstName || r.changedByLastName
+          ? `${r.changedByFirstName ?? ''} ${r.changedByLastName ?? ''}`.trim()
+          : (r.changedByEmail ?? 'System'),
+      }));
+
+      res.json({ items });
+    } catch (error: any) {
+      console.error("Error fetching contract change-log:", error);
+      res.status(500).json({ message: "Failed to fetch change log" });
+    }
+  });
+
   app.get('/api/contracts/:id/rate-lines', authMiddleware, async (req: any, res) => {
     try {
       const { id } = req.params;

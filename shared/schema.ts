@@ -727,6 +727,25 @@ export const contractInstances = pgTable("contract_instances", {
   index("idx_contract_instances_created_at").on(table.createdAt),
 ]);
 
+// Append-only audit log of contract field edits. One row per changed field per
+// PUT /api/contracts/:id call. Used to render a "Change History" timeline on
+// the contract details modal — particularly useful after renegotiation when
+// SDP edits worker rate / client billing rate / etc.
+export const contractChangeLog = pgTable("contract_change_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").references(() => contracts.id, { onDelete: 'cascade' }).notNull(),
+  fieldName: varchar("field_name").notNull(),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  changedBy: varchar("changed_by").references(() => users.id),
+  changedAt: timestamp("changed_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_contract_change_log_contract").on(table.contractId, table.changedAt),
+]);
+
+export type ContractChangeLog = typeof contractChangeLog.$inferSelect;
+export type InsertContractChangeLog = typeof contractChangeLog.$inferInsert;
+
 // Timesheets for tracking worker hours
 export const timesheets = pgTable("timesheets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -689,6 +689,75 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
   );
 }
 
+// Audit log of contract field edits. Renders the latest changes (worker rate,
+// client billing rate, etc.) with old → new values, who changed it, and when.
+// Useful after renegotiation to see what was modified before re-issuing.
+function ContractChangeHistoryPanel({ contractId }: { contractId: string }) {
+  const { data, isLoading } = useQuery<{ items: any[] }>({
+    queryKey: [`/api/contracts/${contractId}/change-log`],
+  });
+
+  const items = data?.items ?? [];
+
+  if (isLoading) {
+    return (
+      <div className="border rounded-lg overflow-hidden">
+        <div className="px-4 py-2 bg-secondary-50 border-b">
+          <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Change History</p>
+        </div>
+        <div className="p-4 text-sm text-muted-foreground">Loading change history…</div>
+      </div>
+    );
+  }
+
+  if (items.length === 0) return null;
+
+  // Group consecutive rows that share the same changedAt + changedBy so the
+  // UI shows one "edit event" per row with its field changes nested under it.
+  const groups: Array<{ changedAt: string; changedBy: string; rows: any[] }> = [];
+  for (const row of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.changedAt === row.changedAt && last.changedBy === row.changedByName) {
+      last.rows.push(row);
+    } else {
+      groups.push({ changedAt: row.changedAt, changedBy: row.changedByName, rows: [row] });
+    }
+  }
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      <div className="px-4 py-2 bg-secondary-50 border-b flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Change History</p>
+        <span className="text-xs text-muted-foreground">{items.length} change{items.length === 1 ? '' : 's'}</span>
+      </div>
+      <div className="divide-y">
+        {groups.map((g, gi) => (
+          <div key={gi} className="p-4 space-y-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span><span className="font-medium text-secondary-700">{g.changedBy}</span> made {g.rows.length} change{g.rows.length === 1 ? '' : 's'}</span>
+              <span>{new Date(g.changedAt).toLocaleString()}</span>
+            </div>
+            <ul className="space-y-1">
+              {g.rows.map((r) => (
+                <li key={r.id} className="text-sm flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium text-secondary-800">{r.fieldLabel}:</span>
+                  <span className="px-1.5 py-0.5 bg-red-50 text-red-700 rounded text-xs line-through">
+                    {r.oldValue ?? '—'}
+                  </span>
+                  <span className="text-secondary-400">→</span>
+                  <span className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-xs">
+                    {r.newValue ?? '—'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function NewPayItemDialog({
   open,
   onOpenChange,
@@ -1972,6 +2041,11 @@ export default function ContractsPage() {
               {/* SDP Billing Lines Panel — SDP internal only */}
               {((user as any)?.userType === 'sdp_internal' || (user as any)?.userType === 'sdp_super_admin') && (
                 <SdpBillingLinesPanel contractId={selectedContract.id} isForClient={!!selectedContract.isForClient} />
+              )}
+
+              {/* Contract Change History — SDP internal only */}
+              {((user as any)?.userType === 'sdp_internal' || (user as any)?.userType === 'sdp_super_admin') && (
+                <ContractChangeHistoryPanel contractId={selectedContract.id} />
               )}
 
               {/* Actions - Different for workers vs business users */}
