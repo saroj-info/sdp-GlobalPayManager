@@ -6703,6 +6703,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
             contractStartDate: c?.startDate || null,
             contractEndDate: c?.endDate || null,
             contractRateType: c?.rateType || null,
+            // Full contract object so consumers (e.g. Create Consolidated Invoice
+            // modal) can read rate/rateType/currency directly without a second fetch.
+            contract: c
+              ? {
+                  id: c.id,
+                  contractName: c.contractName,
+                  customRoleTitle: c.customRoleTitle,
+                  roleTitleId: c.roleTitleId,
+                  rate: c.rate,
+                  rateType: c.rateType,
+                  currency: c.currency,
+                  customerBillingRate: c.customerBillingRate,
+                  customerBillingRateType: c.customerBillingRateType,
+                  customerCurrency: c.customerCurrency,
+                  isForClient: c.isForClient,
+                  businessId: c.businessId,
+                  customerBusinessId: c.customerBusinessId,
+                  startDate: c.startDate,
+                  endDate: c.endDate,
+                }
+              : null,
           };
         } catch {
           return ts;
@@ -8352,7 +8373,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/sdp-invoices/consolidated', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const { fromCountryId, toBusinessId, timesheetIds, currency, invoiceDate, dueDate, purchaseOrderId } = req.body;
+      const { fromCountryId, toBusinessId, timesheetIds, currency, invoiceDate, dueDate, purchaseOrderId, gstVatRate: gstVatRateInput, notes } = req.body;
 
       if (!fromCountryId || !toBusinessId || !Array.isArray(timesheetIds) || timesheetIds.length === 0 || !currency || !invoiceDate || !dueDate) {
         return res.status(400).json({ message: 'Missing required fields: fromCountryId, toBusinessId, timesheetIds, currency, invoiceDate, dueDate' });
@@ -8415,15 +8436,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // GST/VAT calculation
+      // GST/VAT calculation — caller-provided rate only. No hardcoded country
+      // fallback (matches the project's "tax only when entered" rule). Cross-
+      // border invoices skip tax entirely.
       const businessCountry = (toBusiness as any).countryId || (toBusiness as any).accessibleCountries?.[0];
       const isCrossBorder = businessCountry && businessCountry !== fromCountryId;
       let gstVatRate = 0;
       let gstVatAmount = 0;
-      if (!isCrossBorder) {
-        const countryGstRates: Record<string, number> = { 'aus': 10, 'nzl': 15, 'gbr': 20, 'irl': 23, 'sgp': 8 };
-        gstVatRate = countryGstRates[fromCountry.code.toLowerCase()] || 10;
-        gstVatAmount = subtotalAmount * (gstVatRate / 100);
+      if (!isCrossBorder && gstVatRateInput !== undefined && gstVatRateInput !== null && gstVatRateInput !== '') {
+        const parsed = parseFloat(String(gstVatRateInput));
+        if (!isNaN(parsed) && parsed > 0) {
+          gstVatRate = parsed;
+          gstVatAmount = subtotalAmount * (gstVatRate / 100);
+        }
       }
       const totalAmount = subtotalAmount + gstVatAmount;
 
@@ -8447,6 +8472,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: 'draft',
         createdBy: userId,
         purchaseOrderId: purchaseOrderId || null,
+        notes: notes || null,
       } as any);
 
       await storage.createSdpInvoiceLineItems(invoice.id, lineItems);

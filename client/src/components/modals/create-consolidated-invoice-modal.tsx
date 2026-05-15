@@ -1,5 +1,40 @@
 import { useState, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+// Derive per-timesheet quantity (days or hours) + rate (currency, /day or /hr)
+// + amount, using the contract attached to the timesheet. Mirrors the
+// server-side math in POST /api/sdp-invoices/consolidated so what the user
+// sees in the preview is exactly what gets persisted.
+function computeTimesheetLine(ts: any) {
+  const c = ts?.contract || null;
+  const rateType: string = c?.rateType || 'hourly';
+  const rate: number = parseFloat(c?.rate ?? '0') || 0;
+  const currency: string = c?.currency || '';
+  const entries: any[] = Array.isArray(ts?.entries) ? ts.entries : [];
+  let qty = 0;
+  if (rateType === 'daily') {
+    qty = entries.reduce((sum: number, e: any) => sum + (parseFloat(e?.daysWorked ?? '0') || 0), 0);
+    // Fall back to entry count if daysWorked isn't populated (entries logged as hours).
+    if (qty === 0 && entries.length > 0) {
+      qty = entries.filter((e: any) =>
+        (parseFloat(e?.hoursWorked ?? '0') || 0) > 0 ||
+        (parseFloat(e?.daysWorked ?? '0') || 0) > 0 ||
+        e?.isPresent,
+      ).length;
+    }
+  } else {
+    qty = entries.reduce((sum: number, e: any) => sum + (parseFloat(e?.hoursWorked ?? '0') || 0), 0);
+  }
+  return { qty, rate, currency, rateType, amount: qty * rate };
+}
+
+function workerNameOf(ts: any): string {
+  if (ts?.workerName) return ts.workerName;
+  const w = ts?.worker;
+  if (w?.firstName || w?.lastName) return `${w.firstName ?? ''} ${w.lastName ?? ''}`.trim();
+  return 'Unknown';
+}
+
 import {
   Dialog,
   DialogContent,
@@ -47,6 +82,9 @@ export function CreateConsolidatedInvoiceModal({ onClose, onSuccess }: Props) {
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
   const [purchaseOrderId, setPurchaseOrderId] = useState("__none__");
+  // Optional caller-supplied GST/VAT rate (empty → no tax applied).
+  const [gstVatRate, setGstVatRate] = useState("");
+  const [notes, setNotes] = useState("");
 
   const [selectedTimesheetIds, setSelectedTimesheetIds] = useState<Set<string>>(new Set());
 
@@ -76,10 +114,22 @@ export function CreateConsolidatedInvoiceModal({ onClose, onSuccess }: Props) {
   const eligibleTimesheets = useMemo(() => {
     return allTimesheets.filter((ts: any) => {
       if (ts.status !== "approved") return false;
+      // Exclude timesheets that already have an active (non-void / non-cancelled)
+      // SDP invoice linked. The server attaches `sdpInvoiced` for sdp_internal callers.
       if (ts.sdpInvoiced) return false;
-      if (toBusinessId && ts.businessId !== toBusinessId) return false;
-      if (periodStart && ts.periodEnd && ts.periodEnd < periodStart) return false;
-      if (periodEnd && ts.periodStart && ts.periodStart > periodEnd) return false;
+      // Must be a contract whose EMPLOYING business is the selected one — that's
+      // what the server enforces on submit. Falling back to ts.businessId keeps
+      // older timesheets without contract enrichment working.
+      const employingBizId = ts.contract?.businessId ?? ts.businessId;
+      if (toBusinessId && employingBizId !== toBusinessId) return false;
+      // Only show timesheets whose contract has a usable rate so we don't bait
+      // the operator into selecting rows that will compute to 0.
+      const rate = parseFloat(ts.contract?.rate ?? '0') || 0;
+      if (rate <= 0) return false;
+      // Date range filtering — string compare works because periodStart/periodEnd
+      // are ISO strings on the wire.
+      if (periodStart && ts.periodEnd && String(ts.periodEnd).slice(0, 10) < periodStart) return false;
+      if (periodEnd && ts.periodStart && String(ts.periodStart).slice(0, 10) > periodEnd) return false;
       return true;
     });
   }, [allTimesheets, toBusinessId, periodStart, periodEnd]);
@@ -105,13 +155,24 @@ export function CreateConsolidatedInvoiceModal({ onClose, onSuccess }: Props) {
     selectedTimesheetIds.has(ts.id)
   );
 
-  const subtotal = useMemo(() => {
-    return selectedTimesheets.reduce((sum: number, ts: any) => {
-      const hours = parseFloat(ts.totalHours || ts.regularHours || 0);
-      const rate = parseFloat(ts.payRate || 0);
-      return sum + hours * rate;
-    }, 0);
-  }, [selectedTimesheets]);
+  // Subtotal = sum of computeTimesheetLine().amount across selected rows.
+  // Each line uses the contract's rate + the timesheet's entries (days or
+  // hours depending on contract.rateType) — same logic as the server.
+  const subtotal = useMemo(
+    () => selectedTimesheets.reduce((sum: number, ts: any) => sum + computeTimesheetLine(ts).amount, 0),
+    [selectedTimesheets],
+  );
+
+  // Tax — applied only when the user enters a rate (no country fallback,
+  // matches the project's existing rule on the Edit modal + server side).
+  const taxAmount = useMemo(() => {
+    if (!gstVatRate || gstVatRate.trim() === '') return 0;
+    const parsed = parseFloat(gstVatRate);
+    if (isNaN(parsed) || parsed <= 0) return 0;
+    return (subtotal * parsed) / 100;
+  }, [gstVatRate, subtotal]);
+
+  const totalAmount = subtotal + taxAmount;
 
   const selectedPO = openPOs.find((po: any) => po.id === purchaseOrderId);
 
@@ -125,6 +186,10 @@ export function CreateConsolidatedInvoiceModal({ onClose, onSuccess }: Props) {
         invoiceDate,
         dueDate,
         purchaseOrderId: purchaseOrderId === "__none__" ? null : purchaseOrderId,
+        // Empty rate → server applies no tax. Server re-validates the rate
+        // and recomputes amount; we just pass intent.
+        gstVatRate: gstVatRate && gstVatRate.trim() !== '' ? gstVatRate.trim() : undefined,
+        notes: notes && notes.trim() !== '' ? notes.trim() : undefined,
       };
       const res = await apiRequest("POST", "/api/sdp-invoices/consolidated", payload);
       if (!res.ok) {
@@ -271,6 +336,29 @@ export function CreateConsolidatedInvoiceModal({ onClose, onSuccess }: Props) {
                 <label className="text-sm font-medium">Period End (optional)</label>
                 <Input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
               </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">
+                  GST/VAT Rate (%) <span className="text-xs text-muted-foreground">— leave empty for no tax</span>
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="0.00"
+                  value={gstVatRate}
+                  onChange={(e) => setGstVatRate(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1.5 col-span-2">
+                <label className="text-sm font-medium">Notes (optional)</label>
+                <Input
+                  placeholder="Internal note shown on the invoice…"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                />
+              </div>
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
@@ -325,15 +413,15 @@ export function CreateConsolidatedInvoiceModal({ onClose, onSuccess }: Props) {
                       </TableHead>
                       <TableHead>Worker</TableHead>
                       <TableHead>Period</TableHead>
-                      <TableHead>Hours</TableHead>
+                      <TableHead>Qty</TableHead>
+                      <TableHead>Rate</TableHead>
                       <TableHead className="text-right">Amount ({currency})</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {eligibleTimesheets.map((ts: any) => {
-                      const hours = parseFloat(ts.totalHours || ts.regularHours || 0);
-                      const rate = parseFloat(ts.payRate || 0);
-                      const amount = hours * rate;
+                      const { qty, rate, currency: lineCurrency, rateType, amount } = computeTimesheetLine(ts);
+                      const unit = rateType === 'daily' ? 'd' : 'h';
                       return (
                         <TableRow key={ts.id} className={selectedTimesheetIds.has(ts.id) ? "bg-primary/5" : ""}>
                           <TableCell>
@@ -342,13 +430,14 @@ export function CreateConsolidatedInvoiceModal({ onClose, onSuccess }: Props) {
                               onCheckedChange={() => toggleOne(ts.id)}
                             />
                           </TableCell>
-                          <TableCell className="font-medium text-sm">{ts.workerName || "Unknown"}</TableCell>
+                          <TableCell className="font-medium text-sm">{workerNameOf(ts)}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {ts.periodStart ? format(new Date(ts.periodStart), "d MMM") : ""}
                             {ts.periodEnd ? ` – ${format(new Date(ts.periodEnd), "d MMM yyyy")}` : ""}
                           </TableCell>
-                          <TableCell className="text-sm">{hours.toFixed(1)}h</TableCell>
-                          <TableCell className="text-right text-sm">{amount.toFixed(2)}</TableCell>
+                          <TableCell className="text-sm tabular-nums">{qty.toFixed(rateType === 'daily' ? 0 : 1)}{unit}</TableCell>
+                          <TableCell className="text-sm tabular-nums">{lineCurrency} {rate.toFixed(2)}/{unit === 'd' ? 'day' : 'hr'}</TableCell>
+                          <TableCell className="text-right text-sm tabular-nums">{amount.toFixed(2)}</TableCell>
                         </TableRow>
                       );
                     })}
@@ -399,26 +488,27 @@ export function CreateConsolidatedInvoiceModal({ onClose, onSuccess }: Props) {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Worker / Description</TableHead>
+                      <TableHead>Worker</TableHead>
                       <TableHead>Period</TableHead>
-                      <TableHead>Hours</TableHead>
+                      <TableHead>Qty</TableHead>
+                      <TableHead>Rate</TableHead>
                       <TableHead className="text-right">Amount ({currency})</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {selectedTimesheets.map((ts: any) => {
-                      const hours = parseFloat(ts.totalHours || ts.regularHours || 0);
-                      const rate = parseFloat(ts.payRate || 0);
-                      const amount = hours * rate;
+                      const { qty, rate, currency: lineCurrency, rateType, amount } = computeTimesheetLine(ts);
+                      const unit = rateType === 'daily' ? 'd' : 'h';
                       return (
                         <TableRow key={ts.id}>
-                          <TableCell className="font-medium text-sm">{ts.workerName || "Unknown"}</TableCell>
+                          <TableCell className="font-medium text-sm">{workerNameOf(ts)}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {ts.periodStart ? format(new Date(ts.periodStart), "d MMM") : ""}
                             {ts.periodEnd ? ` – ${format(new Date(ts.periodEnd), "d MMM yyyy")}` : ""}
                           </TableCell>
-                          <TableCell className="text-sm">{hours.toFixed(1)}h</TableCell>
-                          <TableCell className="text-right text-sm">{amount.toFixed(2)}</TableCell>
+                          <TableCell className="text-sm tabular-nums">{qty.toFixed(rateType === 'daily' ? 0 : 1)}{unit}</TableCell>
+                          <TableCell className="text-sm tabular-nums">{lineCurrency} {rate.toFixed(2)}/{unit === 'd' ? 'day' : 'hr'}</TableCell>
+                          <TableCell className="text-right text-sm tabular-nums">{amount.toFixed(2)}</TableCell>
                         </TableRow>
                       );
                     })}
@@ -430,12 +520,18 @@ export function CreateConsolidatedInvoiceModal({ onClose, onSuccess }: Props) {
             <div className="bg-muted/40 rounded-lg p-4 space-y-1.5">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Subtotal</span>
-                <span>{currency} {subtotal.toFixed(2)}</span>
+                <span className="tabular-nums">{currency} {subtotal.toFixed(2)}</span>
               </div>
+              {taxAmount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">GST/VAT ({parseFloat(gstVatRate).toFixed(2)}%)</span>
+                  <span className="tabular-nums">{currency} {taxAmount.toFixed(2)}</span>
+                </div>
+              )}
               <Separator className="my-1" />
               <div className="flex justify-between font-semibold">
                 <span>Total</span>
-                <span>{currency} {subtotal.toFixed(2)}</span>
+                <span className="tabular-nums">{currency} {totalAmount.toFixed(2)}</span>
               </div>
             </div>
 
