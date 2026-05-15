@@ -644,7 +644,9 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
                           type="number"
                           placeholder="Qty"
                           step="0.01"
-                          value={item.quantity}
+                          // Show empty for zero so the user types from a blank field
+                          // instead of appending after a placeholder "0" → "012".
+                          value={item.quantity === 0 ? '' : item.quantity}
                           onChange={(e) => updateLineItem(item.id, 'quantity', e.target.value)}
                           data-testid={`input-line-item-quantity-${index}`}
                         />
@@ -654,7 +656,7 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
                           type="number"
                           placeholder="Unit Price"
                           step="0.01"
-                          value={item.unitPrice}
+                          value={item.unitPrice === 0 ? '' : item.unitPrice}
                           onChange={(e) => updateLineItem(item.id, 'unitPrice', e.target.value)}
                           data-testid={`input-line-item-unit-price-${index}`}
                         />

@@ -7972,7 +7972,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
               if (w) worker = { id: w.id, firstName: w.firstName, lastName: w.lastName, email: w.email };
             } catch {}
           }
-          return { ...inv, lineItems, contract, timesheet, worker };
+          // Resolve the raising business for business_to_client invoices so
+          // host clients see "Raised By: {Business Name}" on the card. The
+          // base join only returns the toBusiness, not fromBusiness.
+          let fromBusiness = null;
+          if ((inv as any).fromBusinessId) {
+            try {
+              const fb: any = await storage.getBusinessById((inv as any).fromBusinessId);
+              if (fb) fromBusiness = { id: fb.id, name: fb.name };
+            } catch {}
+          }
+          return { ...inv, lineItems, contract, timesheet, worker, fromBusiness };
         })
       );
 
@@ -8754,20 +8764,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Extract line items from updates (if present)
       const { lineItems, ...invoiceUpdates } = updates;
       
-      // Convert date strings to Date objects if present
+      // Coerce date fields. Three states a timestamp column may receive:
+      //   - non-empty string → Date object (parsed)
+      //   - empty string / null → null (clear the column)
+      //   - already a Date or missing → unchanged
+      // Without the empty-string handling drizzle crashes with
+      // `value.toISOString is not a function` because "" is truthy in PG-driver
+      // territory but doesn't implement Date.
       const processedUpdates: any = { ...invoiceUpdates };
-      if (processedUpdates.invoiceDate && typeof processedUpdates.invoiceDate === 'string') {
-        processedUpdates.invoiceDate = new Date(processedUpdates.invoiceDate);
-      }
-      if (processedUpdates.dueDate && typeof processedUpdates.dueDate === 'string') {
-        processedUpdates.dueDate = new Date(processedUpdates.dueDate);
-      }
-      if (processedUpdates.periodStart && typeof processedUpdates.periodStart === 'string') {
-        processedUpdates.periodStart = new Date(processedUpdates.periodStart);
-      }
-      if (processedUpdates.periodEnd && typeof processedUpdates.periodEnd === 'string') {
-        processedUpdates.periodEnd = new Date(processedUpdates.periodEnd);
-      }
+      const coerceDate = (key: string) => {
+        if (!(key in processedUpdates)) return;
+        const v = processedUpdates[key];
+        if (v === null || v === undefined || v === '') {
+          processedUpdates[key] = null;
+        } else if (typeof v === 'string') {
+          const d = new Date(v);
+          processedUpdates[key] = isNaN(d.getTime()) ? null : d;
+        }
+      };
+      ['invoiceDate', 'dueDate', 'periodStart', 'periodEnd'].forEach(coerceDate);
       
       // Update the invoice
       const updatedInvoice = await storage.updateSdpInvoice(id, processedUpdates);

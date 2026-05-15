@@ -12,6 +12,7 @@ import { usePagination } from "@/hooks/usePagination";
 import { apiRequest } from "@/lib/queryClient";
 import { CreateInvoiceModal } from "@/components/modals/create-invoice-modal";
 import { SdpInvoicePaymentModal } from "@/components/modals/sdp-invoice-payment-modal";
+import { InvoiceDetailsModal } from "@/components/modals/invoice-details-modal";
 import { useAuth } from "@/hooks/useAuth";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -103,6 +104,21 @@ function getContractLabel(invoice: any): string | null {
   );
 }
 
+// Older line-item descriptions stored a raw `Date.toString()` chunk
+// ("Fri May 15 2026 00:00:00 GMT+0000 (Coordinated Universal Time)"). Scrub
+// those to `YYYY-MM-DD` at render time so the card stays readable.
+function formatLineItemDescription(description: string | null | undefined): string {
+  if (!description) return '';
+  return description.replace(
+    /([A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{4}) \d{2}:\d{2}:\d{2} GMT[+-]\d{4} \([^)]*\)/g,
+    (_match, head) => {
+      const d = new Date(head);
+      if (isNaN(d.getTime())) return head;
+      return d.toISOString().slice(0, 10);
+    },
+  );
+}
+
 function formatPeriod(start: string | Date, end: string | Date): string {
   const fmt = (d: string | Date) => new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
   return `${fmt(start)} – ${fmt(end)}`;
@@ -187,6 +203,7 @@ export default function Invoices() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedInvoiceForPayment, setSelectedInvoiceForPayment] = useState<SdpInvoice | null>(null);
+  const [selectedInvoiceForDetails, setSelectedInvoiceForDetails] = useState<any | null>(null);
   const [activeTab, setActiveTab] = useState("contractor");
   const [contractorViewMode, setContractorViewMode] = useState<'card' | 'list'>('card');
   const [contractorSortBy, setContractorSortBy] = useState<'date' | 'invoice_number' | 'contractor' | 'amount' | 'status'>('date');
@@ -972,7 +989,12 @@ export default function Invoices() {
                         const StatusIcon = statusIcons[invoice.status as keyof typeof statusIcons] || FileText;
                         
                         return (
-                          <Card key={invoice.id} className="hover:shadow-md transition-shadow" data-testid={`sdp-invoice-${invoice.id}`}>
+                          <Card
+                            key={invoice.id}
+                            className="hover:shadow-md hover:border-primary/30 transition-all cursor-pointer"
+                            data-testid={`sdp-invoice-${invoice.id}`}
+                            onClick={() => setSelectedInvoiceForDetails(invoice)}
+                          >
                             <CardHeader className="pb-3">
                               <div className="flex items-center justify-between">
                                 <CardTitle className="text-lg">{invoice.invoiceNumber}</CardTitle>
@@ -989,35 +1011,46 @@ export default function Invoices() {
                                 source={((invoice as any).invoiceCategory as InvoiceSource) || 'sdp_services'}
                               />
                               <div className="space-y-2">
-                                {(invoice as any).worker && (
-                                  <div className="flex justify-between text-sm">
-                                    <span className="text-secondary-600">Worker:</span>
-                                    <span className="font-medium truncate max-w-[60%] text-right">{(invoice as any).worker.firstName} {(invoice as any).worker.lastName}</span>
-                                  </div>
-                                )}
-                                {(invoice as any).contract?.jobTitle && (
-                                  <div className="flex justify-between text-sm">
-                                    <span className="text-secondary-600">Role:</span>
-                                    <span className="truncate max-w-[60%] text-right">{(invoice as any).contract.jobTitle}</span>
-                                  </div>
-                                )}
-                                {(invoice as any).timesheet && (
-                                  <>
-                                    <div className="flex justify-between text-sm">
-                                      <span className="text-secondary-600">Period:</span>
-                                      <span>{formatDate((invoice as any).timesheet.periodStart)} – {formatDate((invoice as any).timesheet.periodEnd)}</span>
-                                    </div>
-                                    <div className="flex justify-between text-sm">
-                                      <span className="text-secondary-600">Time Logged:</span>
-                                      <span>
+                                {/* Always-rendered "core info" rows. Empty fields show "—"
+                                    so every card has the same visual footprint, matching
+                                    the admin /sdp-invoices layout. */}
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Worker:</span>
+                                  <span className="font-medium truncate max-w-[60%] text-right">
+                                    {(invoice as any).worker
+                                      ? `${(invoice as any).worker.firstName ?? ''} ${(invoice as any).worker.lastName ?? ''}`.trim() || '—'
+                                      : '—'}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Role:</span>
+                                  <span className="truncate max-w-[60%] text-right">
+                                    {(invoice as any).contract?.jobTitle || (invoice as any).contract?.contractName || '—'}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Period:</span>
+                                  <span>
+                                    {(invoice as any).timesheet
+                                      ? `${formatDate((invoice as any).timesheet.periodStart)} – ${formatDate((invoice as any).timesheet.periodEnd)}`
+                                      : ((invoice as any).periodStart && (invoice as any).periodEnd
+                                          ? `${formatDate((invoice as any).periodStart)} – ${formatDate((invoice as any).periodEnd)}`
+                                          : '—')}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-secondary-600">Time Logged:</span>
+                                  <span>
+                                    {(invoice as any).timesheet ? (
+                                      <>
                                         {parseFloat((invoice as any).timesheet.totalDays || '0') > 0
                                           ? `${parseFloat((invoice as any).timesheet.totalDays).toFixed(1)}d`
                                           : `${parseFloat((invoice as any).timesheet.totalHours || '0').toFixed(1)}h`}
                                         {(invoice as any).timesheet.entryCount ? ` · ${(invoice as any).timesheet.entryCount} entries` : ''}
-                                      </span>
-                                    </div>
-                                  </>
-                                )}
+                                      </>
+                                    ) : '—'}
+                                  </span>
+                                </div>
                                 {/*
                                   Display the rate frozen at invoice-creation time:
                                   - currency  → invoice.currency (snapshot column)
@@ -1066,9 +1099,21 @@ export default function Invoices() {
                                 </div>
 
                                 {(invoice as any).lineItems && (invoice as any).lineItems.length > 0 && (
-                                  <div className="flex justify-between text-sm">
-                                    <span className="text-secondary-600">Line Items:</span>
-                                    <span>{(invoice as any).lineItems.length}</span>
+                                  <div className="pt-2 border-t">
+                                    <div className="text-sm font-medium text-secondary-900 mb-2">Line Items:</div>
+                                    <div className="space-y-2">
+                                      {(invoice as any).lineItems.map((item: any, index: number) => (
+                                        <div key={item.id || index} className="text-xs space-y-1 bg-gray-50 p-2 rounded">
+                                          <div className="font-medium break-words" title={item.description}>
+                                            {formatLineItemDescription(item.description)}
+                                          </div>
+                                          <div className="flex justify-between text-secondary-600">
+                                            <span>{item.quantity} × {formatCurrency(String(item.unitPrice), invoice.currency)}</span>
+                                            <span className="font-medium text-secondary-900">{formatCurrency(String(item.amount), invoice.currency)}</span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
                                   </div>
                                 )}
 
@@ -1110,11 +1155,12 @@ export default function Invoices() {
                               </div>
 
                               {(invoice.status === 'issued' || invoice.status === 'overdue') && (
-                                <Button 
-                                  size="sm" 
+                                <Button
+                                  size="sm"
                                   className="w-full bg-green-600 hover:bg-green-700"
                                   data-testid={`button-pay-invoice-${invoice.id}`}
-                                  onClick={() => {
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     setSelectedInvoiceForPayment(invoice);
                                     setShowPaymentModal(true);
                                   }}
@@ -1312,7 +1358,12 @@ export default function Invoices() {
                             : `${parseFloat(invoice.timesheet.totalHours || '0').toFixed(1)}h`)
                         : null;
                       return (
-                        <Card key={invoice.id} className="hover:shadow-md transition-shadow" data-testid={`client-invoice-${invoice.id}`}>
+                        <Card
+                          key={invoice.id}
+                          className="hover:shadow-md hover:border-primary/30 transition-all cursor-pointer"
+                          data-testid={`client-invoice-${invoice.id}`}
+                          onClick={() => setSelectedInvoiceForDetails(invoice)}
+                        >
                           <CardHeader className="pb-3">
                             <div className="flex items-center justify-between">
                               <CardTitle className="text-lg">{invoice.invoiceNumber}</CardTitle>
@@ -1526,6 +1577,14 @@ export default function Invoices() {
               }}
             />
           )}
+
+          {/* Read-only invoice details — shared modal with the admin /sdp-invoices page.
+              Mounted unconditionally; renders nothing when `invoice` is null. */}
+          <InvoiceDetailsModal
+            invoice={selectedInvoiceForDetails}
+            open={!!selectedInvoiceForDetails}
+            onOpenChange={(open) => { if (!open) setSelectedInvoiceForDetails(null); }}
+          />
         </div>
   );
 }
