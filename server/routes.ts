@@ -130,9 +130,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Use the working test authentication system
   const { testLogin, testLogout, getTestUser } = await import('./testAuth');
   const { jwtAuthMiddleware, requireSdpRole } = await import('./jwtAuth');
-  
+
   // Use JWT middleware as default auth middleware
   const authMiddleware = jwtAuthMiddleware;
+
+  // ── Local-only object storage fallback ─────────────────────────────────
+  // Active when USE_LOCAL_OBJECT_STORAGE=true. Mirrors the Replit sidecar
+  // signed-URL flow but writes to ./uploads/ on disk so file uploads work
+  // outside the Replit runtime (where the sidecar at 127.0.0.1:1106 isn't
+  // running). Skip in production.
+  if (process.env.USE_LOCAL_OBJECT_STORAGE === 'true') {
+    const { default: expressLib } = await import('express');
+    const { promises: fsp, createReadStream, existsSync, mkdirSync, statSync } = await import('fs');
+    const pathLib = await import('path');
+    const UPLOAD_ROOT = pathLib.resolve(process.cwd(), 'uploads');
+    if (!existsSync(UPLOAD_ROOT)) mkdirSync(UPLOAD_ROOT, { recursive: true });
+
+    const buildLocalPath = (req: any) => {
+      // /api/dev-uploads/<bucket>/<...objectName>
+      const rel = (req.params[0] || '').replace(/\.\.+/g, ''); // prevent ../ escapes
+      return pathLib.join(UPLOAD_ROOT, rel);
+    };
+
+    // PUT — raw body, write to disk. Accept any content type up to 25MB.
+    app.put(
+      '/api/dev-uploads/*',
+      expressLib.raw({ type: '*/*', limit: '25mb' }),
+      async (req: any, res) => {
+        try {
+          const filePath = buildLocalPath(req);
+          await fsp.mkdir(pathLib.dirname(filePath), { recursive: true });
+          await fsp.writeFile(filePath, req.body);
+          return res.status(200).json({ ok: true });
+        } catch (err: any) {
+          console.error('[dev-uploads] write failed:', err);
+          return res.status(500).json({ message: 'Failed to save upload' });
+        }
+      },
+    );
+
+    // GET — stream the file back.
+    app.get('/api/dev-uploads/*', async (req: any, res) => {
+      try {
+        const filePath = buildLocalPath(req);
+        if (!existsSync(filePath)) {
+          return res.status(404).json({ message: 'Not found' });
+        }
+        const stat = statSync(filePath);
+        res.setHeader('Content-Length', String(stat.size));
+        createReadStream(filePath).pipe(res);
+      } catch (err: any) {
+        console.error('[dev-uploads] read failed:', err);
+        return res.status(500).json({ message: 'Failed to read upload' });
+      }
+    });
+
+    console.log(`[dev-uploads] Local object-storage fallback enabled; files at ${UPLOAD_ROOT}`);
+  }
 
   // Initialize Stripe for payment processing (referenced from Stripe integration blueprint)
   let stripe: Stripe | null = null;
@@ -394,6 +448,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Verify 2FA code during login (rate limited - most critical endpoint)
   app.post('/api/2fa/verify-login', twoFARateLimiter(5, 30000), async (req, res) => {
+     // Debug log
     try {
       const { userId, code, useBackupCode, trustThisDevice, pendingToken } = req.body;
 
@@ -1524,28 +1579,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Check if user has 2FA enabled (especially for SDP users who must have 2FA)
-      const { getUserTwoFactorAuth } = await import('./twoFactorAuth');
+      const { getUserTwoFactorAuth, generateDeviceFingerprint, isDeviceTrusted } = await import('./twoFactorAuth');
       const twoFactorAuth = await getUserTwoFactorAuth(user.id);
-      
+
       if (twoFactorAuth && twoFactorAuth.isEnabled) {
-        // User has 2FA enabled - create pending session and require 2FA verification
-        const { createPending2FASession } = await import('./jwtAuth');
-        const pendingToken = createPending2FASession({
-          id: user.id,
-          email: user.email ?? '',
-          userType: user.userType ?? '',
-          name: `${user.firstName} ${user.lastName}`,
-          sdpRole: user.sdpRole,
-          accessibleCountries: user.accessibleCountries ?? undefined,
-          accessibleBusinessIds: user.accessibleBusinessIds ?? undefined,
-        });
-        
-        return res.json({
-          message: "2FA verification required",
-          requiresTwoFactor: true,
-          userId: user.id,
-          pendingToken
-        });
+        // Skip the 2FA prompt entirely when the caller is on a previously
+        // trusted device. `trusted_devices` rows are written during
+        // /api/2fa/verify-login when "Trust this device" is checked; before
+        // this check they were stored but never honoured, so users were
+        // re-prompted for a code on every login.
+        const fingerprint = generateDeviceFingerprint(
+          req.ip || '',
+          req.get('user-agent') || ''
+        );
+        console.log(`2FA check for user ${user.id} - Generated fingerprint: ${fingerprint}`);
+        const trusted = await isDeviceTrusted(user.id, fingerprint);
+        console.log(`2FA check for user ${user.id} - Device trusted: ${trusted}`);
+
+        if (!trusted) {
+          // User has 2FA enabled and this device is NOT trusted — create pending
+          // session and require 2FA verification.
+          const { createPending2FASession } = await import('./jwtAuth');
+          const pendingToken = createPending2FASession({
+            id: user.id,
+            email: user.email ?? '',
+            userType: user.userType ?? '',
+            name: `${user.firstName} ${user.lastName}`,
+            sdpRole: user.sdpRole,
+            accessibleCountries: user.accessibleCountries ?? undefined,
+            accessibleBusinessIds: user.accessibleBusinessIds ?? undefined,
+          });
+
+          return res.json({
+            message: "2FA verification required",
+            requiresTwoFactor: true,
+            userId: user.id,
+            pendingToken
+          });
+        }
+        // Trusted device — fall through and issue the full auth token immediately.
       }
 
       // No 2FA - create auth token (JWT-based)
@@ -2018,17 +2090,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Admin users can only invite agents" });
       }
       
-      // Check if user with this email already exists
+      // Check if user with this email already exists. This endpoint is gated
+      // to SDP admins so we surface the conflict directly rather than the
+      // enumeration-safe silent success used on public signup routes.
       const existingUser = await storage.getUserByEmail(data.email);
       if (existingUser) {
-        // Don't reveal that user already exists - use generic response to prevent enumeration
-        return res.status(200).json({ message: "Invitation processed. If the email is valid and available, an invitation will be sent." });
+        return res.status(409).json({ message: `A user with the email ${data.email} already exists.` });
       }
-      
+
       // Check if there's already a pending invite for this email
       const existingInvite = await storage.getSdpUserInviteByEmail(data.email);
       if (existingInvite && !existingInvite.acceptedAt) {
-        return res.status(400).json({ message: "Invitation already sent for this email" });
+        return res.status(409).json({ message: `An invitation has already been sent to ${data.email}.` });
       }
       
       const token = generateInviteToken();
@@ -2360,7 +2433,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Business Users Overview - Get all business users grouped by country
   app.get('/api/business-users-overview', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req: any, res) => {
     try {
-      const businessUsersByCountry = await storage.getBusinessUsersOverview();
+      // Optional ?country=<countryId> narrows the result server-side so the
+      // client receives only users associated with that country.
+      const countryId = req.query.country ? String(req.query.country) : undefined;
+      const businessUsersByCountry = await storage.getBusinessUsersOverview(countryId);
       res.json(businessUsersByCountry);
     } catch (error: any) {
       console.error('Error fetching business users overview:', error);
@@ -4364,29 +4440,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allTimesheets = await storage.getAllTimesheets();
       const approvedTimesheetsData = allTimesheets.filter((ts: any) => ts.status === 'approved');
       
-      const approvedTimesheets = approvedTimesheetsData.map((ts: any) => {
+      const approvedTimesheets = await Promise.all(approvedTimesheetsData.map(async (ts: any) => {
         const worker = workers.find((w: any) => w.id === ts.workerId);
         const business = businesses.find((b: any) => b.id === ts.businessId);
         const country = countries.find((c: any) => c.id === worker?.countryId);
 
-        // Authoritative source: sum `hoursWorked` from entries. Daily/annual contracts
-        // legitimately have no hours and contribute 0, which is what we want for an
-        // "Approved Hours" tile.
+        // Resolve the contract so we can derive the tracking unit consistently
+        // (matches the rule used by the timesheets module + invoice math):
+        //   rateType=annual + isForClient → use customerBillingRateType
+        //   otherwise → use rateType
+        const contract = ts.contractId ? await storage.getContractById(ts.contractId) : null;
+        const trackingUnit = getTrackingUnit(contract as any);
+
+        // Sum hours + days from entries directly (the persisted totalHours /
+        // totalDays columns can be stale on daily/annual contracts).
         const computedHours = (ts.entries || []).reduce(
           (s: number, e: any) => s + (parseFloat(e.hoursWorked ?? '0') || 0),
           0,
         );
+        const summedDays = (ts.entries || []).reduce(
+          (s: number, e: any) => s + (parseFloat(e.daysWorked ?? '0') || 0),
+          0,
+        );
+        // Worker may log hours instead of explicit days — count any entry with
+        // activity as one day when daysWorked is 0.
+        const presentDays = (ts.entries || []).filter(
+          (e: any) =>
+            (parseFloat(e.hoursWorked ?? '0') || 0) > 0 ||
+            (parseFloat(e.daysWorked ?? '0') || 0) > 0 ||
+            e?.isPresent,
+        ).length;
+        const computedDays = summedDays || presentDays;
 
         return {
           id: ts.id,
           workerName: worker ? `${worker.firstName} ${worker.lastName}` : 'Unknown Worker',
           businessName: business?.name || 'Unknown Business',
           countryName: country?.name || 'Unknown Country',
+          rateType: contract?.rateType ?? null,
+          isForClient: !!contract?.isForClient,
+          customerBillingRateType: contract?.customerBillingRateType ?? null,
+          trackingUnit, // 'hourly' | 'daily' | 'annual'
           totalHours: computedHours,
-          amount: ts.totalAmount || 0,
+          totalDays: computedDays,
           approvedDate: ts.approvedAt?.toISOString() || ts.updatedAt?.toISOString() || new Date().toISOString(),
         };
-      });
+      }));
 
       // 4. Get Real Payments to Process (Approved Invoices and Payslips)
       const allInvoices = await storage.getAllInvoices();
@@ -7379,25 +7478,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user?.id;
       const userType = req.user?.userType;
-      
+
+      // Coerce date fields. The client sends "YYYY-MM-DD" strings from the
+      // <input type="date">; drizzle's timestamp adapter calls .toISOString()
+      // on the value and crashes if it's still a string.
+      const body = { ...req.body };
+      if (typeof body.startDate === 'string') body.startDate = new Date(body.startDate);
+      if (typeof body.endDate === 'string') body.endDate = new Date(body.endDate);
+
       if (userType === 'worker') {
         // Workers can create their own leave requests
         const worker = await storage.getWorkerByUserId(userId);
         if (!worker) {
           return res.status(404).json({ message: "Worker profile not found" });
         }
-        
+
         const leaveRequestData = {
-          ...req.body,
+          ...body,
           workerId: worker.id,
           businessId: worker.businessId,
         };
-        
+
         const leaveRequest = await storage.createLeaveRequest(leaveRequestData);
         res.json(leaveRequest);
       } else {
         // Business users and SDP internal
-        const leaveRequest = await storage.createLeaveRequest(req.body);
+        const leaveRequest = await storage.createLeaveRequest(body);
         res.json(leaveRequest);
       }
     } catch (error: any) {
@@ -7411,12 +7517,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const { status, rejectionReason } = req.body;
       const userId = req.user?.id;
-      
+
       await storage.updateLeaveRequestStatus(id, status, userId, rejectionReason);
       res.json({ message: "Leave request status updated successfully" });
     } catch (error: any) {
       console.error("Error updating leave request status:", error);
       res.status(400).json({ message: "Failed to update leave request status" });
+    }
+  });
+
+  // Edit a leave request (only allowed while it's in `pending` status).
+  // - workers can edit their own requests
+  // - business users can edit requests for their workers
+  // - SDP internal can edit any
+  app.patch('/api/leave-requests/:id', authMiddleware, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      const userType = req.user?.userType;
+
+      const existing = await storage.getLeaveRequestById(id);
+      if (!existing) return res.status(404).json({ message: "Leave request not found" });
+      if (existing.status !== 'pending') {
+        return res.status(400).json({ message: "Only pending leave requests can be edited" });
+      }
+
+      // Authorization
+      if (userType === 'worker') {
+        const worker = await storage.getWorkerByUserId(userId);
+        if (!worker || existing.workerId !== worker.id) {
+          return res.status(403).json({ message: "Unauthorized to edit this leave request" });
+        }
+      } else if (userType === 'business_user') {
+        const business = await storage.getBusinessByOwnerId(userId);
+        if (!business || existing.businessId !== business.id) {
+          return res.status(403).json({ message: "Unauthorized to edit this leave request" });
+        }
+      } else if (userType !== 'sdp_internal') {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      // Whitelist editable fields + coerce date strings to Date objects (drizzle's
+      // timestamp adapter crashes on raw strings).
+      const updates: any = {};
+      if (req.body.leaveType !== undefined) updates.leaveType = req.body.leaveType;
+      if (req.body.reason !== undefined) updates.reason = req.body.reason;
+      if (req.body.totalDays !== undefined) updates.totalDays = String(req.body.totalDays);
+      if (req.body.startDate !== undefined) {
+        updates.startDate = typeof req.body.startDate === 'string' ? new Date(req.body.startDate) : req.body.startDate;
+      }
+      if (req.body.endDate !== undefined) {
+        updates.endDate = typeof req.body.endDate === 'string' ? new Date(req.body.endDate) : req.body.endDate;
+      }
+
+      const updated = await storage.updateLeaveRequest(id, updates);
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Error editing leave request:", error);
+      res.status(400).json({ message: "Failed to edit leave request" });
     }
   });
 
@@ -7455,50 +7613,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/leave-requests', authMiddleware, async (req: any, res) => {
-    try {
-      const data = insertLeaveRequestSchema.parse(req.body);
-      const leaveRequest = await storage.createLeaveRequest(data);
-      res.json(leaveRequest);
-    } catch (error: any) {
-      console.error("Error creating leave request:", error);
-      res.status(400).json({ message: "Failed to create leave request" });
-    }
-  });
-
-  app.patch('/api/leave-requests/:id/status', authMiddleware, async (req: any, res) => {
-    try {
-      const { id } = req.params;
-      const { status, rejectionReason } = req.body;
-      const userId = req.user?.id;
-      
-      await storage.updateLeaveRequestStatus(id, status, userId, rejectionReason);
-      res.json({ message: "Leave request status updated successfully" });
-    } catch (error: any) {
-      console.error("Error updating leave request status:", error);
-      res.status(400).json({ message: "Failed to update leave request status" });
-    }
-  });
-
   // Payslip routes for SDP internal users
   app.get('/api/payslips', authMiddleware, async (req: any, res) => {
     try {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
-      
+
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
-      
-      // Check if user is SDP internal user with country access
-      if (user.userType !== 'sdp_internal' || !user.accessibleCountries || user.accessibleCountries.length === 0) {
+
+      // Gate by userType only. Super-admin / admin see everything; agents are
+      // narrowed to their `accessibleCountries`. (Previously the gate ALSO
+      // required `accessibleCountries.length > 0`, which 403'd super-admins
+      // whose list is empty by design.)
+      if (user.userType !== 'sdp_internal') {
         return res.status(403).json({ message: "Access denied. SDP internal users only." });
       }
-      
-      const payslips = await storage.getPayslipsByCountries(user.accessibleCountries);
+
+      const isAgent = user.sdpRole === 'sdp_agent';
+      const countryIds = isAgent ? (user.accessibleCountries || []) : [];
+
+      // Agent with no country access still gets a 403 — otherwise they'd see
+      // an unrestricted list which contradicts their scoping.
+      if (isAgent && countryIds.length === 0) {
+        return res.status(403).json({ message: "No accessible countries assigned to this agent." });
+      }
+
+      const payslips = await storage.getPayslipsByCountries(countryIds);
       res.json(payslips);
     } catch (error: any) {
-      console.error("Error fetching payslips:", error);
+      console.error("Error fetching payslips:", error?.message ?? error);
       res.status(500).json({ message: "Failed to fetch payslips" });
     }
   });
@@ -7541,16 +7686,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied. SDP internal users only." });
       }
       
+      // The client sends `documentURL` (UI naming); the DB column is
+      // `payslipFileUrl`. Map it before Zod-parsing so the upload URL
+      // actually persists. Without this, the field is silently dropped
+      // and the row saves with `payslipFileUrl = null`.
+      const { documentURL, ...rest } = req.body || {};
       const data = insertPayslipSchema.parse({
-        ...req.body,
+        ...rest,
+        ...(documentURL ? { payslipFileUrl: documentURL } : {}),
         uploadedBy: userId,
       });
-      
+
       const payslip = await storage.createPayslip(data);
       res.json(payslip);
     } catch (error: any) {
-      console.error("Error creating payslip:", error);
-      res.status(400).json({ message: "Failed to create payslip" });
+      // Defensive logging: Node v25's util.inspect crashes on certain error
+      // shapes (e.g. some Zod / drizzle wrappers) → take down the whole
+      // process. Stringify the bits we actually care about so the handler
+      // can keep running and the client still gets a 400 back.
+      const safe = {
+        name: error?.name,
+        message: error?.message,
+        code: error?.code,
+        issues: error?.issues, // Zod
+      };
+      try {
+        console.error("Error creating payslip:", JSON.stringify(safe));
+      } catch {
+        console.error("Error creating payslip (unloggable):", error?.message);
+      }
+      // Surface the validation message so the toast tells the user WHY.
+      const message = error?.issues
+        ? `Validation error: ${error.issues.map((i: any) => `${i.path?.join('.')}: ${i.message}`).join('; ')}`
+        : (error?.message || 'Failed to create payslip');
+      res.status(400).json({ message });
     }
   });
 

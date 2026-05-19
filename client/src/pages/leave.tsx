@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,6 +9,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DataPagination } from "@/components/ui/data-pagination";
+import { usePagination } from "@/hooks/usePagination";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { LeaveRequestDetailsModal } from "@/components/modals/leave-request-details-modal";
 import {
   Form,
   FormControl,
@@ -29,7 +33,7 @@ import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { Calendar as CalendarIcon, Plus, Clock, Check, X, AlertCircle } from "lucide-react";
+import { Calendar as CalendarIcon, Plus, Clock, Check, X, AlertCircle, Search, Plane, CalendarDays, Hourglass } from "lucide-react";
 import { PageLoader } from "@/components/ui/loader";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -43,6 +47,11 @@ type LeaveRequestData = {
 
 export default function LeavePage() {
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedRequest, setSelectedRequest] = useState<any | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -71,18 +80,22 @@ export default function LeavePage() {
   const createLeaveRequestMutation = useMutation({
     mutationFn: async (data: LeaveRequestData) => {
       const totalDays = Math.ceil((data.endDate.getTime() - data.startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-      return await apiRequest('POST', '/api/leave-requests', {
-        ...data,
-        totalDays,
-      });
+      const payload = { ...data, totalDays };
+      // Same dialog handles both Create and Edit — endpoint switches on
+      // whether `editingId` is set. Server enforces "pending status only".
+      if (editingId) {
+        return await apiRequest('PATCH', `/api/leave-requests/${editingId}`, payload);
+      }
+      return await apiRequest('POST', '/api/leave-requests', payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/leave-requests'] });
       setShowForm(false);
+      setEditingId(null);
       form.reset();
       toast({
-        title: "Success",
-        description: "Leave request submitted successfully.",
+        title: editingId ? "Leave request updated" : "Leave request submitted",
+        description: editingId ? "Your changes have been saved." : "Leave request submitted successfully.",
       });
     },
     onError: (error: any) => {
@@ -94,6 +107,72 @@ export default function LeavePage() {
     },
   });
 
+  // Open the dialog pre-filled with an existing request for editing.
+  const openEditDialog = (request: any) => {
+    setEditingId(request.id);
+    form.reset({
+      leaveType: request.leaveType,
+      startDate: new Date(request.startDate),
+      endDate: new Date(request.endDate),
+      reason: request.reason || '',
+    });
+    setShowForm(true);
+  };
+
+  // ── Derived data ──────────────────────────────────────────────────────────
+  // IMPORTANT: hooks must run on every render. Compute these BEFORE any
+  // conditional `return`, otherwise React throws "Rendered more hooks than
+  // during the previous render" when the early-return branch flips.
+  const today = new Date();
+  const startOfYear = new Date(today.getFullYear(), 0, 1);
+
+  // Today's active leave — approved leave whose period contains today.
+  const activeToday = useMemo(() => {
+    return leaveRequests.find((r: any) => {
+      if (r.status !== 'approved') return false;
+      const s = new Date(r.startDate);
+      const e = new Date(r.endDate);
+      return s <= today && e >= today;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leaveRequests]);
+
+  const stats = useMemo(() => {
+    let pending = 0;
+    let approvedThisYear = 0;
+    let daysUsedThisYear = 0;
+    for (const r of leaveRequests) {
+      const s = new Date(r.startDate);
+      if (r.status === 'pending') pending += 1;
+      if (r.status === 'approved' && s >= startOfYear) {
+        approvedThisYear += 1;
+        daysUsedThisYear += parseFloat(r.totalDays || '0') || 0;
+      }
+    }
+    return { pending, approvedThisYear, daysUsedThisYear };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leaveRequests]);
+
+  // Filter + search applied client-side (volume is per-worker; paginate after).
+  const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return leaveRequests.filter((r: any) => {
+      if (statusFilter !== 'all' && r.status !== statusFilter) return false;
+      if (typeFilter !== 'all' && r.leaveType !== typeFilter) return false;
+      if (q && !(r.reason || '').toLowerCase().includes(q) && !(r.leaveType || '').toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [leaveRequests, statusFilter, typeFilter, searchQuery]);
+
+  const {
+    pageItems,
+    page,
+    setPage,
+    pageSize,
+    totalPages,
+    totalItems,
+  } = usePagination(filtered, { pageSize: 9 });
+
   if (isLoading || profileLoading) {
     return <PageLoader label="Loading leave requests" />;
   }
@@ -102,7 +181,7 @@ export default function LeavePage() {
     return null;
   }
 
-  const isEligibleForLeave = workerProfile?.workerType === 'employee' || 
+  const isEligibleForLeave = workerProfile?.workerType === 'employee' ||
     (workerProfile?.workerType === 'contractor' && workerProfile?.businessStructure === 'contractor_of_record');
 
   if (!isEligibleForLeave) {
@@ -149,11 +228,105 @@ export default function LeavePage() {
 
   return (
     <div className="p-6">
-      <div className="max-w-4xl mx-auto space-y-6">
-        
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-semibold">My Leave Requests</h2>
-          <Button 
+      <div className="max-w-6xl mx-auto space-y-6">
+
+        {/* Top callout — only when worker is currently on approved leave. */}
+        {activeToday && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-4 flex items-start gap-3">
+            <Plane className="h-5 w-5 text-emerald-600 mt-0.5 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-emerald-900">You're on {activeToday.leaveType.replace(/_/g, ' ')} leave today</p>
+              <p className="text-xs text-emerald-800 mt-0.5">
+                {format(new Date(activeToday.startDate), "PPP")} – {format(new Date(activeToday.endDate), "PPP")}
+                {' · '}{activeToday.totalDays} day{activeToday.totalDays !== 1 ? 's' : ''}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Stats — quick at-a-glance numbers */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-secondary-500">Total Requests</p>
+                  <p className="text-2xl font-semibold mt-1">{leaveRequests.length}</p>
+                </div>
+                <CalendarDays className="h-5 w-5 text-secondary-400" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-secondary-500">Pending</p>
+                  <p className="text-2xl font-semibold mt-1 text-amber-700">{stats.pending}</p>
+                </div>
+                <Hourglass className="h-5 w-5 text-amber-400" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-secondary-500">Approved (YTD)</p>
+                  <p className="text-2xl font-semibold mt-1 text-emerald-700">{stats.approvedThisYear}</p>
+                </div>
+                <Check className="h-5 w-5 text-emerald-500" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-secondary-500">Days Used (YTD)</p>
+                  <p className="text-2xl font-semibold mt-1">{stats.daysUsedThisYear}</p>
+                </div>
+                <CalendarIcon className="h-5 w-5 text-secondary-400" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Toolbar — search, filters, create */}
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative w-64">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search by reason or type…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 h-9 text-sm"
+              />
+            </div>
+            <Select value={statusFilter} onValueChange={(v: any) => setStatusFilter(v)}>
+              <SelectTrigger className="w-[150px] h-9 text-sm"><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="approved">Approved</SelectItem>
+                <SelectItem value="rejected">Rejected</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={typeFilter} onValueChange={setTypeFilter}>
+              <SelectTrigger className="w-[160px] h-9 text-sm"><SelectValue placeholder="Type" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Types</SelectItem>
+                <SelectItem value="annual">Annual</SelectItem>
+                <SelectItem value="sick">Sick</SelectItem>
+                <SelectItem value="personal">Personal</SelectItem>
+                <SelectItem value="parental">Parental</SelectItem>
+                <SelectItem value="compassionate">Compassionate</SelectItem>
+                <SelectItem value="unpaid">Unpaid</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Button
             onClick={() => setShowForm(true)}
             data-testid="button-new-leave-request"
           >
@@ -162,15 +335,24 @@ export default function LeavePage() {
           </Button>
         </div>
 
-        {showForm && (
-          <Card>
-            <CardHeader>
-              <CardTitle>New Leave Request</CardTitle>
-              <CardDescription>
-                Submit a new leave request for approval
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
+        <Dialog
+          open={showForm}
+          onOpenChange={(open) => {
+            setShowForm(open);
+            if (!open) {
+              setEditingId(null);
+              form.reset();
+            }
+          }}
+        >
+          <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>{editingId ? 'Edit Leave Request' : 'New Leave Request'}</DialogTitle>
+              <DialogDescription>
+                {editingId ? 'Update the details below — only pending requests can be edited.' : 'Submit a new leave request for approval'}
+              </DialogDescription>
+            </DialogHeader>
+            <div>
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -233,7 +415,6 @@ export default function LeavePage() {
                                 mode="single"
                                 selected={field.value}
                                 onSelect={field.onChange}
-                                disabled={(date) => date < new Date()}
                                 initialFocus
                               />
                             </PopoverContent>
@@ -317,14 +498,16 @@ export default function LeavePage() {
                       disabled={createLeaveRequestMutation.isPending}
                       data-testid="button-submit-leave"
                     >
-                      {createLeaveRequestMutation.isPending ? 'Submitting...' : 'Submit Request'}
+                      {createLeaveRequestMutation.isPending
+                        ? (editingId ? 'Saving…' : 'Submitting…')
+                        : (editingId ? 'Save Changes' : 'Submit Request')}
                     </Button>
                   </div>
                 </form>
               </Form>
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <div className="space-y-4">
           {requestsLoading ? (
@@ -345,9 +528,20 @@ export default function LeavePage() {
                 </div>
               </CardContent>
             </Card>
+          ) : filtered.length === 0 ? (
+            <Card>
+              <CardContent className="flex items-center justify-center py-10 text-center text-sm text-secondary-600">
+                No leave requests match the current filters.
+              </CardContent>
+            </Card>
           ) : (
-            leaveRequests.map((request: any) => (
-              <Card key={request.id} data-testid={`card-leave-request-${request.id}`}>
+            pageItems.map((request: any) => (
+              <Card
+                key={request.id}
+                className="hover:shadow-md hover:border-primary/40 transition-all cursor-pointer"
+                onClick={() => setSelectedRequest(request)}
+                data-testid={`card-leave-request-${request.id}`}
+              >
                 <CardContent className="pt-6">
                   <div className="flex items-center justify-between">
                     <div className="space-y-2">
@@ -375,13 +569,25 @@ export default function LeavePage() {
                         </div>
                       )}
                     </div>
-                    <div className="text-right text-sm text-gray-600">
-                      <div>Submitted: {format(new Date(request.submittedAt), "MMM dd, yyyy")}</div>
-                      {request.approvedAt && (
-                        <div>Approved: {format(new Date(request.approvedAt), "MMM dd, yyyy")}</div>
-                      )}
-                      {request.rejectedAt && (
-                        <div>Rejected: {format(new Date(request.rejectedAt), "MMM dd, yyyy")}</div>
+                    <div className="flex flex-col items-end gap-2">
+                      <div className="text-right text-sm text-gray-600">
+                        <div>Submitted: {format(new Date(request.submittedAt), "MMM dd, yyyy")}</div>
+                        {request.approvedAt && (
+                          <div>Approved: {format(new Date(request.approvedAt), "MMM dd, yyyy")}</div>
+                        )}
+                        {request.rejectedAt && (
+                          <div>Rejected: {format(new Date(request.rejectedAt), "MMM dd, yyyy")}</div>
+                        )}
+                      </div>
+                      {request.status === 'pending' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => { e.stopPropagation(); openEditDialog(request); }}
+                          data-testid={`button-edit-leave-${request.id}`}
+                        >
+                          Edit
+                        </Button>
                       )}
                     </div>
                   </div>
@@ -389,7 +595,24 @@ export default function LeavePage() {
               </Card>
             ))
           )}
+
+          {filtered.length > 0 && (
+            <DataPagination
+              page={page}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              label="leave requests"
+            />
+          )}
         </div>
+
+        <LeaveRequestDetailsModal
+          request={selectedRequest}
+          open={!!selectedRequest}
+          onOpenChange={(open) => { if (!open) setSelectedRequest(null); }}
+        />
       </div>
     </div>
   );

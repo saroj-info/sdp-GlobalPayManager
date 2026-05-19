@@ -135,7 +135,7 @@ export interface IStorage {
   
   // Business User Management
   getBusinessUsersByCountry(countryId?: string): Promise<any[]>;
-  getBusinessUsersOverview(): Promise<any[]>;
+  getBusinessUsersOverview(countryId?: string): Promise<any[]>;
   
   // SDP User Invitations
   createSdpUserInvite(invite: InsertSdpUserInviteType & { token: string; expiresAt: Date }): Promise<any>;
@@ -356,6 +356,8 @@ export interface IStorage {
   getLeaveRequestsByBusiness(businessId: string): Promise<(LeaveRequest & { worker: Worker })[]>;
   getAllLeaveRequests(): Promise<(LeaveRequest & { worker: Worker; business: Business })[]>;
   createLeaveRequest(leaveRequest: InsertLeaveRequest): Promise<LeaveRequest>;
+  getLeaveRequestById(id: string): Promise<LeaveRequest | undefined>;
+  updateLeaveRequest(id: string, updates: Partial<InsertLeaveRequest>): Promise<LeaveRequest>;
   updateLeaveRequestStatus(requestId: string, status: string, approvedBy?: string, rejectionReason?: string): Promise<void>;
   
   // Payslip operations for SDP internal users
@@ -801,63 +803,120 @@ export class DatabaseStorage implements IStorage {
     })) as any;
   }
 
-  async getBusinessUsersOverview(): Promise<any[]> {
-    // Get all business users with their countries and businesses
-    const query = db
+  async getBusinessUsersOverview(countryId?: string): Promise<any[]> {
+    // `users.country` is a free-text varchar (signup field), NOT a foreign key.
+    // Trying `eq(users.country, countries.id)` returned null for ~every user
+    // and made every row group under "Unknown Country". Real country info
+    // lives on:
+    //   - workers.countryId          (for worker users)
+    //   - businesses.accessibleCountries[0] (for business owners)
+    // So we LEFT JOIN both and pick whichever resolves.
+    //
+    // When `countryId` is provided we narrow at the DB layer so the response
+    // only contains users associated with that country — either via their
+    // worker row or via a business they own. The frontend used to fetch
+    // everyone and filter in-browser, which is wasteful at scale.
+    // Business resolution per user:
+    //   1. Owned business → `businesses.ownerId = users.id` (business owners)
+    //   2. Employing business → look up via `workers.businessId` (worker users)
+    // Worker users don't own a business, but they DO have one they work for —
+    // join the businesses table a SECOND time via an alias so we can attach
+    // either source as `business` on the result.
+    const workerBusinesses = alias(businesses, 'worker_businesses');
+
+    const baseWhere = inArray(users.userType, ['business_user', 'worker', 'third_party_business']);
+    const whereClause = countryId
+      ? and(
+          baseWhere,
+          // Match worker country OR a business that lists this country as accessible.
+          // `accessibleCountries` is a text[] column, so we use raw SQL for ANY().
+          or(
+            eq(workers.countryId, countryId),
+            sql`${countryId} = ANY(${businesses.accessibleCountries})`,
+            sql`${countryId} = ANY(${workerBusinesses.accessibleCountries})`,
+          ) as any,
+        )
+      : baseWhere;
+
+    const rows = await db
       .select({
         user: users,
-        country: countries,
-        business: businesses
+        worker: workers,
+        business: businesses,
+        workerBusiness: workerBusinesses,
       })
       .from(users)
-      .leftJoin(countries, eq(users.country, countries.id))
+      .leftJoin(workers, eq(workers.userId, users.id))
       .leftJoin(businesses, eq(businesses.ownerId, users.id))
-      .where(
-        inArray(users.userType, ['business_user', 'worker', 'third_party_business'])
-      )
-      .orderBy(countries.name, users.firstName, users.lastName);
+      .leftJoin(workerBusinesses, eq(workerBusinesses.id, workers.businessId))
+      .where(whereClause)
+      .orderBy(users.firstName, users.lastName);
 
-    const result = await query;
-    
-    // Group users by country
-    const groupedByCountry = result.reduce((acc: any, row: any) => {
-      const countryId = row.country?.id || 'unknown';
-      if (!acc[countryId]) {
-        acc[countryId] = {
-          country: row.country || { id: 'unknown', name: 'Unknown Country', code: 'XX' },
+    // Resolve country + the user's effective business. Business picks the
+    // owned-business first; for worker users (no owned business) we fall
+    // back to the worker's employing business via `workers.businessId`.
+    const countryIdSet = new Set<string>();
+    const enriched = rows.map((row: any) => {
+      const effectiveBusiness = row.business || row.workerBusiness || null;
+      const resolvedCountryId: string | null =
+        row.worker?.countryId ||
+        (Array.isArray(effectiveBusiness?.accessibleCountries) && effectiveBusiness.accessibleCountries[0]) ||
+        null;
+      if (resolvedCountryId) countryIdSet.add(resolvedCountryId);
+      return { ...row, effectiveBusiness, resolvedCountryId };
+    });
+
+    // Single batched lookup for all referenced countries.
+    const countryList = countryIdSet.size > 0
+      ? await db.select().from(countries).where(inArray(countries.id, Array.from(countryIdSet)))
+      : [];
+    const countryById = new Map<string, any>(countryList.map((c) => [c.id, c]));
+
+    // Group users by country.
+    const groupedByCountry: Record<string, any> = {};
+    for (const row of enriched) {
+      const cid = row.resolvedCountryId || 'unknown';
+      const country = row.resolvedCountryId
+        ? countryById.get(row.resolvedCountryId) || { id: 'unknown', name: 'Unknown Country', code: 'XX' }
+        : { id: 'unknown', name: 'Unknown Country', code: 'XX' };
+
+      if (!groupedByCountry[cid]) {
+        groupedByCountry[cid] = {
+          country,
           users: [],
           businessCount: 0,
           activeUserCount: 0,
-          businessIds: new Set()
+          businessIds: new Set<string>(),
         };
       }
-      
-      const userData = {
-        ...row.user,
-        business: row.business || null,
-        country: row.country || null
-      };
-      
-      acc[countryId].users.push(userData);
-      
-      if (row.user.isActive) {
-        acc[countryId].activeUserCount += 1;
-      }
-      
-      if (row.business?.id) {
-        acc[countryId].businessIds.add(row.business.id);
-      }
-      
-      return acc;
-    }, {});
 
-    // Convert to array format and calculate business counts
-    return Object.values(groupedByCountry).map((country: any) => ({
-      country: country.country,
-      users: country.users,
-      businessCount: country.businessIds.size,
-      activeUserCount: country.activeUserCount
-    }));
+      groupedByCountry[cid].users.push({
+        ...row.user,
+        // Surface the worker.workerType (employee / contractor / third_party_worker)
+        // so the UI can render a precise role label. For business owners this
+        // stays null and the UI falls back to the userType label ("Owner").
+        workerType: row.worker?.workerType ?? null,
+        business: row.effectiveBusiness,
+        country,
+      });
+
+      if (row.user.isActive) groupedByCountry[cid].activeUserCount += 1;
+      if (row.effectiveBusiness?.id) groupedByCountry[cid].businessIds.add(row.effectiveBusiness.id);
+    }
+
+    // Stable output: real countries by name, "Unknown" last.
+    return Object.values(groupedByCountry)
+      .map((group: any) => ({
+        country: group.country,
+        users: group.users,
+        businessCount: group.businessIds.size,
+        activeUserCount: group.activeUserCount,
+      }))
+      .sort((a, b) => {
+        if (a.country.id === 'unknown') return 1;
+        if (b.country.id === 'unknown') return -1;
+        return (a.country.name || '').localeCompare(b.country.name || '');
+      });
   }
 
   // Helper method to get primary business for a user (for backwards compatibility)
@@ -2273,7 +2332,11 @@ export class DatabaseStorage implements IStorage {
 
   // Leave request operations
   async getLeaveRequestsByWorker(workerId: string): Promise<LeaveRequest[]> {
-    return await db.select().from(leaveRequests).where(eq(leaveRequests.workerId, workerId));
+    return await db
+      .select()
+      .from(leaveRequests)
+      .where(eq(leaveRequests.workerId, workerId))
+      .orderBy(desc(leaveRequests.createdAt));
   }
 
   async getLeaveRequestsByBusiness(businessId: string): Promise<(LeaveRequest & { worker: Worker })[]> {
@@ -2282,12 +2345,28 @@ export class DatabaseStorage implements IStorage {
       .from(leaveRequests)
       .leftJoin(workers, eq(leaveRequests.workerId, workers.id))
       .where(eq(leaveRequests.businessId, businessId))
+      .orderBy(desc(leaveRequests.createdAt))
       .then(rows => rows.map(row => ({ ...row.leave_requests, worker: row.workers! })));
   }
 
   async createLeaveRequest(leaveRequest: InsertLeaveRequest): Promise<LeaveRequest> {
     const [created] = await db.insert(leaveRequests).values(leaveRequest).returning();
     return created;
+  }
+
+  async getLeaveRequestById(id: string): Promise<LeaveRequest | undefined> {
+    const [row] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id));
+    return row;
+  }
+
+  async updateLeaveRequest(id: string, updates: Partial<InsertLeaveRequest>): Promise<LeaveRequest> {
+    const [updated] = await db
+      .update(leaveRequests)
+      .set({ ...updates, updatedAt: new Date() } as any)
+      .where(eq(leaveRequests.id, id))
+      .returning();
+    if (!updated) throw new Error(`Leave request ${id} not found`);
+    return updated;
   }
 
   async updateLeaveRequestStatus(requestId: string, status: string, approvedBy?: string, rejectionReason?: string): Promise<void> {
@@ -2316,6 +2395,7 @@ export class DatabaseStorage implements IStorage {
       .from(leaveRequests)
       .leftJoin(workers, eq(leaveRequests.workerId, workers.id))
       .leftJoin(businesses, eq(leaveRequests.businessId, businesses.id))
+      .orderBy(desc(leaveRequests.createdAt))
       .then(rows => rows.map(row => ({
         ...row.leave_requests,
         worker: row.workers!,
@@ -2441,20 +2521,23 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getPayslipsByCountries(countryIds: string[]): Promise<(Payslip & { worker: Worker & { country: Country }; business: Business; uploadedByUser: User })[]> {
-    return await db
+    // Empty list → no country filter (super-admin / admin path).
+    const base = db
       .select()
       .from(payslips)
       .leftJoin(workers, eq(payslips.workerId, workers.id))
       .leftJoin(countries, eq(workers.countryId, countries.id))
       .leftJoin(businesses, eq(payslips.businessId, businesses.id))
-      .leftJoin(users, eq(payslips.uploadedBy, users.id))
-      .where(inArray(workers.countryId, countryIds))
-      .then(rows => rows.map(row => ({ 
-        ...row.payslips, 
-        worker: { ...row.workers!, country: row.countries! }, 
-        business: row.businesses!,
-        uploadedByUser: row.users! 
-      })));
+      .leftJoin(users, eq(payslips.uploadedBy, users.id));
+    const query = countryIds.length > 0
+      ? base.where(inArray(workers.countryId, countryIds))
+      : base;
+    return await query.then(rows => rows.map(row => ({
+      ...row.payslips,
+      worker: { ...row.workers!, country: row.countries! },
+      business: row.businesses!,
+      uploadedByUser: row.users!,
+    })));
   }
 
   async createPayslip(payslip: InsertPayslip): Promise<Payslip> {

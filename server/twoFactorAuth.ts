@@ -200,6 +200,7 @@ export async function is2FAEnabled(userId: string): Promise<boolean> {
  * Generate device fingerprint from request
  */
 export function generateDeviceFingerprint(ipAddress: string, userAgent: string): string {
+  console.log(`Generating device fingerprint - IP: ${ipAddress}, User-Agent: ${userAgent}`);
   const data = `${ipAddress}:${userAgent}`;
   return crypto.createHash('sha256').update(data).digest('hex');
 }

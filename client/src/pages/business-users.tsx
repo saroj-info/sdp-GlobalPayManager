@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
-import { Building2, Users, ExternalLink, ArrowLeft, Mail, CheckCircle2, XCircle, Eye, Send } from "lucide-react";
+import { Building2, Users, ExternalLink, ArrowLeft, Mail, CheckCircle2, XCircle, Eye, Send, X } from "lucide-react";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -16,6 +16,7 @@ interface BusinessUser {
   firstName: string;
   lastName: string;
   userType: string;
+  workerType?: 'employee' | 'contractor' | 'third_party_worker' | null;
   isActive: boolean;
   emailVerified?: boolean;
   phoneNumber?: string | null;
@@ -34,6 +35,35 @@ interface BusinessUser {
   } | null;
 }
 
+// Map (userType, workerType) → a display label. Owners (business_user)
+// always read as "Owner"; worker users fall through to their workerType.
+function getRoleLabel(user: BusinessUser): string {
+  if (user.userType === 'business_user') return 'Owner';
+  if (user.userType === 'third_party_business') return 'Third Party Business';
+  if (user.userType === 'worker') {
+    switch (user.workerType) {
+      case 'employee': return 'Employee';
+      case 'contractor': return 'Contractor';
+      case 'third_party_worker': return 'Third Party Worker';
+      default: return 'Worker';
+    }
+  }
+  return user.userType;
+}
+
+// Subtle colour cues so the role is scannable at a glance without
+// shouting from every card.
+function getRoleBadgeClass(user: BusinessUser): string {
+  if (user.userType === 'business_user') return 'text-blue-700 border-blue-300 bg-blue-50';
+  if (user.userType === 'third_party_business') return 'text-purple-700 border-purple-300 bg-purple-50';
+  if (user.userType === 'worker') {
+    if (user.workerType === 'employee') return 'text-emerald-700 border-emerald-300 bg-emerald-50';
+    if (user.workerType === 'contractor') return 'text-amber-700 border-amber-300 bg-amber-50';
+    if (user.workerType === 'third_party_worker') return 'text-purple-700 border-purple-300 bg-purple-50';
+  }
+  return 'text-gray-700 border-gray-300 bg-gray-50';
+}
+
 interface BusinessUsersByCountry {
   country?: {
     id: string;
@@ -49,6 +79,16 @@ export default function BusinessUsersPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [selectedUser, setSelectedUser] = useState<BusinessUser | null>(null);
+
+  // Optional `?country=<id>` filter — set when navigating here from the
+  // dashboard's "Business Users by Country" tab. When present, only that
+  // country's group is shown so the page reflects the selected country
+  // instead of dumping every country regardless of context.
+  const countryFilter = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('country');
+  }, []);
 
   usePageHeader("Business Users Overview", "Business users, contractors, and agencies by country");
 
@@ -75,23 +115,31 @@ export default function BusinessUsersPage() {
   });
 
   const { data: businessUsersByCountry = [], isLoading: loading, error } = useQuery({
-    queryKey: ["/api/business-users-overview"],
+    // Include the country filter in the queryKey so React Query refetches
+    // when the URL `?country=` param changes (e.g. via the dashboard link).
+    queryKey: ["/api/business-users-overview", countryFilter],
     queryFn: async () => {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
-      
+
       const token = localStorage.getItem('authToken');
       if (token) {
         headers["Authorization"] = `Bearer ${token}`;
       }
-      
-      const response = await fetch('/api/business-users-overview', {
+
+      // Server-side filtering: pass the country down so the response only
+      // contains users associated with this country (via worker.countryId
+      // or business.accessibleCountries).
+      const url = countryFilter
+        ? `/api/business-users-overview?country=${encodeURIComponent(countryFilter)}`
+        : '/api/business-users-overview';
+      const response = await fetch(url, {
         method: 'GET',
         headers,
         cache: 'no-store',
       });
-      
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -138,8 +186,18 @@ export default function BusinessUsersPage() {
     );
   }
 
-  const totalUsers = businessUsersByCountry.reduce((sum: number, country: BusinessUsersByCountry) => sum + country.activeUserCount, 0);
-  const totalBusinesses = businessUsersByCountry.reduce((sum: number, country: BusinessUsersByCountry) => sum + country.businessCount, 0);
+  // The API now does the country narrowing itself — `businessUsersByCountry`
+  // already contains only the requested country's group when `?country=` is
+  // set, so we just render whatever the server returned. The country header
+  // pill below still needs `selectedCountry` for its label.
+  const visibleCountries: BusinessUsersByCountry[] = businessUsersByCountry;
+  const selectedCountry = countryFilter && businessUsersByCountry.length > 0
+    ? businessUsersByCountry[0].country ?? null
+    : null;
+
+  const totalUsers = visibleCountries.reduce((sum: number, country: BusinessUsersByCountry) => sum + country.activeUserCount, 0);
+  const totalBusinesses = visibleCountries.reduce((sum: number, country: BusinessUsersByCountry) => sum + country.businessCount, 0);
+
 
   return (
     <div className="p-6">
@@ -162,6 +220,27 @@ export default function BusinessUsersPage() {
           <p className="text-gray-600">
             Manage and view all business users, contractors, and agencies registered in the platform
           </p>
+          {countryFilter && (
+            <div className="mt-3 flex items-center gap-2">
+              <Badge
+                variant="outline"
+                className="text-blue-700 border-blue-300 bg-blue-50 gap-1"
+                data-testid="badge-country-filter"
+              >
+                Filtered: {selectedCountry?.name || countryFilter}
+              </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setLocation('/business-users')}
+                data-testid="button-clear-country-filter"
+              >
+                <X className="h-3 w-3 mr-1" />
+                Clear filter
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -195,7 +274,7 @@ export default function BusinessUsersPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Countries</p>
-                <p className="text-2xl font-bold text-purple-600">{businessUsersByCountry.length}</p>
+                <p className="text-2xl font-bold text-purple-600">{visibleCountries.length}</p>
               </div>
               <ExternalLink className="h-8 w-8 text-purple-600" />
             </div>
@@ -204,8 +283,8 @@ export default function BusinessUsersPage() {
       </div>
 
       <div className="space-y-6">
-        {businessUsersByCountry.length > 0 ? (
-          businessUsersByCountry.map((countryData: BusinessUsersByCountry) => (
+        {visibleCountries.length > 0 ? (
+          visibleCountries.map((countryData: BusinessUsersByCountry) => (
             <Card key={countryData.country?.id || 'unknown'}>
               <CardHeader>
                 <CardTitle className="flex items-center gap-3">
@@ -231,7 +310,7 @@ export default function BusinessUsersPage() {
                             </div>
                             <div className="text-sm text-gray-600">{user.email}</div>
                             <div className="text-sm font-medium text-blue-600">
-                              {user.business?.name || 'No Business Name'}
+                              {user.business?.name || ''}
                             </div>
                           </div>
                         </div>
@@ -253,11 +332,10 @@ export default function BusinessUsersPage() {
                           )}
                           <Badge
                             variant="outline"
-                            data-testid={`badge-type-${user.id}`}
+                            className={getRoleBadgeClass(user)}
+                            data-testid={`badge-role-${user.id}`}
                           >
-                            {user.userType === 'business_user' ? 'Business User' :
-                             user.userType === 'worker' ? 'Worker' :
-                             user.userType === 'third_party_business' ? 'Third Party' : user.userType}
+                            {getRoleLabel(user)}
                           </Badge>
                           {!user.emailVerified && (
                             <Button

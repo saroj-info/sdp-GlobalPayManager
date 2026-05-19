@@ -17,6 +17,9 @@ import { z } from "zod";
 import { insertPayslipSchema } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { ObjectUploader } from "@/components/ObjectUploader";
+import { WorkerCombobox } from "@/components/pickers/WorkerCombobox";
+import { BusinessCombobox } from "@/components/pickers/BusinessCombobox";
+import { PayslipDetailsModal } from "@/components/modals/payslip-details-modal";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, FileText, DollarSign, Calendar, Building2 } from "lucide-react";
 import type { UploadResult } from "@uppy/core";
@@ -33,6 +36,8 @@ type PayslipWithDetails = Payslip & {
 const payslipFormSchema = z.object({
   workerId: z.string().min(1, "Worker is required"),
   businessId: z.string().min(1, "Business is required"),
+  // Currency is required on the payslips table.
+  currency: z.string().min(1, "Currency is required"),
   payDate: z.string().min(1, "Pay date is required"),
   payPeriodStart: z.string().min(1, "Pay period start is required"),
   payPeriodEnd: z.string().min(1, "Pay period end is required"),
@@ -53,6 +58,7 @@ export default function PayslipsPage() {
   const { user } = useAuth();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [uploadedFileURL, setUploadedFileURL] = useState<string>("");
+  const [selectedPayslip, setSelectedPayslip] = useState<PayslipWithDetails | null>(null);
   
   const isInternal = (user as any)?.userType === 'sdp_internal';
   usePageHeader(
@@ -63,6 +69,7 @@ export default function PayslipsPage() {
   const form = useForm<PayslipFormData>({
     resolver: zodResolver(payslipFormSchema),
     defaultValues: {
+      currency: "AUD",
       payDate: "",
       payPeriodStart: "",
       payPeriodEnd: "",
@@ -81,20 +88,18 @@ export default function PayslipsPage() {
     queryKey: ["/api/payslips"],
   });
 
-  // Fetch workers for the dropdown
-  const { data: workers = [] } = useQuery<(Worker & { country: Country })[]>({
-    queryKey: ["/api/workers"],
-  });
-
-  // Fetch businesses for the dropdown (simulated, you'd need a real API endpoint)
-  const { data: businesses = [] } = useQuery<Business[]>({
-    queryKey: ["/api/businesses"],
-    enabled: false, // Disable until we have a proper endpoint
-  });
+  // Worker + Business pickers fetch their own data via the shared
+  // WorkerCombobox / BusinessCombobox components. No page-level fetch needed
+  // here — the pickers handle search + pagination internally and won't
+  // pre-load every worker on mount (previously /api/workers returned the
+  // full list which doesn't scale at 1000+ workers).
 
   const createPayslipMutation = useMutation({
     mutationFn: async (data: PayslipFormData) => {
-      return await apiRequest("/api/payslips", "POST", data);
+      // apiRequest signature is (method, url, data) — the previous
+      // call had them swapped, which sent the fetch with `method:
+      // '/api/payslips'` and url `'POST'`, producing "Method not allowed".
+      return await apiRequest("POST", "/api/payslips", data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payslips"] });
@@ -205,54 +210,55 @@ export default function PayslipsPage() {
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit as any)} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                  <FormField
-                    control={form.control}
-                    name="workerId"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Worker</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select worker" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {workers.map((worker) => (
-                              <SelectItem key={worker.id} value={worker.id}>
-                                {worker.firstName} {worker.lastName} ({worker.country.name})
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  
+                  {/* Business first (required). Selection narrows the Worker
+                      combobox below. Searchable + paginated for large datasets. */}
                   <FormField
                     control={form.control}
                     name="businessId"
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Business</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select business" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {businesses.map((business) => (
-                              <SelectItem key={business.id} value={business.id}>
-                                {business.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <FormControl>
+                          <BusinessCombobox
+                            value={field.value || null}
+                            onChange={(id) => {
+                              field.onChange(id ?? '');
+                              // Clear the worker selection whenever the business
+                              // changes — the old worker may no longer be in the
+                              // narrowed list.
+                              form.setValue('workerId', '');
+                            }}
+                            placeholder="Select business…"
+                            testId="select-payslip-business"
+                          />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="workerId"
+                    render={({ field }) => {
+                      const selectedBusinessId = form.watch('businessId');
+                      return (
+                        <FormItem>
+                          <FormLabel>Worker</FormLabel>
+                          <FormControl>
+                            <WorkerCombobox
+                              value={field.value}
+                              onChange={(id) => field.onChange(id)}
+                              businessId={selectedBusinessId || undefined}
+                              disabled={!selectedBusinessId}
+                              placeholder={selectedBusinessId ? 'Select worker…' : 'Select business first'}
+                              testId="select-payslip-worker"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      );
+                    }}
                   />
                 </div>
 
@@ -291,7 +297,7 @@ export default function PayslipsPage() {
                       </FormItem>
                     )}
                   />
-                  
+
                   <FormField
                     control={form.control}
                     name="payPeriodStart"
@@ -305,7 +311,7 @@ export default function PayslipsPage() {
                       </FormItem>
                     )}
                   />
-                  
+
                   <FormField
                     control={form.control}
                     name="payPeriodEnd"
@@ -351,19 +357,50 @@ export default function PayslipsPage() {
                   />
                 </div>
 
-                <FormField
-                  control={form.control}
-                  name="netPay"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Net Pay</FormLabel>
-                      <FormControl>
-                        <Input placeholder="0.00" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="netPay"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Net Pay</FormLabel>
+                        <FormControl>
+                          <Input placeholder="0.00" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="currency"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Currency</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl>
+                            <SelectTrigger data-testid="select-payslip-currency">
+                              <SelectValue placeholder="Currency" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="AUD">AUD</SelectItem>
+                            <SelectItem value="NZD">NZD</SelectItem>
+                            <SelectItem value="USD">USD</SelectItem>
+                            <SelectItem value="GBP">GBP</SelectItem>
+                            <SelectItem value="EUR">EUR</SelectItem>
+                            <SelectItem value="SGD">SGD</SelectItem>
+                            <SelectItem value="INR">INR</SelectItem>
+                            <SelectItem value="PHP">PHP</SelectItem>
+                            <SelectItem value="CAD">CAD</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
 
                 <div className="grid grid-cols-3 gap-4">
                   <FormField
@@ -526,7 +563,12 @@ export default function PayslipsPage() {
                 </TableRow>
               ) : (
                 payslips.map((payslip) => (
-                  <TableRow key={payslip.id}>
+                  <TableRow
+                    key={payslip.id}
+                    className="cursor-pointer hover:bg-muted/40"
+                    onClick={() => setSelectedPayslip(payslip)}
+                    data-testid={`row-payslip-${payslip.id}`}
+                  >
                     <TableCell className="font-medium">
                       {payslip.worker.firstName} {payslip.worker.lastName}
                     </TableCell>
@@ -559,6 +601,12 @@ export default function PayslipsPage() {
           </Table>
         </CardContent>
       </Card>
+
+      <PayslipDetailsModal
+        payslip={selectedPayslip}
+        open={!!selectedPayslip}
+        onOpenChange={(open) => { if (!open) setSelectedPayslip(null); }}
+      />
     </div>
   );
 }

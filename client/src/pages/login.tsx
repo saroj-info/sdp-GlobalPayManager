@@ -8,6 +8,7 @@ import { TwoFAVerificationModal } from "@/components/modals";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation, Link } from "wouter";
 import { CheckCircle, AlertCircle, Info } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -19,6 +20,17 @@ export default function Login() {
   const [verificationMessage, setVerificationMessage] = useState<{type: 'success' | 'error' | 'info', text: string} | null>(null);
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+
+  // Already-logged-in users land on /dashboard automatically. Without this
+  // guard a user could open /login while still authenticated and see the
+  // form again. Wait for authLoading so we don't flash a redirect on a
+  // genuinely-not-logged-in user during initial /api/auth/user fetch.
+  useEffect(() => {
+    if (!authLoading && isAuthenticated) {
+      setLocation('/dashboard');
+    }
+  }, [authLoading, isAuthenticated, setLocation]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -126,23 +138,26 @@ export default function Login() {
 
   const handle2FAVerificationSuccess = (token: string) => {
     setShow2FAModal(false);
-    
+
     // SECURITY FIX: Store auth token only after successful 2FA verification
     localStorage.setItem('authToken', token);
     console.log('Auth token saved after 2FA verification');
-    
+
     toast({
       title: "Login Successful",
       description: "Welcome back!",
     });
-    
-    // Check if there's a pending signing token from email link
+
+    // Hard-reload like the non-2FA path. `setLocation` would otherwise race
+    // useAuth — the dashboard would mount before useAuth re-reads the new
+    // token, see no user, and bounce back here — that's why previously the
+    // first click did nothing and the second click "worked".
     const pendingSigningToken = localStorage.getItem('pendingSigningToken');
     if (pendingSigningToken) {
       localStorage.removeItem('pendingSigningToken');
-      setLocation(`/sign/${pendingSigningToken}`);
+      window.location.href = `/sign/${pendingSigningToken}`;
     } else {
-      setLocation('/dashboard');
+      window.location.href = '/dashboard';
     }
   };
 

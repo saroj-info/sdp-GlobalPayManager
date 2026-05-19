@@ -320,6 +320,19 @@ async function signObjectURL({
   method: "GET" | "PUT" | "DELETE" | "HEAD";
   ttlSec: number;
 }): Promise<string> {
+  // Local-dev fallback: when running outside the Replit runtime there's no
+  // sidecar listening on 127.0.0.1:1106, so every upload URL request fails
+  // with ECONNREFUSED. Set USE_LOCAL_OBJECT_STORAGE=true in .env to route
+  // upload/download URLs at our own /api/dev-uploads/* endpoints, which
+  // read/write to ./uploads on disk. Production stays on the sidecar.
+  if (process.env.USE_LOCAL_OBJECT_STORAGE === 'true') {
+    const expiresAt = Date.now() + ttlSec * 1000;
+    // Relative URL — the frontend's origin (Vite dev server) proxies /api/*
+    // to the backend, so the browser PUT lands at our route. Storing the
+    // bucket/object pair in the path lets us reuse the same key shape locally.
+    return `/api/dev-uploads/${encodeURIComponent(bucketName)}/${encodeURIComponent(objectName)}?method=${method}&expires=${expiresAt}`;
+  }
+
   const request = {
     bucket_name: bucketName,
     object_name: objectName,

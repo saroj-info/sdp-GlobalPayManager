@@ -161,9 +161,24 @@ export default function UserManagement() {
       });
     },
     onError: (error: any) => {
+      // `apiRequest` throws `new Error(\`${status}: ${rawBody}\`)`. For
+      // server errors the body is JSON like `{"message":"…"}` — strip
+      // the status prefix and pull out `message` so the toast shows
+      // "A user with this email already exists." instead of
+      // `409: {"message":"…"}`.
+      const raw = String(error?.message ?? '');
+      const bodyMatch = raw.match(/^\d{3}:\s*(.+)$/s);
+      const body = bodyMatch ? bodyMatch[1] : raw;
+      let description = body;
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed.message === 'string') description = parsed.message;
+      } catch {
+        // Non-JSON body — fall through with the raw text.
+      }
       toast({
         title: "Error",
-        description: error.message || "Failed to send invitation",
+        description: description || "Failed to send invitation",
         variant: "destructive",
       });
     },

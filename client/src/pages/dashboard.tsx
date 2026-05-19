@@ -436,7 +436,19 @@ function BusinessDashboard() {
   const { data: sdpAnalytics, isLoading: isLoadingSdpAnalytics } = useQuery<{
     contractsByCountry: { countryId: string; countryName: string; pending: number; signed: number; expired: number; total: number }[];
     businessUsersByCountry: { countryId: string; countryName: string; activeUsers: number; totalBusinesses: number }[];
-    approvedTimesheets: { id: string; workerName: string; businessName: string; countryName: string; totalHours: number; amount: number; approvedDate: string }[];
+    approvedTimesheets: {
+      id: string;
+      workerName: string;
+      businessName: string;
+      countryName: string;
+      rateType: 'hourly' | 'daily' | 'annual' | null;
+      isForClient: boolean;
+      customerBillingRateType: string | null;
+      trackingUnit: 'hourly' | 'daily' | 'annual';
+      totalHours: number;
+      totalDays: number;
+      approvedDate: string;
+    }[];
     paymentsToProcess: { id: string; type: string; workerName: string; businessName: string; countryName: string; amount: number; dueDate: string; status: string }[];
     totalPaymentsValue: number;
     totalApprovedHours: number;
@@ -612,7 +624,7 @@ function BusinessDashboard() {
                       {sdpAnalytics?.businessUsersByCountry && sdpAnalytics.businessUsersByCountry.length > 0 ? (
                         sdpAnalytics.businessUsersByCountry.map((country) => (
                           <div key={country.countryId} className="flex items-center justify-between p-4 border rounded-lg hover:bg-blue-50 hover:border-blue-200 cursor-pointer transition-colors"
-                               onClick={() => setLocation(`/business-users`)}>
+                               onClick={() => setLocation(`/business-users?country=${encodeURIComponent(country.countryId)}`)}>
                             <div className="flex items-center">
                               <Building2 className="w-5 h-5 text-blue-600 mr-3" />
                               <div>
@@ -663,8 +675,15 @@ function BusinessDashboard() {
                               </div>
                             </div>
                             <div className="text-right">
-                              <div className="font-bold text-gray-900">${timesheet.amount.toLocaleString()}</div>
-                              <div className="text-sm text-gray-600">{timesheet.totalHours}h</div>
+                              {/* Show days for daily/annual tracking contracts (incl.
+                                  annual+isForClient with customerBillingRateType=daily),
+                                  hours otherwise. Money column removed — this tile is a
+                                  workload signal, not a payroll figure. */}
+                              {timesheet.trackingUnit === 'daily' ? (
+                                <div className="font-bold text-gray-900">{(timesheet.totalDays ?? 0).toFixed(1)}d</div>
+                              ) : (
+                                <div className="font-bold text-gray-900">{(timesheet.totalHours ?? 0).toFixed(1)}h</div>
+                              )}
                             </div>
                           </div>
                         ))
