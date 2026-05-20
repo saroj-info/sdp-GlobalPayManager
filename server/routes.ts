@@ -7614,6 +7614,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Payslip routes for SDP internal users
+  // Rewrite legacy `https://storage.googleapis.com/...` (expired PUT URLs
+   // saved before we introduced normalization on write) to the stable
+   // `/objects/<id>` form. Frontends that hit /objects/* stream via the
+   // GCS SDK and never see ExpiredToken / SignatureDoesNotMatch errors.
+  const normalizePayslipRow = (row: any) => {
+    if (!row?.payslipFileUrl) return row;
+    try {
+      const svc = new ObjectStorageService();
+      return { ...row, payslipFileUrl: svc.normalizeObjectEntityPath(String(row.payslipFileUrl)) };
+    } catch {
+      return row;
+    }
+  };
+
   app.get('/api/payslips', authMiddleware, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -7641,7 +7655,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const payslips = await storage.getPayslipsByCountries(countryIds);
-      res.json(payslips);
+      res.json(payslips.map(normalizePayslipRow));
     } catch (error: any) {
       console.error("Error fetching payslips:", error?.message ?? error);
       res.status(500).json({ message: "Failed to fetch payslips" });
@@ -7653,13 +7667,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { businessId } = req.params;
       const userId = req.user?.id;
       const business = await storage.getBusinessByOwnerId(userId);
-      
+
       if (!business || business.id !== businessId) {
         return res.status(403).json({ message: "Access denied" });
       }
-      
+
       const payslips = await storage.getPayslipsByBusiness(businessId);
-      res.json(payslips);
+      res.json(payslips.map(normalizePayslipRow));
     } catch (error: any) {
       console.error("Error fetching business payslips:", error);
       res.status(500).json({ message: "Failed to fetch business payslips" });
@@ -7670,7 +7684,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { workerId } = req.params;
       const payslips = await storage.getPayslipsByWorker(workerId);
-      res.json(payslips);
+      res.json(payslips.map(normalizePayslipRow));
     } catch (error: any) {
       console.error("Error fetching worker payslips:", error);
       res.status(500).json({ message: "Failed to fetch worker payslips" });
@@ -7691,9 +7705,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // actually persists. Without this, the field is silently dropped
       // and the row saves with `payslipFileUrl = null`.
       const { documentURL, ...rest } = req.body || {};
+
+      // Normalize the raw upload URL to the stable `/objects/<id>` path.
+      // The signed URL we just used is a PUT-only signature with a short
+      // TTL — using it later for GET produces a `SignatureDoesNotMatch`
+      // error from GCS. The proxy route (`GET /objects/:objectPath(*)`)
+      // streams via the GCS SDK with ACL checks, so it works for the
+      // lifetime of the file regardless of original signing method.
+      let normalizedFileUrl: string | null = null;
+      if (documentURL) {
+        try {
+          const objectStorageService = new ObjectStorageService();
+          normalizedFileUrl = objectStorageService.normalizeObjectEntityPath(String(documentURL));
+        } catch (normErr: any) {
+          // Local-dev fallback URLs (/api/dev-uploads/…) aren't on GCS, so
+          // they aren't normalizable — keep them as-is.
+          normalizedFileUrl = String(documentURL);
+        }
+      }
+
       const data = insertPayslipSchema.parse({
         ...rest,
-        ...(documentURL ? { payslipFileUrl: documentURL } : {}),
+        ...(normalizedFileUrl ? { payslipFileUrl: normalizedFileUrl } : {}),
         uploadedBy: userId,
       });
 

@@ -21,12 +21,14 @@ function formatMoney(amount: any, currency = "") {
 }
 
 // Decide how to embed the uploaded document. Image extensions → <img>;
-// PDFs → <iframe>; anything else → a download link.
-function classifyAsset(url: string): "image" | "pdf" | "other" {
+// PDFs and "unknown" → <iframe> (iframes render images, PDFs, plain text
+// inline so an unknown content type still previews cleanly). Stored URLs
+// from the GCS proxy route (`/objects/<id>`) carry no extension, which
+// is why "unknown" defaults to iframe rather than a bare download link.
+function classifyAsset(url: string): "image" | "iframe" {
   const lower = url.toLowerCase().split("?")[0];
   if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(lower)) return "image";
-  if (/\.pdf$/.test(lower)) return "pdf";
-  return "other";
+  return "iframe";
 }
 
 export function PayslipDetailsModal({ payslip, open, onOpenChange }: PayslipDetailsModalProps) {
@@ -170,16 +172,12 @@ export function PayslipDetailsModal({ payslip, open, onOpenChange }: PayslipDeta
                     onError={() => setImgFailed(true)}
                   />
                 )
-              ) : docKind === "pdf" ? (
+              ) : (
                 <iframe
                   src={docUrl}
-                  title="Payslip PDF"
+                  title="Payslip document"
                   className="w-full h-[60vh] rounded border bg-white"
                 />
-              ) : (
-                <a href={docUrl} target="_blank" rel="noreferrer" className="text-sm text-primary-700 underline">
-                  Download document
-                </a>
               )}
             </div>
           </div>
