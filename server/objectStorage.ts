@@ -154,6 +154,31 @@ export class ObjectStorageService {
     });
   }
 
+  /**
+   * Generate a short-lived presigned GET URL for a previously-stored object.
+   * The input can be either:
+   *   - a `/objects/<entityId>` path (what we now store on the row), or
+   *   - a raw `https://storage.googleapis.com/...` URL (legacy rows).
+   * Returns a signed URL the browser can load directly (e.g. into an
+   * `<iframe>`) without any auth header. Sensitive ACL gating still happens
+   * here — caller must have already verified the user is allowed to access
+   * the object before requesting this URL.
+   */
+  async getDownloadURL(rawPath: string, ttlSec: number = 900): Promise<string> {
+    const normalized = this.normalizeObjectEntityPath(rawPath);
+    if (!normalized.startsWith('/objects/')) {
+      // Not a recognised object path (e.g. local-dev `/api/dev-uploads/...`).
+      // Hand it back as-is — the browser will load it directly.
+      return rawPath;
+    }
+    const entityId = normalized.slice('/objects/'.length);
+    let entityDir = this.getPrivateObjectDir();
+    if (!entityDir.endsWith('/')) entityDir = `${entityDir}/`;
+    const fullPath = `${entityDir}${entityId}`;
+    const { bucketName, objectName } = parseObjectPath(fullPath);
+    return signObjectURL({ bucketName, objectName, method: 'GET', ttlSec });
+  }
+
   // Gets the upload URL for profile pictures.
   async getProfilePictureUploadURL(): Promise<string> {
     const privateObjectDir = this.getPrivateObjectDir();

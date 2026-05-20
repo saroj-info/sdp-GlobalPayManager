@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
-import { Calendar, User, Building, DollarSign, FileText, ExternalLink, ImageOff } from "lucide-react";
+import { Calendar, User, Building, DollarSign, FileText, ExternalLink, ImageOff, Loader2 } from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
 
 interface PayslipDetailsModalProps {
   payslip: any | null;
@@ -34,15 +36,28 @@ function classifyAsset(url: string): "image" | "iframe" {
 export function PayslipDetailsModal({ payslip, open, onOpenChange }: PayslipDetailsModalProps) {
   const [imgFailed, setImgFailed] = useState(false);
 
+  // Fetch a short-lived presigned GCS GET URL via the auth'd API.
+  // The browser can't send Authorization on iframe/img requests, so we
+  // need a self-validating URL the browser can load directly.
+  const { data: downloadData, isFetching: isFetchingUrl } = useQuery<{ url: string }>({
+    queryKey: ['/api/payslips', payslip?.id, 'download-url'],
+    queryFn: async () => {
+      const res = await apiRequest('GET', `/api/payslips/${payslip!.id}/download-url`);
+      return res.json();
+    },
+    enabled: open && !!payslip?.id && !!payslip?.payslipFileUrl,
+  });
+
+  const docUrl: string | null = downloadData?.url ?? null;
+
   const docKind = useMemo(
-    () => (payslip?.payslipFileUrl ? classifyAsset(String(payslip.payslipFileUrl)) : "other"),
-    [payslip?.payslipFileUrl],
+    () => (docUrl ? classifyAsset(String(docUrl)) : "iframe"),
+    [docUrl],
   );
 
   if (!payslip) return null;
 
   const currency = payslip.worker?.country?.currency || payslip.currency || "";
-  const docUrl: string | null = payslip.payslipFileUrl || null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -155,9 +170,13 @@ export function PayslipDetailsModal({ payslip, open, onOpenChange }: PayslipDeta
               )}
             </div>
             <div className="p-4 bg-gray-50 min-h-[260px] flex items-center justify-center">
-              {!docUrl ? (
+              {!payslip.payslipFileUrl ? (
                 <div className="text-sm text-muted-foreground flex items-center gap-2">
                   <ImageOff className="h-4 w-4" /> No document uploaded for this payslip.
+                </div>
+              ) : isFetchingUrl || !docUrl ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Preparing document…
                 </div>
               ) : docKind === "image" ? (
                 imgFailed ? (

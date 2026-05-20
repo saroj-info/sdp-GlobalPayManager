@@ -7691,6 +7691,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Returns a short-lived presigned GET URL for a payslip's stored file.
+  // The browser can then load that URL directly (in an iframe / img) without
+  // sending an Authorization header — which it can't do for iframe/img
+  // requests anyway. Auth + access gating happens here, not in /objects/*.
+  app.get('/api/payslips/:id/download-url', authMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const { id } = req.params;
+      const payslip = await storage.getPayslipById(id);
+      if (!payslip) return res.status(404).json({ message: "Payslip not found" });
+      if (!payslip.payslipFileUrl) return res.status(404).json({ message: "No document attached to this payslip" });
+
+      // Access policy: SDP internal users, the owning worker's account,
+      // and the employing business owner can fetch the URL.
+      let allowed = false;
+      if (user.userType === 'sdp_internal') {
+        allowed = true;
+      } else if (user.userType === 'worker') {
+        const worker = await storage.getWorkerByUserId(user.id);
+        if (worker && worker.id === payslip.workerId) allowed = true;
+      } else if (user.userType === 'business_user') {
+        const business = await storage.getBusinessByOwnerId(user.id);
+        if (business && business.id === payslip.businessId) allowed = true;
+      }
+      if (!allowed) return res.status(403).json({ message: "Not allowed to view this payslip document" });
+
+      const objectStorageService = new ObjectStorageService();
+      const url = await objectStorageService.getDownloadURL(String(payslip.payslipFileUrl));
+      res.json({ url });
+    } catch (error: any) {
+      console.error("Error generating payslip download URL:", error?.message ?? error);
+      res.status(500).json({ message: "Failed to generate download URL" });
+    }
+  });
+
   app.post('/api/payslips', authMiddleware, async (req: any, res) => {
     try {
       const userId = req.user?.id;
