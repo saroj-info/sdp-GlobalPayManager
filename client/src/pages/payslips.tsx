@@ -21,7 +21,7 @@ import { WorkerCombobox } from "@/components/pickers/WorkerCombobox";
 import { BusinessCombobox } from "@/components/pickers/BusinessCombobox";
 import { PayslipDetailsModal } from "@/components/modals/payslip-details-modal";
 import { useToast } from "@/hooks/use-toast";
-import { Upload, FileText, DollarSign, Calendar, Building2 } from "lucide-react";
+import { Upload, FileText, DollarSign, Calendar, Building2, Pencil, Trash2 } from "lucide-react";
 import type { UploadResult } from "@uppy/core";
 import type { Payslip, Worker, Business, User, Country } from "@shared/schema";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
@@ -94,31 +94,94 @@ export default function PayslipsPage() {
   // pre-load every worker on mount (previously /api/workers returned the
   // full list which doesn't scale at 1000+ workers).
 
+  // Track which row is being edited. `null` → create mode.
+  const [editingPayslipId, setEditingPayslipId] = useState<string | null>(null);
+  // Seeded into the WorkerCombobox so the trigger shows the existing worker
+  // name on edit without waiting for the workers list to fetch.
+  const [editingWorkerSeed, setEditingWorkerSeed] = useState<{ id: string; firstName?: string; lastName?: string; email?: string } | null>(null);
+
   const createPayslipMutation = useMutation({
     mutationFn: async (data: PayslipFormData) => {
-      // apiRequest signature is (method, url, data) — the previous
-      // call had them swapped, which sent the fetch with `method:
-      // '/api/payslips'` and url `'POST'`, producing "Method not allowed".
+      // apiRequest signature is (method, url, data). When editingPayslipId
+      // is set we PATCH the existing row; otherwise POST a new one.
+      if (editingPayslipId) {
+        return await apiRequest("PATCH", `/api/payslips/${editingPayslipId}`, data);
+      }
       return await apiRequest("POST", "/api/payslips", data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payslips"] });
       toast({
         title: "Success",
-        description: "Payslip uploaded and processed successfully",
+        description: editingPayslipId ? "Payslip updated" : "Payslip uploaded and processed successfully",
       });
       setIsDialogOpen(false);
+      setEditingPayslipId(null);
+      setEditingWorkerSeed(null);
       form.reset();
       setUploadedFileURL("");
     },
     onError: (error) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to upload payslip",
+        description: error.message || "Failed to save payslip",
         variant: "destructive",
       });
     },
   });
+
+  const deletePayslipMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/payslips/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payslips"] });
+      toast({ title: "Payslip deleted" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to delete payslip",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Open the upload dialog pre-filled with an existing payslip's values.
+  const openEditDialog = (payslip: PayslipWithDetails) => {
+    setEditingPayslipId(payslip.id);
+    setUploadedFileURL(payslip.payslipFileUrl ?? "");
+    // Seed the worker combobox so its trigger shows "First Last" right away.
+    setEditingWorkerSeed(
+      payslip.worker
+        ? {
+            id: payslip.worker.id,
+            firstName: payslip.worker.firstName,
+            lastName: payslip.worker.lastName,
+            email: (payslip.worker as any).email,
+          }
+        : null,
+    );
+    form.reset({
+      workerId: payslip.workerId,
+      businessId: payslip.businessId,
+      currency: payslip.currency || "AUD",
+      payDate: payslip.payDate ? String(payslip.payDate).slice(0, 10) : "",
+      payPeriodStart: payslip.payPeriodStart ? String(payslip.payPeriodStart).slice(0, 10) : "",
+      payPeriodEnd: payslip.payPeriodEnd ? String(payslip.payPeriodEnd).slice(0, 10) : "",
+      grossTaxableWages: String(payslip.grossTaxableWages ?? ""),
+      tax: String(payslip.tax ?? ""),
+      netPay: String(payslip.netPay ?? ""),
+      superannuation: String(payslip.superannuation ?? "0"),
+      providentFund: String(payslip.providentFund ?? "0"),
+      kiwiSaver: String(payslip.kiwiSaver ?? "0"),
+      documentURL: payslip.payslipFileUrl ?? "",
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleDelete = (payslip: PayslipWithDetails) => {
+    if (!window.confirm(`Delete payslip for ${payslip.worker.firstName} ${payslip.worker.lastName}? This can't be undone.`)) return;
+    deletePayslipMutation.mutate(payslip.id);
+  };
 
   const handleGetUploadParameters = async () => {
     const res = await apiRequest("POST", "/api/objects/upload");
@@ -192,7 +255,18 @@ export default function PayslipsPage() {
   return (
     <div className="container mx-auto p-6 space-y-6">
         <div className="flex justify-end">
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <Dialog
+          open={isDialogOpen}
+          onOpenChange={(open) => {
+            setIsDialogOpen(open);
+            if (!open) {
+              setEditingPayslipId(null);
+              setEditingWorkerSeed(null);
+              form.reset();
+              setUploadedFileURL("");
+            }
+          }}
+        >
           <DialogTrigger asChild>
             <Button className="flex items-center gap-2">
               <Upload className="w-4 h-4" />
@@ -201,9 +275,11 @@ export default function PayslipsPage() {
           </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Upload New Payslip</DialogTitle>
+              <DialogTitle>{editingPayslipId ? 'Edit Payslip' : 'Upload New Payslip'}</DialogTitle>
               <DialogDescription>
-                Upload a payslip document and extract the financial data for analytics
+                {editingPayslipId
+                  ? 'Update payslip details. Replace the document only if needed.'
+                  : 'Upload a payslip document and extract the financial data for analytics'}
               </DialogDescription>
             </DialogHeader>
             
@@ -253,6 +329,10 @@ export default function PayslipsPage() {
                               disabled={!selectedBusinessId}
                               placeholder={selectedBusinessId ? 'Select worker…' : 'Select business first'}
                               testId="select-payslip-worker"
+                              // Seed the label when opening the Edit dialog —
+                              // otherwise the trigger reads "Select worker…"
+                              // until the user opens the popover.
+                              initialWorker={editingWorkerSeed}
                             />
                           </FormControl>
                           <FormMessage />
@@ -458,7 +538,9 @@ export default function PayslipsPage() {
                     type="submit"
                     disabled={createPayslipMutation.isPending || !uploadedFileURL}
                   >
-                    {createPayslipMutation.isPending ? "Uploading..." : "Upload Payslip"}
+                    {createPayslipMutation.isPending
+                      ? (editingPayslipId ? "Saving…" : "Uploading…")
+                      : (editingPayslipId ? "Save Changes" : "Upload Payslip")}
                   </Button>
                 </div>
               </form>
@@ -552,12 +634,13 @@ export default function PayslipsPage() {
                 <TableHead>Tax</TableHead>
                 <TableHead>Net Pay</TableHead>
                 <TableHead>Uploaded By</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {payslips.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                     No payslips uploaded yet. Upload your first payslip to get started.
                   </TableCell>
                 </TableRow>
@@ -593,6 +676,31 @@ export default function PayslipsPage() {
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {payslip.uploadedByUser.firstName || payslip.uploadedByUser.email}
+                    </TableCell>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={(e) => { e.stopPropagation(); openEditDialog(payslip); }}
+                          data-testid={`button-edit-payslip-${payslip.id}`}
+                          title="Edit payslip"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={(e) => { e.stopPropagation(); handleDelete(payslip); }}
+                          disabled={deletePayslipMutation.isPending}
+                          data-testid={`button-delete-payslip-${payslip.id}`}
+                          title="Delete payslip"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))

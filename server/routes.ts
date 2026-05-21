@@ -7794,6 +7794,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update a payslip (SDP internal only). Same field mapping as create:
+  // client may send `documentURL` for the file → normalize → save as
+  // `payslipFileUrl`. Dates come in as strings → coerced to Date.
+  app.patch('/api/payslips/:id', authMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user || user.userType !== 'sdp_internal') {
+        return res.status(403).json({ message: "Access denied. SDP internal users only." });
+      }
+
+      const { id } = req.params;
+      const existing = await storage.getPayslipById(id);
+      if (!existing) return res.status(404).json({ message: "Payslip not found" });
+
+      const { documentURL, ...rest } = req.body || {};
+      const updates: any = { ...rest };
+
+      // Coerce date strings → Date so drizzle doesn't crash on the timestamp column.
+      for (const k of ['payDate', 'payPeriodStart', 'payPeriodEnd']) {
+        if (updates[k] !== undefined && updates[k] !== null && updates[k] !== '') {
+          if (typeof updates[k] === 'string') updates[k] = new Date(updates[k]);
+        } else if (updates[k] === '') {
+          updates[k] = null;
+        }
+      }
+
+      // Normalize uploaded file URL to /objects/<id> form (or pass through
+      // local-dev URLs).
+      if (documentURL !== undefined) {
+        if (!documentURL) {
+          updates.payslipFileUrl = null;
+        } else {
+          try {
+            const svc = new ObjectStorageService();
+            updates.payslipFileUrl = svc.normalizeObjectEntityPath(String(documentURL));
+          } catch {
+            updates.payslipFileUrl = String(documentURL);
+          }
+        }
+      }
+
+      const updated = await storage.updatePayslip(id, updates);
+      res.json(updated);
+    } catch (error: any) {
+      const safe = { name: error?.name, message: error?.message, code: error?.code, issues: error?.issues };
+      try { console.error("Error updating payslip:", JSON.stringify(safe)); } catch {}
+      const message = error?.issues
+        ? `Validation error: ${error.issues.map((i: any) => `${i.path?.join('.')}: ${i.message}`).join('; ')}`
+        : (error?.message || 'Failed to update payslip');
+      res.status(400).json({ message });
+    }
+  });
+
+  app.delete('/api/payslips/:id', authMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user || user.userType !== 'sdp_internal') {
+        return res.status(403).json({ message: "Access denied. SDP internal users only." });
+      }
+
+      const { id } = req.params;
+      const existing = await storage.getPayslipById(id);
+      if (!existing) return res.status(404).json({ message: "Payslip not found" });
+
+      await storage.deletePayslip(id);
+      res.json({ ok: true });
+    } catch (error: any) {
+      console.error("Error deleting payslip:", error?.message ?? error);
+      res.status(400).json({ message: error?.message || 'Failed to delete payslip' });
+    }
+  });
+
   // Invoice routes
   app.get('/api/invoices', authMiddleware, async (req: any, res) => {
     try {

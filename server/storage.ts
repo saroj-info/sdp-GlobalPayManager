@@ -366,6 +366,8 @@ export interface IStorage {
   getPayslipsByCountries(countryIds: string[]): Promise<(Payslip & { worker: Worker & { country: Country }; business: Business; uploadedByUser: User })[]>;
   createPayslip(payslip: InsertPayslip): Promise<Payslip>;
   getPayslipById(id: string): Promise<Payslip | undefined>;
+  updatePayslip(id: string, updates: Partial<InsertPayslip>): Promise<Payslip>;
+  deletePayslip(id: string): Promise<void>;
 
   // Analytics operations
   getBusinessAnalytics(businessId: string): Promise<{
@@ -2550,6 +2552,20 @@ export class DatabaseStorage implements IStorage {
     return payslip;
   }
 
+  async updatePayslip(id: string, updates: Partial<InsertPayslip>): Promise<Payslip> {
+    const [updated] = await db
+      .update(payslips)
+      .set({ ...updates, updatedAt: new Date() } as any)
+      .where(eq(payslips.id, id))
+      .returning();
+    if (!updated) throw new Error(`Payslip ${id} not found`);
+    return updated;
+  }
+
+  async deletePayslip(id: string): Promise<void> {
+    await db.delete(payslips).where(eq(payslips.id, id));
+  }
+
   // SDP internal user analytics
   async getSDPInternalAnalytics(countryIds: string[]): Promise<{
     totalPayslipsProcessed: number;
@@ -3400,8 +3416,10 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
 
   // Report Methods
   async getSdpInvoiceReport(filters: { from?: string; to?: string; countryId?: string; businessId?: string; }): Promise<any[]> {
-    const conditions = [];
-    
+    // Cancelled invoices are excluded by default — they're not real revenue
+    // and would skew totals on the /reports page.
+    const conditions: any[] = [sql`${sdpInvoices.status} <> 'cancelled'`];
+
     if (filters.from) {
       conditions.push(sql`${sdpInvoices.invoiceDate} >= ${filters.from}`);
     }

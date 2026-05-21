@@ -26,6 +26,13 @@ interface WorkerComboboxProps {
   disabled?: boolean;
   placeholder?: string;
   testId?: string;
+  /**
+   * Optional pre-fetched worker object to seed the label when `value` is
+   * already set but the popover hasn't been opened (e.g. when reopening an
+   * Edit dialog with a worker selected). Lets the trigger show the correct
+   * name without forcing the workers list to fetch on mount.
+   */
+  initialWorker?: { id: string; firstName?: string; lastName?: string; email?: string } | null;
 }
 
 /**
@@ -41,6 +48,7 @@ export function WorkerCombobox({
   disabled,
   placeholder = 'Select worker…',
   testId,
+  initialWorker,
 }: WorkerComboboxProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -80,10 +88,17 @@ export function WorkerCombobox({
   }, [data, page]);
 
   const selectedLabel = useMemo(() => {
-    const w = accumulated.find((w: any) => w.id === value);
+    if (!value) return '';
+    // Prefer a freshly-fetched row (handles the case where the user just
+    // searched and picked a different worker). Fall back to the seeded
+    // `initialWorker` when the popover hasn't been opened yet so the
+    // Edit dialog displays the existing worker without needing the list
+    // to load first.
+    const fromList = accumulated.find((w: any) => w.id === value);
+    const w = fromList || (initialWorker && initialWorker.id === value ? initialWorker : null);
     if (!w) return '';
     return `${w.firstName ?? ''} ${w.lastName ?? ''}`.trim();
-  }, [accumulated, value]);
+  }, [accumulated, value, initialWorker]);
 
   const total = data?.total ?? 0;
   const canLoadMore = accumulated.length > 0 && accumulated.length < total && !isFetching;
