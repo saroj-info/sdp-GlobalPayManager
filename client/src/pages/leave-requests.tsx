@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,10 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
-import { Calendar, CheckCircle, XCircle, Clock, User, Plane, Plus, Check, ChevronsUpDown, Loader2, Search } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Calendar, CheckCircle, XCircle, Clock, User, Plane, Plus, Search } from 'lucide-react';
 import { usePageHeader } from '@/contexts/AuthenticatedLayoutContext';
 import { apiRequest } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
@@ -19,156 +16,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { DataPagination } from '@/components/ui/data-pagination';
 import { usePagination } from '@/hooks/usePagination';
 import { LeaveRequestDetailsModal } from '@/components/modals/leave-request-details-modal';
-
-// Debounce a value — used to throttle worker search keystrokes before they
-// hit the server. 250ms keeps typing responsive without thrashing the API.
-function useDebounced<T>(value: T, delay = 250): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-  return debounced;
-}
-
-// Server-paginated worker picker. Hits /api/workers/list with search +
-// businessId, scales to thousands of rows without loading them all.
-function WorkerCombobox({
-  value,
-  onChange,
-  businessId,
-  isSdpInternal,
-  disabled,
-}: {
-  value: string;
-  onChange: (workerId: string, worker: any) => void;
-  businessId?: string;
-  isSdpInternal: boolean;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const debouncedSearch = useDebounced(search, 250);
-  const [page, setPage] = useState(1);
-  const [accumulated, setAccumulated] = useState<any[]>([]);
-
-  // Reset to first page whenever the filter changes.
-  useEffect(() => {
-    setPage(1);
-    setAccumulated([]);
-  }, [debouncedSearch, businessId]);
-
-  const enabled = open && (!isSdpInternal || !!businessId);
-  const { data, isFetching } = useQuery<{ items: any[]; total: number; page: number; pageSize: number }>({
-    queryKey: ['/api/workers/list', { search: debouncedSearch, businessId, page, pageSize: 20 }],
-    queryFn: async () => {
-      const qs = new URLSearchParams();
-      qs.set('page', String(page));
-      qs.set('pageSize', '20');
-      if (debouncedSearch) qs.set('search', debouncedSearch);
-      if (businessId) qs.set('businessId', businessId);
-      return (await apiRequest('GET', `/api/workers/list?${qs.toString()}`)).json();
-    },
-    enabled,
-    placeholderData: keepPreviousData,
-  });
-
-  // Accumulate pages so "Load more" appends rather than replaces.
-  useEffect(() => {
-    if (!data?.items) return;
-    setAccumulated((prev) => (page === 1 ? data.items : [...prev, ...data.items.filter(i => !prev.some(p => p.id === i.id))]));
-  }, [data, page]);
-
-  const selectedLabel = useMemo(() => {
-    const w = accumulated.find((w: any) => w.id === value);
-    if (!w) return '';
-    return `${w.firstName ?? ''} ${w.lastName ?? ''}`.trim();
-  }, [accumulated, value]);
-
-  const total = data?.total ?? 0;
-  const canLoadMore = accumulated.length > 0 && accumulated.length < total && !isFetching;
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          className="w-full justify-between font-normal"
-          disabled={disabled}
-          data-testid="select-leave-worker"
-        >
-          {selectedLabel || (
-            <span className="text-muted-foreground">
-              {disabled ? 'Select business first' : 'Select worker…'}
-            </span>
-          )}
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-        <Command shouldFilter={false}>
-          <CommandInput
-            placeholder="Search workers by name or email…"
-            value={search}
-            onValueChange={setSearch}
-          />
-          <CommandList>
-            {isFetching && accumulated.length === 0 ? (
-              <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading workers…
-              </div>
-            ) : accumulated.length === 0 ? (
-              <CommandEmpty>No workers found.</CommandEmpty>
-            ) : (
-              <>
-                <CommandGroup>
-                  {accumulated.map((w: any) => (
-                    <CommandItem
-                      key={w.id}
-                      value={w.id}
-                      onSelect={() => {
-                        onChange(w.id, w);
-                        setOpen(false);
-                      }}
-                    >
-                      <Check className={cn('mr-2 h-4 w-4', value === w.id ? 'opacity-100' : 'opacity-0')} />
-                      <div className="flex flex-col">
-                        <span>{w.firstName} {w.lastName}</span>
-                        {w.email && (
-                          <span className="text-xs text-muted-foreground">{w.email}</span>
-                        )}
-                      </div>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-                {(canLoadMore || isFetching) && (
-                  <div className="border-t p-2 flex items-center justify-center">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-xs"
-                      disabled={!canLoadMore}
-                      onClick={() => setPage((p) => p + 1)}
-                    >
-                      {isFetching ? (
-                        <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Loading…</>
-                      ) : (
-                        <>Load more ({accumulated.length} of {total})</>
-                      )}
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
+import { WorkerCombobox } from '@/components/pickers/WorkerCombobox';
+import { BusinessCombobox } from '@/components/pickers/BusinessCombobox';
 
 export default function LeaveRequests() {
   usePageHeader("Leave Requests", "Review and manage employee leave requests");
@@ -240,13 +89,9 @@ export default function LeaveRequests() {
   const [endDate, setEndDate] = useState<string>('');
   const [reason, setReason] = useState<string>('');
 
-  // SDP needs to pick a business; business users are already scoped server-side.
-  const { data: businesses = [] } = useQuery<any[]>({
-    queryKey: ['/api/businesses'],
-    enabled: showCreate && isSdpInternal,
-  });
   // Cache the selected worker object so we can read its businessId on submit
   // (the combobox owns the worker list internally — no page-level fetch).
+  // The BusinessCombobox below similarly owns its own /api/businesses query.
   const [selectedWorker, setSelectedWorker] = useState<any | null>(null);
 
   // Reset the worker selection whenever the business changes.
@@ -489,51 +334,54 @@ export default function LeaveRequests() {
               </DialogHeader>
 
               <div className="space-y-4 py-2">
-                {/* Business + Worker pickers are CREATE-only — these are
-                    immutable on an existing leave request. In edit mode we
-                    show a static read-only summary instead. */}
-                {editingId ? (
-                  <div className="rounded-md border bg-secondary-50/60 px-3 py-2 text-sm">
-                    <div className="text-xs uppercase tracking-wide text-secondary-500 mb-0.5">Worker</div>
-                    <div className="font-medium">
-                      {selectedWorker
-                        ? `${selectedWorker.firstName ?? ''} ${selectedWorker.lastName ?? ''}`.trim() || '—'
-                        : '—'}
-                    </div>
+                {/* Business + Worker pickers — searchable comboboxes shared
+                    with the payslip and leave-request flows. In edit mode the
+                    pickers are disabled (business/worker can't change on an
+                    existing leave request) but they still display the existing
+                    values via the `initialWorker` seed so the user sees the
+                    correct worker name without opening the popover. */}
+                {isSdpInternal && (
+                  <div className="space-y-1.5">
+                    <Label>Business {!editingId && '*'}</Label>
+                    <BusinessCombobox
+                      value={businessId || null}
+                      onChange={(id) => {
+                        setBusinessId(id || '');
+                        // Clear worker if business changes — old selection
+                        // may no longer be in the narrowed list.
+                        if (!editingId) {
+                          setWorkerId('');
+                          setSelectedWorker(null);
+                        }
+                      }}
+                      disabled={!!editingId}
+                      placeholder="Select business…"
+                      testId="select-leave-business"
+                    />
                   </div>
-                ) : (
-                  <>
-                    {isSdpInternal && (
-                      <div className="space-y-1.5">
-                        <Label>Business *</Label>
-                        <Select value={businessId} onValueChange={setBusinessId}>
-                          <SelectTrigger data-testid="select-leave-business">
-                            <SelectValue placeholder="Select business…" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {(businesses as any[]).filter((b: any) => b.id && b.name).map((b: any) => (
-                              <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    )}
-
-                    <div className="space-y-1.5">
-                      <Label>Worker *</Label>
-                      <WorkerCombobox
-                        value={workerId}
-                        onChange={(id, worker) => {
-                          setWorkerId(id);
-                          setSelectedWorker(worker);
-                        }}
-                        businessId={isSdpInternal ? businessId : undefined}
-                        isSdpInternal={isSdpInternal}
-                        disabled={isSdpInternal && !businessId}
-                      />
-                    </div>
-                  </>
                 )}
+
+                <div className="space-y-1.5">
+                  <Label>Worker {!editingId && '*'}</Label>
+                  <WorkerCombobox
+                    value={workerId}
+                    onChange={(id, worker) => {
+                      setWorkerId(id);
+                      setSelectedWorker(worker);
+                    }}
+                    businessId={isSdpInternal ? businessId || undefined : undefined}
+                    disabled={!!editingId || (isSdpInternal && !businessId)}
+                    placeholder={
+                      editingId
+                        ? 'Worker (locked)'
+                        : isSdpInternal && !businessId
+                          ? 'Select business first'
+                          : 'Select worker…'
+                    }
+                    initialWorker={selectedWorker}
+                    testId="select-leave-worker"
+                  />
+                </div>
 
                 <div className="space-y-1.5">
                   <Label>Leave Type *</Label>
