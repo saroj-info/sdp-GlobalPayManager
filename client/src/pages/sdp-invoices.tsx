@@ -269,6 +269,28 @@ export default function SdpInvoices() {
     },
   });
 
+  // Reverse a "mark as paid". Server clears paidAt/paidAmount and demotes
+  // status to sent/issued/overdue so the admin can re-edit + re-pay.
+  const markUnpaidMutation = useMutation({
+    mutationFn: async (invoiceId: string) => {
+      const response = await apiRequest("POST", `/api/sdp-invoices/${invoiceId}/mark-unpaid`);
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Invoice Marked Unpaid", description: "Payment record cleared. You can now edit the invoice and mark it paid again." });
+      queryClient.invalidateQueries({ queryKey: ["/api/sdp-invoices"] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to mark invoice as unpaid", variant: "destructive" });
+    },
+  });
+
+  const handleMarkUnpaid = (invoice: SdpInvoice) => {
+    if (confirm(`Mark invoice ${invoice.invoiceNumber} as unpaid? This clears the recorded payment so you can edit and re-issue.`)) {
+      markUnpaidMutation.mutate(invoice.id);
+    }
+  };
+
   const retractInvoiceMutation = useMutation({
     mutationFn: async (invoiceId: string) => {
       const response = await apiRequest("POST", `/api/sdp-invoices/${invoiceId}/retract`);
@@ -1081,6 +1103,22 @@ export default function SdpInvoices() {
                           </div>
                         )}
                         
+                        {invoice.status === 'paid' && (
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleMarkUnpaid(invoice)}
+                              disabled={markUnpaidMutation.isPending}
+                              className="flex-1 text-orange-600 hover:text-orange-700 hover:bg-orange-50 border-orange-200"
+                              data-testid={`button-mark-unpaid-${invoice.id}`}
+                            >
+                              <RotateCcw className="h-4 w-4 mr-1" />
+                              {markUnpaidMutation.isPending ? "Marking..." : "Mark Unpaid"}
+                            </Button>
+                          </div>
+                        )}
+
                         {invoice.invoiceCategory === 'customer_billing' && ['sent', 'overdue', 'paid'].includes(invoice.status) && (
                           <div className="flex gap-2 mt-2">
                             <Button

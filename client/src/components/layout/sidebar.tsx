@@ -56,6 +56,10 @@ export function Sidebar() {
       baseNavigation.push({ name: 'Contractor Invoices', href: '/worker-invoices', icon: 'fas fa-file-invoice' });
     }
 
+    // Payslips visible to every worker. The /payslips page detects role and
+    // calls GET /api/payslips which scopes to the worker's own rows.
+    baseNavigation.push({ name: 'Payslips', href: '/payslips', icon: 'fas fa-receipt' });
+
     // Add Benefits and Compensation for all workers
     baseNavigation.push({ name: 'Benefits & Compensation', href: '/benefits', icon: 'fas fa-gift' });
 

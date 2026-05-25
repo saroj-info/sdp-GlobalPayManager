@@ -22,6 +22,8 @@ import { BusinessCombobox } from "@/components/pickers/BusinessCombobox";
 import { PayslipDetailsModal } from "@/components/modals/payslip-details-modal";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, FileText, DollarSign, Calendar, Building2, Pencil, Trash2 } from "lucide-react";
+import { DataPagination } from "@/components/ui/data-pagination";
+import { usePagination } from "@/hooks/usePagination";
 import type { UploadResult } from "@uppy/core";
 import type { Payslip, Worker, Business, User, Country } from "@shared/schema";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
@@ -61,6 +63,8 @@ export default function PayslipsPage() {
   const [selectedPayslip, setSelectedPayslip] = useState<PayslipWithDetails | null>(null);
   
   const isInternal = (user as any)?.userType === 'sdp_internal';
+  const isWorker = (user as any)?.userType === 'worker';
+  // Workers see a read-only view of their own payslips. SDP can upload/edit/delete.
   usePageHeader(
     "Payslips",
     isInternal ? "Upload and manage worker payslips" : "View your payslips"
@@ -87,6 +91,17 @@ export default function PayslipsPage() {
   const { data: payslips = [], isLoading: isLoadingPayslips } = useQuery<PayslipWithDetails[]>({
     queryKey: ["/api/payslips"],
   });
+
+  // Client-side pagination — 10 rows per page. Volume is typically per-worker
+  // (small) or per-country (medium); server-side can be added later if it grows.
+  const {
+    pageItems: pagedPayslips,
+    page: payslipsPage,
+    setPage: setPayslipsPage,
+    pageSize: payslipsPageSize,
+    totalPages: payslipsTotalPages,
+    totalItems: payslipsTotalItems,
+  } = usePagination(payslips, { pageSize: 10 });
 
   // Worker + Business pickers fetch their own data via the shared
   // WorkerCombobox / BusinessCombobox components. No page-level fetch needed
@@ -267,12 +282,15 @@ export default function PayslipsPage() {
             }
           }}
         >
-          <DialogTrigger asChild>
-            <Button className="flex items-center gap-2">
-              <Upload className="w-4 h-4" />
-              Upload Payslip
-            </Button>
-          </DialogTrigger>
+          {/* Workers don't upload payslips — only SDP/admin do. */}
+          {!isWorker && (
+            <DialogTrigger asChild>
+              <Button className="flex items-center gap-2">
+                <Upload className="w-4 h-4" />
+                Upload Payslip
+              </Button>
+            </DialogTrigger>
+          )}
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{editingPayslipId ? 'Edit Payslip' : 'Upload New Payslip'}</DialogTitle>
@@ -634,18 +652,20 @@ export default function PayslipsPage() {
                 <TableHead>Tax</TableHead>
                 <TableHead>Net Pay</TableHead>
                 <TableHead>Uploaded By</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                {!isWorker && <TableHead className="text-right">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {payslips.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
-                    No payslips uploaded yet. Upload your first payslip to get started.
+                  <TableCell colSpan={isWorker ? 9 : 10} className="text-center text-muted-foreground py-8">
+                    {isWorker
+                      ? "You don't have any payslips yet."
+                      : "No payslips uploaded yet. Upload your first payslip to get started."}
                   </TableCell>
                 </TableRow>
               ) : (
-                payslips.map((payslip) => (
+                pagedPayslips.map((payslip) => (
                   <TableRow
                     key={payslip.id}
                     className="cursor-pointer hover:bg-muted/40"
@@ -677,36 +697,52 @@ export default function PayslipsPage() {
                     <TableCell className="text-sm text-muted-foreground">
                       {payslip.uploadedByUser.firstName || payslip.uploadedByUser.email}
                     </TableCell>
-                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={(e) => { e.stopPropagation(); openEditDialog(payslip); }}
-                          data-testid={`button-edit-payslip-${payslip.id}`}
-                          title="Edit payslip"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
-                          onClick={(e) => { e.stopPropagation(); handleDelete(payslip); }}
-                          disabled={deletePayslipMutation.isPending}
-                          data-testid={`button-delete-payslip-${payslip.id}`}
-                          title="Delete payslip"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
+                    {/* Actions hidden for workers — read-only view. */}
+                    {!isWorker && (
+                      <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={(e) => { e.stopPropagation(); openEditDialog(payslip); }}
+                            data-testid={`button-edit-payslip-${payslip.id}`}
+                            title="Edit payslip"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={(e) => { e.stopPropagation(); handleDelete(payslip); }}
+                            disabled={deletePayslipMutation.isPending}
+                            data-testid={`button-delete-payslip-${payslip.id}`}
+                            title="Delete payslip"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))
               )}
             </TableBody>
           </Table>
+
+          {payslips.length > 0 && (
+            <div className="mt-4">
+              <DataPagination
+                page={payslipsPage}
+                totalPages={payslipsTotalPages}
+                totalItems={payslipsTotalItems}
+                pageSize={payslipsPageSize}
+                onPageChange={setPayslipsPage}
+                label="payslips"
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
 

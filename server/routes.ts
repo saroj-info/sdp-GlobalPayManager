@@ -7637,12 +7637,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      // Gate by userType only. Super-admin / admin see everything; agents are
+      // Workers: return only their own payslips. The /payslips page on the
+      // worker sidebar reuses this endpoint so we don't need a separate route.
+      if (user.userType === 'worker') {
+        const worker = await storage.getWorkerByUserId(user.id);
+        if (!worker) return res.status(404).json({ message: "Worker profile not found" });
+        const payslips = await storage.getPayslipsByWorker(worker.id);
+        return res.json(payslips.map(normalizePayslipRow));
+      }
+
+      // SDP internal: super-admin / admin see everything; agents are
       // narrowed to their `accessibleCountries`. (Previously the gate ALSO
       // required `accessibleCountries.length > 0`, which 403'd super-admins
       // whose list is empty by design.)
       if (user.userType !== 'sdp_internal') {
-        return res.status(403).json({ message: "Access denied. SDP internal users only." });
+        return res.status(403).json({ message: "Access denied." });
       }
 
       const isAgent = user.sdpRole === 'sdp_agent';
@@ -9268,7 +9277,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Mark as paid
       await storage.markSdpInvoiceAsPaid(id, paidAmount, paymentDate);
-      
+
       const updatedInvoice = await storage.getSdpInvoiceById(id);
       res.json({
         message: 'Invoice marked as paid successfully',
@@ -9277,6 +9286,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error('Error marking SDP invoice as paid:', error);
       res.status(500).json({ message: 'Failed to mark SDP invoice as paid' });
+    }
+  });
+
+  // Reverse a "mark as paid". Clears paidAt/paidAmount and demotes the invoice
+  // to `sent` / `issued` / `overdue` so the admin can edit it and mark paid
+  // again later.
+  app.post('/api/sdp-invoices/:id/mark-unpaid', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const invoice = await storage.getSdpInvoiceById(id);
+      if (!invoice) return res.status(404).json({ message: 'SDP invoice not found' });
+      if (invoice.status !== 'paid') {
+        return res.status(400).json({ message: 'Only paid invoices can be marked unpaid' });
+      }
+
+      await storage.markSdpInvoiceAsUnpaid(id);
+
+      const updatedInvoice = await storage.getSdpInvoiceById(id);
+      res.json({ message: 'Invoice marked as unpaid', invoice: updatedInvoice });
+    } catch (error: any) {
+      console.error('Error marking SDP invoice as unpaid:', error?.message ?? error);
+      res.status(500).json({ message: 'Failed to mark SDP invoice as unpaid' });
     }
   });
 

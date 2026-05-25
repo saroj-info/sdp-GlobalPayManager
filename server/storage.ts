@@ -361,7 +361,7 @@ export interface IStorage {
   updateLeaveRequestStatus(requestId: string, status: string, approvedBy?: string, rejectionReason?: string): Promise<void>;
   
   // Payslip operations for SDP internal users
-  getPayslipsByWorker(workerId: string): Promise<(Payslip & { uploadedByUser: User })[]>;
+  getPayslipsByWorker(workerId: string): Promise<(Payslip & { worker: Worker & { country: Country }; business: Business; uploadedByUser: User })[]>;
   getPayslipsByBusiness(businessId: string): Promise<(Payslip & { worker: Worker; uploadedByUser: User })[]>;
   getPayslipsByCountries(countryIds: string[]): Promise<(Payslip & { worker: Worker & { country: Country }; business: Business; uploadedByUser: User })[]>;
   createPayslip(payslip: InsertPayslip): Promise<Payslip>;
@@ -414,6 +414,7 @@ export interface IStorage {
   updateSdpInvoice(id: string, updates: Partial<InsertSdpInvoiceType>): Promise<SelectSdpInvoiceType>;
   markSdpInvoiceAsSent(id: string): Promise<void>;
   markSdpInvoiceAsPaid(id: string, paidAmount: string, paidDate?: Date): Promise<void>;
+  markSdpInvoiceAsUnpaid(id: string): Promise<void>;
   
   // SDP Invoice Line Items operations
   getSdpInvoiceLineItems(invoiceId: string): Promise<SelectSdpInvoiceLineItemType[]>;
@@ -2503,13 +2504,25 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Payslip operations for SDP internal users
-  async getPayslipsByWorker(workerId: string): Promise<(Payslip & { uploadedByUser: User })[]> {
+  async getPayslipsByWorker(workerId: string): Promise<(Payslip & { worker: Worker & { country: Country }; business: Business; uploadedByUser: User })[]> {
+    // Same enriched shape as `getPayslipsByCountries` / `getPayslipsByBusiness`
+    // so the worker page can reuse `PayslipDetailsModal` and the existing table
+    // columns (business name, country code, etc.) without conditional rendering.
     return await db
       .select()
       .from(payslips)
+      .leftJoin(workers, eq(payslips.workerId, workers.id))
+      .leftJoin(countries, eq(workers.countryId, countries.id))
+      .leftJoin(businesses, eq(payslips.businessId, businesses.id))
       .leftJoin(users, eq(payslips.uploadedBy, users.id))
       .where(eq(payslips.workerId, workerId))
-      .then(rows => rows.map(row => ({ ...row.payslips, uploadedByUser: row.users! })));
+      .orderBy(desc(payslips.createdAt))
+      .then(rows => rows.map(row => ({
+        ...row.payslips,
+        worker: { ...row.workers!, country: row.countries! },
+        business: row.businesses!,
+        uploadedByUser: row.users!,
+      })));
   }
 
   async getPayslipsByBusiness(businessId: string): Promise<(Payslip & { worker: Worker; uploadedByUser: User })[]> {
@@ -3804,7 +3817,7 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
     console.log(`Marking invoice ${id} as paid...`);
     const [updated] = await db
       .update(sdpInvoices)
-      .set({ 
+      .set({
         status: 'paid',
         paidAt: paidDate || new Date(),
         paidAmount: paidAmount,
@@ -3813,12 +3826,50 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
       })
       .where(eq(sdpInvoices.id, id))
       .returning();
-    
+
     if (!updated) {
       throw new Error(`Failed to mark invoice ${id} as paid - invoice not found`);
     }
-    
+
     console.log(`Invoice ${id} marked as paid successfully, new status: ${updated.status}`);
+  }
+
+  /**
+   * Reverse a "mark as paid" — clears `paidAt`/`paidAmount` and decides the
+   * resulting status:
+   *   - if `dueDate` already passed → `overdue`
+   *   - if invoice had `sentAt` (was sent at least once) → `sent`
+   *   - otherwise → `issued`
+   * This lets the admin edit and re-send, then mark paid again later.
+   */
+  async markSdpInvoiceAsUnpaid(id: string): Promise<void> {
+    const current = await this.getSdpInvoiceById(id);
+    if (!current) throw new Error(`Invoice ${id} not found`);
+    if (current.status !== 'paid') {
+      throw new Error(`Only paid invoices can be marked unpaid (current: ${current.status})`);
+    }
+
+    const now = new Date();
+    const due = current.dueDate ? new Date(current.dueDate as any) : null;
+    let nextStatus: 'overdue' | 'sent' | 'issued';
+    if (due && due.getTime() < now.getTime()) {
+      nextStatus = 'overdue';
+    } else if (current.sentAt) {
+      nextStatus = 'sent';
+    } else {
+      nextStatus = 'issued';
+    }
+
+    await db
+      .update(sdpInvoices)
+      .set({
+        status: nextStatus,
+        paidAt: null,
+        paidAmount: '0',
+        lastModified: now,
+        updatedAt: now,
+      })
+      .where(eq(sdpInvoices.id, id));
   }
 
   // SDP Invoice Line Items operations
