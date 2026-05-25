@@ -237,6 +237,17 @@ export default function Invoices() {
     enabled: user?.userType === 'business_user' && !isHostClientBusiness,
   });
 
+  // Margin payments owed to / paid to this business by SDP — sourced from the
+  // customer_billing invoices SDP raised on their behalf.
+  const { data: marginPayments = [], isLoading: isMarginPaymentsLoading } = useQuery<any[]>({
+    queryKey: ["/api/margin-payments", myBusiness?.id],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/margin-payments?businessId=${myBusiness?.id}`);
+      return res.json();
+    },
+    enabled: user?.userType === 'business_user' && !isHostClientBusiness && !!myBusiness?.id,
+  });
+
   const { data: timesheets = [] } = useQuery({
     queryKey: ["/api/timesheets"],
     enabled: user?.userType === 'worker',
@@ -375,7 +386,7 @@ export default function Invoices() {
               {(() => {
                 const cols =
                   user?.userType === 'sdp_internal' ? 'grid-cols-1' :
-                  isHostClientBusiness ? 'grid-cols-2' : 'grid-cols-3';
+                  isHostClientBusiness ? 'grid-cols-2' : 'grid-cols-4';
                 return (
                   <TabsList className={`grid w-full ${cols}`}>
                     <TabsTrigger value="contractor" className="flex items-center gap-2" data-testid="tab-contractor-invoices">
@@ -394,6 +405,15 @@ export default function Invoices() {
                         Client Invoices
                         {clientInvoices.length > 0 && (
                           <span className="ml-1 bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded-full">{clientInvoices.length}</span>
+                        )}
+                      </TabsTrigger>
+                    )}
+                    {user?.userType === 'business_user' && !isHostClientBusiness && (
+                      <TabsTrigger value="margin" className="flex items-center gap-2" data-testid="tab-margin-payments">
+                        <DollarSign className="h-4 w-4" />
+                        Margin Payments
+                        {marginPayments.length > 0 && (
+                          <span className="ml-1 bg-green-100 text-green-700 text-xs px-1.5 py-0.5 rounded-full">{marginPayments.length}</span>
                         )}
                       </TabsTrigger>
                     )}
@@ -1503,6 +1523,109 @@ export default function Invoices() {
                   onPageChange={clientPagination.setPage}
                   label="invoices"
                 />
+              </TabsContent>
+
+              <TabsContent value="margin" className="mt-6">
+                <div className="rounded-md border border-green-200 bg-green-50/60 px-3 py-2 mb-4 text-sm text-green-900">
+                  <span className="font-medium">Margins owed to you by SDP.</span>{' '}
+                  When SDP raises an invoice on your host client (Client Invoices), your margin
+                  share is tracked below. Status reflects what SDP has actually disbursed.
+                </div>
+
+                {isMarginPaymentsLoading ? (
+                  <Loader />
+                ) : marginPayments.length === 0 ? (
+                  <Card>
+                    <CardContent className="text-center py-12 text-secondary-600">
+                      <DollarSign className="h-12 w-12 mx-auto mb-3 text-secondary-300" />
+                      <p className="font-medium">No margin payments yet</p>
+                      <p className="text-sm mt-1">Once SDP records a margin payout against a customer-billing invoice, it will appear here.</p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {marginPayments.map((mp: any) => {
+                      const inv = mp.invoice;
+                      const statusColor =
+                        mp.status === 'paid' ? 'bg-green-100 text-green-800' :
+                        mp.status === 'partial' ? 'bg-amber-100 text-amber-800' :
+                        'bg-gray-100 text-gray-700';
+                      const statusIcon =
+                        mp.status === 'paid' ? <CheckCircle className="h-3 w-3 mr-1" /> :
+                        mp.status === 'partial' ? <Clock className="h-3 w-3 mr-1" /> :
+                        <AlertCircle className="h-3 w-3 mr-1" />;
+                      return (
+                        <Card key={mp.id} className="hover:shadow-md transition-shadow" data-testid={`card-margin-${mp.id}`}>
+                          <CardHeader className="pb-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <CardTitle className="text-base">
+                                  {mp.currency} {parseFloat(mp.marginAmount).toFixed(2)}
+                                </CardTitle>
+                                <CardDescription className="text-xs mt-0.5">
+                                  {inv?.invoiceNumber || 'Invoice —'}
+                                </CardDescription>
+                              </div>
+                              <Badge className={`text-xs whitespace-nowrap ${statusColor}`}>
+                                {statusIcon}
+                                {mp.status}
+                              </Badge>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="space-y-1.5 text-xs text-secondary-700">
+                            {inv && (
+                              <>
+                                <div className="flex justify-between">
+                                  <span className="text-secondary-500">Invoice total</span>
+                                  <span className="font-medium">{inv.currency} {parseFloat(inv.totalAmount).toFixed(2)}</span>
+                                </div>
+                                {inv.periodStart && inv.periodEnd && (
+                                  <div className="flex justify-between">
+                                    <span className="text-secondary-500">Period</span>
+                                    <span>{formatPeriod(inv.periodStart, inv.periodEnd)}</span>
+                                  </div>
+                                )}
+                                <div className="flex justify-between">
+                                  <span className="text-secondary-500">Invoice date</span>
+                                  <span>{new Date(inv.invoiceDate).toLocaleDateString()}</span>
+                                </div>
+                                {inv.paidAt && (
+                                  <div className="flex justify-between">
+                                    <span className="text-secondary-500">Client paid SDP</span>
+                                    <span className="text-green-700">{new Date(inv.paidAt).toLocaleDateString()}</span>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                            {mp.suggestedMargin && parseFloat(mp.suggestedMargin) > 0 && (
+                              <div className="flex justify-between">
+                                <span className="text-secondary-500">Suggested margin</span>
+                                <span>{mp.currency} {parseFloat(mp.suggestedMargin).toFixed(2)}</span>
+                              </div>
+                            )}
+                            {mp.paidDate && (
+                              <div className="flex justify-between">
+                                <span className="text-secondary-500">Disbursed on</span>
+                                <span className="text-green-700 font-medium">{new Date(mp.paidDate).toLocaleDateString()}</span>
+                              </div>
+                            )}
+                            {mp.referenceNumber && (
+                              <div className="flex justify-between">
+                                <span className="text-secondary-500">Reference</span>
+                                <span className="font-mono">{mp.referenceNumber}</span>
+                              </div>
+                            )}
+                            {mp.notes && (
+                              <div className="pt-1 border-t border-secondary-100 text-secondary-600 italic">
+                                {mp.notes}
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                )}
               </TabsContent>
             </Tabs>
           ) : (

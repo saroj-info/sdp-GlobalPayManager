@@ -8592,6 +8592,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid country or business' });
       }
 
+      // Determine invoice category: host clients (isRegistered=false) get
+      // 'customer_billing' so margin-payment tracking unlocks; registered
+      // businesses stay on 'sdp_services'.
+      const invoiceCategory = (toBusiness as any).isRegistered === false
+        ? 'customer_billing'
+        : 'sdp_services';
+
       // Determine business country (use primary country or first accessible)
       const businessCountry = (toBusiness as any).countryId || toBusiness.accessibleCountries?.[0];
       const isCrossBorder = businessCountry && businessCountry !== fromCountryId;
@@ -8616,6 +8623,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const invoiceData = {
         invoiceNumber,
+        invoiceCategory,
         fromCountryId,
         toBusinessId,
         serviceType,
@@ -8786,11 +8794,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const totalAmount = subtotalAmount + gstVatAmount;
 
       const invoiceNumber = await storage.generateSdpInvoiceNumber(fromCountryId);
+      const consolidatedCategory = (toBusiness as any).isRegistered === false
+        ? 'customer_billing'
+        : 'sdp_services';
       const invoice = await storage.createSdpInvoice({
         invoiceNumber,
         invoiceDate: new Date(invoiceDate),
         dueDate: new Date(dueDate),
-        invoiceCategory: 'sdp_services',
+        invoiceCategory: consolidatedCategory,
         fromCountryId,
         toBusinessId,
         serviceType: 'Employment Services — Consolidated',
@@ -9416,10 +9427,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Margin Payment routes (for tracking margin payments to businesses from customer invoices)
-  app.get('/api/margin-payments', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req: any, res) => {
+  app.get('/api/margin-payments', authMiddleware, async (req: any, res) => {
     try {
       const { invoiceId, businessId } = req.query;
-      
+      const userType = req.user?.userType;
+      const isSdpInternal = userType === 'sdp_internal';
+
+      // Business users only see margins owed to them. `margin_payments.businessId`
+      // points to the *host client* (the invoice's toBusinessId), so we resolve
+      // the logged-in employing business → its host-clients → margins against
+      // those host-client ids. The query `?businessId=<myBusiness.id>` is
+      // accepted as a self-identification check; rejected if it doesn't match.
+      if (!isSdpInternal) {
+        if (userType !== 'business_user') {
+          return res.status(403).json({ message: 'Forbidden' });
+        }
+        const myBusiness = await storage.getBusinessByOwnerId(req.user.id);
+        if (!myBusiness) {
+          return res.status(403).json({ message: 'No business associated with this account' });
+        }
+        if (!businessId || businessId !== myBusiness.id) {
+          return res.status(403).json({ message: 'Forbidden — businessId must match your own business' });
+        }
+        const hostClients = await storage.getHostClientsForBusiness(myBusiness.id);
+        if (hostClients.length === 0) {
+          return res.json([]);
+        }
+        const payments = await storage.getMarginPaymentsForBusinessIds(hostClients.map(h => h.id));
+        return res.json(payments);
+      }
+
       let payments;
       if (invoiceId) {
         payments = await storage.getMarginPaymentsByInvoice(invoiceId);
@@ -9428,7 +9465,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         payments = await storage.getAllMarginPayments();
       }
-      
+
       res.json(payments);
     } catch (error: any) {
       console.error('Error fetching margin payments:', error);

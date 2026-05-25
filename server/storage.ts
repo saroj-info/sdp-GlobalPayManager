@@ -435,6 +435,7 @@ export interface IStorage {
   // Margin Payment operations
   getMarginPaymentsByInvoice(invoiceId: string): Promise<SelectMarginPaymentType[]>;
   getMarginPaymentsByBusiness(businessId: string): Promise<SelectMarginPaymentType[]>;
+  getMarginPaymentsForBusinessIds(businessIds: string[]): Promise<SelectMarginPaymentType[]>;
   getAllMarginPayments(): Promise<SelectMarginPaymentType[]>;
   createMarginPayment(payment: InsertMarginPaymentType): Promise<SelectMarginPaymentType>;
   updateMarginPayment(id: string, updates: Partial<InsertMarginPaymentType>): Promise<SelectMarginPaymentType>;
@@ -3742,6 +3743,7 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
       ...invoiceData,
       // Calculated financial fields always take precedence — never let req.body override them
       invoiceNumber,
+      invoiceCategory: (business as any).isRegistered === false ? 'customer_billing' : 'sdp_services',
       invoiceDate: new Date(),
       dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
       fromCountryId,
@@ -3967,11 +3969,36 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
   }
 
   async getMarginPaymentsByBusiness(businessId: string): Promise<SelectMarginPaymentType[]> {
-    return await db
-      .select()
+    // Join invoice info so the business-side UI can show invoice number /
+    // period / amount alongside each margin row without N+1 calls.
+    const rows = await db
+      .select({
+        payment: marginPayments,
+        invoice: sdpInvoices,
+      })
       .from(marginPayments)
+      .leftJoin(sdpInvoices, eq(marginPayments.sdpInvoiceId, sdpInvoices.id))
       .where(eq(marginPayments.businessId, businessId))
-      .orderBy(marginPayments.createdAt);
+      .orderBy(desc(marginPayments.createdAt));
+
+    return rows.map(r => ({ ...r.payment, invoice: r.invoice })) as any;
+  }
+
+  async getMarginPaymentsForBusinessIds(businessIds: string[]): Promise<SelectMarginPaymentType[]> {
+    if (businessIds.length === 0) return [];
+    // Same join shape as getMarginPaymentsByBusiness, but for a set of business
+    // ids (used to fetch all margins across an employing business's host clients).
+    const rows = await db
+      .select({
+        payment: marginPayments,
+        invoice: sdpInvoices,
+      })
+      .from(marginPayments)
+      .leftJoin(sdpInvoices, eq(marginPayments.sdpInvoiceId, sdpInvoices.id))
+      .where(inArray(marginPayments.businessId, businessIds))
+      .orderBy(desc(marginPayments.createdAt));
+
+    return rows.map(r => ({ ...r.payment, invoice: r.invoice })) as any;
   }
 
   async getAllMarginPayments(): Promise<SelectMarginPaymentType[]> {
