@@ -38,6 +38,7 @@ export interface WorkerListResult {
 export type WorkerListScope =
   | { kind: "all" }                              // SDP internal — sees every worker
   | { kind: "own_business"; businessId: string } // business user — sees own employees
+  | { kind: "own_business_or_host_client"; businessId: string } // business user — sees own employees + workers placed at them via contracts.customerBusinessId
   | { kind: "self"; workerId: string }           // worker — sees only themselves
   | { kind: "denied"; status: number; message: string };
 

@@ -9,8 +9,8 @@
  */
 
 import { db } from "../../db";
-import { workers, countries, businesses } from "@shared/schema";
-import { and, or, eq, ilike, sql, asc, desc, type SQL } from "drizzle-orm";
+import { workers, countries, businesses, contracts } from "@shared/schema";
+import { and, or, eq, ilike, inArray, sql, asc, desc, type SQL } from "drizzle-orm";
 import type { WorkerListQuery, WorkerListResult, WorkerListScope, SortKey } from "./types";
 
 function orderClause(sortBy: SortKey) {
@@ -30,9 +30,27 @@ function buildWhere(scope: WorkerListScope, query: WorkerListQuery): SQL | undef
   // Scope clause (always applied — can't be overridden by query params)
   if (scope.kind === "own_business") conditions.push(eq(workers.businessId, scope.businessId));
   if (scope.kind === "self")         conditions.push(eq(workers.id, scope.workerId));
+  if (scope.kind === "own_business_or_host_client") {
+    // workers we employ OR workers placed at us via a contract's customerBusinessId
+    const hostClientWorkerIds = db
+      .select({ workerId: contracts.workerId })
+      .from(contracts)
+      .where(eq(contracts.customerBusinessId, scope.businessId));
+    const scopeClause = or(
+      eq(workers.businessId, scope.businessId),
+      inArray(workers.id, hostClientWorkerIds),
+    );
+    if (scopeClause) conditions.push(scopeClause);
+  }
 
   // Query filters
-  if (query.businessId)  conditions.push(eq(workers.businessId, query.businessId));
+  // `businessId` is meant for SDP (scope: "all") to narrow the list down to a
+  // specific business. For business_user scopes the caller is already limited
+  // by their scope — applying an extra AND on businessId would defeat the OR
+  // in `own_business_or_host_client` (filtering out host-client workers).
+  if (query.businessId && scope.kind === "all") {
+    conditions.push(eq(workers.businessId, query.businessId));
+  }
   if (query.countryId)   conditions.push(eq(workers.countryId, query.countryId));
   if (query.workerType)  conditions.push(eq(workers.workerType, query.workerType as any));
   if (query.search) {

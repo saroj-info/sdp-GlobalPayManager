@@ -7458,16 +7458,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const business = await storage.getBusinessByOwnerId(userId);
-      
+
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
       }
-      
-      // IMPORTANT: Leave approval belongs to the employing business only (businessId).
-      // Host clients (customerBusinessId) do NOT manage leave for workers provided to them —
-      // they only manage leave for workers they hired directly (where they are the employer).
-      const leaveRequests = await storage.getLeaveRequestsByBusiness(business.id);
-      res.json(leaveRequests);
+
+      // A business may be the employing business AND/OR the host client. We
+      // combine both buckets so a host-client business owner sees leave for
+      // workers placed at them via contracts, and dedupe by row id in case
+      // the same row qualifies via both paths.
+      const [ownLeaves, hostClientLeaves] = await Promise.all([
+        storage.getLeaveRequestsByBusiness(business.id),
+        storage.getLeaveRequestsForHostClient(business.id),
+      ]);
+      const seen = new Set<string>();
+      const merged = [...ownLeaves, ...hostClientLeaves].filter((lr: any) => {
+        if (seen.has(lr.id)) return false;
+        seen.add(lr.id);
+        return true;
+      });
+      res.json(merged);
     } catch (error: any) {
       console.error("Error fetching leave requests:", error);
       res.status(500).json({ message: "Failed to fetch leave requests" });
@@ -7512,11 +7522,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Returns true if the user owns a business that's either:
+  //  - the leave's employing business (leaveRequests.businessId), or
+  //  - the host-client business referenced by any contract for this worker
+  //    (contracts.customerBusinessId).
+  const isBusinessAuthorizedForLeave = async (userId: string, leave: { workerId: string; businessId: string }) => {
+    const business = await storage.getBusinessByOwnerId(userId);
+    if (!business) return false;
+    if (business.id === leave.businessId) return true;
+    const workerContracts = await storage.getContractsByWorker(leave.workerId);
+    return workerContracts.some((c: any) => c.customerBusinessId === business.id);
+  };
+
   app.patch('/api/leave-requests/:id/status', authMiddleware, async (req: any, res) => {
     try {
       const { id } = req.params;
       const { status, rejectionReason } = req.body;
       const userId = req.user?.id;
+      const userType = req.user?.userType;
+
+      const existing = await storage.getLeaveRequestById(id);
+      if (!existing) return res.status(404).json({ message: "Leave request not found" });
+
+      // Approve/reject is for the business or SDP only — workers can't action
+      // their own leave. A business user qualifies as either the employing
+      // business or the host client where the worker is placed.
+      if (userType === 'business_user') {
+        const ok = await isBusinessAuthorizedForLeave(userId, existing);
+        if (!ok) return res.status(403).json({ message: "Unauthorized to action this leave request" });
+      } else if (userType !== 'sdp_internal') {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
 
       await storage.updateLeaveRequestStatus(id, status, userId, rejectionReason);
       res.json({ message: "Leave request status updated successfully" });
@@ -7549,10 +7585,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Unauthorized to edit this leave request" });
         }
       } else if (userType === 'business_user') {
-        const business = await storage.getBusinessByOwnerId(userId);
-        if (!business || existing.businessId !== business.id) {
-          return res.status(403).json({ message: "Unauthorized to edit this leave request" });
-        }
+        const ok = await isBusinessAuthorizedForLeave(userId, existing);
+        if (!ok) return res.status(403).json({ message: "Unauthorized to edit this leave request" });
       } else if (userType !== 'sdp_internal') {
         return res.status(403).json({ message: "Unauthorized" });
       }

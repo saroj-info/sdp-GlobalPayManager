@@ -354,6 +354,7 @@ export interface IStorage {
   // Leave request operations  
   getLeaveRequestsByWorker(workerId: string): Promise<LeaveRequest[]>;
   getLeaveRequestsByBusiness(businessId: string): Promise<(LeaveRequest & { worker: Worker })[]>;
+  getLeaveRequestsForHostClient(hostClientBusinessId: string): Promise<(LeaveRequest & { worker: Worker })[]>;
   getAllLeaveRequests(): Promise<(LeaveRequest & { worker: Worker; business: Business })[]>;
   createLeaveRequest(leaveRequest: InsertLeaveRequest): Promise<LeaveRequest>;
   getLeaveRequestById(id: string): Promise<LeaveRequest | undefined>;
@@ -2349,6 +2350,27 @@ export class DatabaseStorage implements IStorage {
       .from(leaveRequests)
       .leftJoin(workers, eq(leaveRequests.workerId, workers.id))
       .where(eq(leaveRequests.businessId, businessId))
+      .orderBy(desc(leaveRequests.createdAt))
+      .then(rows => rows.map(row => ({ ...row.leave_requests, worker: row.workers! })));
+  }
+
+  async getLeaveRequestsForHostClient(hostClientBusinessId: string): Promise<(LeaveRequest & { worker: Worker })[]> {
+    // Leaves whose worker is placed at this host client via at least one
+    // contract (contracts.customerBusinessId = this business). Used so a host
+    // client business owner can view/approve leave for workers SDP/employer
+    // provided to them.
+    const workerRows = await db
+      .selectDistinct({ workerId: contracts.workerId })
+      .from(contracts)
+      .where(eq(contracts.customerBusinessId, hostClientBusinessId));
+    const workerIds = workerRows.map(r => r.workerId).filter((id): id is string => !!id);
+    if (workerIds.length === 0) return [];
+
+    return await db
+      .select()
+      .from(leaveRequests)
+      .leftJoin(workers, eq(leaveRequests.workerId, workers.id))
+      .where(inArray(leaveRequests.workerId, workerIds))
       .orderBy(desc(leaveRequests.createdAt))
       .then(rows => rows.map(row => ({ ...row.leave_requests, worker: row.workers! })));
   }

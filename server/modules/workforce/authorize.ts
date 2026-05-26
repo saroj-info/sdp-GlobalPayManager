@@ -24,7 +24,10 @@ export async function resolveWorkerListScope(user: AuthUser): Promise<WorkerList
   if (user.userType === "business_user") {
     const business = await storage.getBusinessByOwnerId(user.id);
     if (!business) return { kind: "denied", status: 404, message: "Business not found" };
-    return { kind: "own_business", businessId: business.id };
+    // A business may also be a host client — include workers placed at them
+    // via contracts.customerBusinessId. The OR clause is harmless when the
+    // business has no host-client contracts.
+    return { kind: "own_business_or_host_client", businessId: business.id };
   }
 
   return { kind: "denied", status: 403, message: "Not authorized" };
