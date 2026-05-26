@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -37,6 +37,7 @@ import { ArrowLeft, FileText, Building, Globe, Edit, Plus, Trash2 } from "lucide
 const editSdpInvoiceSchema = z.object({
   fromCountryId: z.string().min(1, "SDP entity (country) is required"),
   toBusinessId: z.string().min(1, "Business is required"),
+  contractId: z.string().optional(),
   serviceType: z.string().min(1, "Service type is required"),
   description: z.string().min(1, "Description is required"),
   gstVatRate: z.string().optional(),
@@ -196,6 +197,10 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
     queryKey: ["/api/businesses"],
   });
 
+  const { data: contracts = [] } = useQuery<any[]>({
+    queryKey: ["/api/contracts"],
+  });
+
   // Format dates for form inputs
   const formatDateForInput = (dateString: string) => {
     const date = new Date(dateString);
@@ -207,6 +212,7 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
     defaultValues: {
       fromCountryId: invoice?.fromCountryId || "",
       toBusinessId: invoice?.toBusinessId || "",
+      contractId: invoice?.contractId || undefined,
       serviceType: invoice?.serviceType || "employment_services",
       description: invoice?.description || "",
       gstVatRate: invoice?.gstVatRate ?? "",
@@ -228,6 +234,9 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
       const totals = calculatePreviewTotals(data);
       const payload = {
         ...data,
+        // Send null (not undefined) so JSON serialization preserves the
+        // "clear this column" intent when the user picks "No contract".
+        contractId: data.contractId ?? null,
         // gstVatRate: empty input → '0' (no tax applied)
         gstVatRate: totals.gstRate.toFixed(2),
         gstVatAmount: totals.gstAmount.toFixed(2),
@@ -274,6 +283,51 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
 
   const formData = form.watch();
   const previewTotals = calculatePreviewTotals(formData);
+
+  // Filter Business Client dropdown by selected SDP entity — same rules as
+  // the create modal: own accessibleCountries, host-clients fall back to parent.
+  const fromCountryId = formData.fromCountryId;
+  const toBusinessId = formData.toBusinessId;
+  const filteredBusinesses = fromCountryId
+    ? businesses.filter((b: any) => {
+        const own = Array.isArray(b.accessibleCountries) ? b.accessibleCountries : [];
+        if (own.includes(fromCountryId)) return true;
+        if (b.isRegistered === false && b.parentBusinessId) {
+          const parent = businesses.find((p: any) => p.id === b.parentBusinessId);
+          const parentCountries = Array.isArray(parent?.accessibleCountries) ? parent!.accessibleCountries : [];
+          return parentCountries.includes(fromCountryId);
+        }
+        return false;
+      })
+    : businesses;
+
+  const selectedBusiness = businesses.find((b: any) => b.id === toBusinessId);
+  const isSelectedHostClient = selectedBusiness?.isRegistered === false;
+  const filteredContracts = toBusinessId
+    ? contracts.filter((c: any) => (isSelectedHostClient
+        ? c.customerBusinessId === toBusinessId
+        : c.businessId === toBusinessId))
+    : [];
+
+  // Clear the business if it falls out of the filtered list (e.g. country changed).
+  useEffect(() => {
+    if (toBusinessId && filteredBusinesses.length > 0 && !filteredBusinesses.some((b: any) => b.id === toBusinessId)) {
+      form.setValue('toBusinessId', '');
+      form.setValue('contractId', undefined);
+    }
+  }, [fromCountryId, filteredBusinesses, toBusinessId, form]);
+
+  // Clear the contract if it falls out of the filtered list (e.g. business changed).
+  const currentContractId = form.watch('contractId');
+  useEffect(() => {
+    if (currentContractId && !filteredContracts.some((c: any) => c.id === currentContractId)) {
+      form.setValue('contractId', undefined);
+    }
+  }, [toBusinessId, filteredContracts, currentContractId, form]);
+
+  const getContractLabel = (c: any): string => {
+    return c.contractName || c.customRoleTitle || c.roleTitle?.title || c.roleTitle?.name || c.jobTitle || `Contract ${String(c.id).slice(0, 8)}`;
+  };
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
@@ -330,24 +384,66 @@ export function EditSdpInvoiceModal({ invoice, onClose, onSuccess }: EditSdpInvo
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Client Business</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
+                        <Select onValueChange={field.onChange} value={field.value} disabled={!fromCountryId}>
                           <FormControl>
                             <SelectTrigger data-testid="select-to-business">
-                              <SelectValue placeholder="Select client business" />
+                              <SelectValue placeholder={fromCountryId ? "Select client business" : "Select SDP entity first"} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            {businesses.map((business: any) => (
-                              <SelectItem key={business.id} value={business.id}>
-                                {business.name}
-                              </SelectItem>
-                            ))}
+                            {filteredBusinesses.length === 0 ? (
+                              <div className="px-2 py-1.5 text-sm text-gray-500">No businesses available for this entity</div>
+                            ) : (
+                              filteredBusinesses.map((business: any) => (
+                                <SelectItem key={business.id} value={business.id}>
+                                  {business.name}
+                                  {business.isRegistered === false && <span className="ml-1 text-xs text-gray-500">(host client)</span>}
+                                </SelectItem>
+                              ))
+                            )}
                           </SelectContent>
                         </Select>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
+
+                  {toBusinessId && (
+                    <FormField
+                      control={form.control}
+                      name="contractId"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Contract (optional)</FormLabel>
+                          <Select
+                            onValueChange={(v) => field.onChange(v === "__none__" ? undefined : v)}
+                            value={field.value || "__none__"}
+                          >
+                            <FormControl>
+                              <SelectTrigger data-testid="select-contract">
+                                <SelectValue placeholder="No contract" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="__none__">No contract</SelectItem>
+                              {filteredContracts.length === 0 ? (
+                                <div className="px-2 py-1.5 text-sm text-gray-500">
+                                  No contracts for {isSelectedHostClient ? 'this host client' : 'this business'}
+                                </div>
+                              ) : (
+                                filteredContracts.map((c: any) => (
+                                  <SelectItem key={c.id} value={c.id}>
+                                    {getContractLabel(c)}
+                                  </SelectItem>
+                                ))
+                              )}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
 
                   <FormField
                     control={form.control}

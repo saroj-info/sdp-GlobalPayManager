@@ -13,6 +13,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { CreateInvoiceModal } from "@/components/modals/create-invoice-modal";
 import { SdpInvoicePaymentModal } from "@/components/modals/sdp-invoice-payment-modal";
 import { InvoiceDetailsModal } from "@/components/modals/invoice-details-modal";
+import { MarginPaymentDetailsModal } from "@/components/modals/margin-payment-details-modal";
 import { useAuth } from "@/hooks/useAuth";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -204,6 +205,7 @@ export default function Invoices() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedInvoiceForPayment, setSelectedInvoiceForPayment] = useState<SdpInvoice | null>(null);
   const [selectedInvoiceForDetails, setSelectedInvoiceForDetails] = useState<any | null>(null);
+  const [selectedMarginPayment, setSelectedMarginPayment] = useState<any | null>(null);
   const [activeTab, setActiveTab] = useState("contractor");
   const [contractorViewMode, setContractorViewMode] = useState<'card' | 'list'>('card');
   const [contractorSortBy, setContractorSortBy] = useState<'date' | 'invoice_number' | 'contractor' | 'amount' | 'status'>('date');
@@ -1546,6 +1548,10 @@ export default function Invoices() {
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                     {marginPayments.map((mp: any) => {
                       const inv = mp.invoice;
+                      const ctr = mp.contract;
+                      const contractLabel = ctr
+                        ? (ctr.contractName || ctr.customRoleTitle || ctr.jobTitle || `Contract ${String(ctr.id).slice(0, 8)}`)
+                        : null;
                       const statusColor =
                         mp.status === 'paid' ? 'bg-green-100 text-green-800' :
                         mp.status === 'partial' ? 'bg-amber-100 text-amber-800' :
@@ -1555,7 +1561,12 @@ export default function Invoices() {
                         mp.status === 'partial' ? <Clock className="h-3 w-3 mr-1" /> :
                         <AlertCircle className="h-3 w-3 mr-1" />;
                       return (
-                        <Card key={mp.id} className="hover:shadow-md transition-shadow" data-testid={`card-margin-${mp.id}`}>
+                        <Card
+                          key={mp.id}
+                          className="hover:shadow-md hover:border-green-300 transition-all cursor-pointer"
+                          onClick={() => setSelectedMarginPayment(mp)}
+                          data-testid={`card-margin-${mp.id}`}
+                        >
                           <CardHeader className="pb-2">
                             <div className="flex items-start justify-between gap-2">
                               <div>
@@ -1573,6 +1584,24 @@ export default function Invoices() {
                             </div>
                           </CardHeader>
                           <CardContent className="space-y-1.5 text-xs text-secondary-700">
+                            {contractLabel && (
+                              <div className="flex justify-between">
+                                <span className="text-secondary-500">Contract</span>
+                                <span className="font-medium text-right max-w-[60%] truncate" title={contractLabel}>{contractLabel}</span>
+                              </div>
+                            )}
+                            {ctr?.employmentType && (
+                              <div className="flex justify-between">
+                                <span className="text-secondary-500">Employment</span>
+                                <span className="capitalize">{String(ctr.employmentType).replace(/_/g, ' ')}</span>
+                              </div>
+                            )}
+                            {ctr?.rate && ctr?.rateType && (
+                              <div className="flex justify-between">
+                                <span className="text-secondary-500">Rate</span>
+                                <span>{ctr.currency || mp.currency} {parseFloat(ctr.rate).toFixed(2)}/{ctr.rateType}</span>
+                              </div>
+                            )}
                             {inv && (
                               <>
                                 <div className="flex justify-between">
@@ -1707,6 +1736,13 @@ export default function Invoices() {
             invoice={selectedInvoiceForDetails}
             open={!!selectedInvoiceForDetails}
             onOpenChange={(open) => { if (!open) setSelectedInvoiceForDetails(null); }}
+          />
+
+          {/* Margin payment details — opened by clicking a card on the Margin Payments tab. */}
+          <MarginPaymentDetailsModal
+            marginPayment={selectedMarginPayment}
+            open={!!selectedMarginPayment}
+            onOpenChange={(open) => { if (!open) setSelectedMarginPayment(null); }}
           />
         </div>
   );

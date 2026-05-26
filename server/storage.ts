@@ -2533,6 +2533,7 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(workers, eq(payslips.workerId, workers.id))
       .leftJoin(users, eq(payslips.uploadedBy, users.id))
       .where(eq(payslips.businessId, businessId))
+      .orderBy(desc(payslips.createdAt))
       .then(rows => rows.map(row => ({ ...row.payslips, worker: row.workers!, uploadedByUser: row.users! })));
   }
 
@@ -2545,15 +2546,17 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(countries, eq(workers.countryId, countries.id))
       .leftJoin(businesses, eq(payslips.businessId, businesses.id))
       .leftJoin(users, eq(payslips.uploadedBy, users.id));
-    const query = countryIds.length > 0
+    const filtered = countryIds.length > 0
       ? base.where(inArray(workers.countryId, countryIds))
       : base;
-    return await query.then(rows => rows.map(row => ({
-      ...row.payslips,
-      worker: { ...row.workers!, country: row.countries! },
-      business: row.businesses!,
-      uploadedByUser: row.users!,
-    })));
+    return await filtered
+      .orderBy(desc(payslips.createdAt))
+      .then(rows => rows.map(row => ({
+        ...row.payslips,
+        worker: { ...row.workers!, country: row.countries! },
+        business: row.businesses!,
+        uploadedByUser: row.users!,
+      })));
   }
 
   async createPayslip(payslip: InsertPayslip): Promise<Payslip> {
@@ -3969,19 +3972,22 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
   }
 
   async getMarginPaymentsByBusiness(businessId: string): Promise<SelectMarginPaymentType[]> {
-    // Join invoice info so the business-side UI can show invoice number /
-    // period / amount alongside each margin row without N+1 calls.
+    // Join invoice + contract info so the business-side UI can show invoice
+    // number / period / amount + contract details alongside each margin row
+    // without N+1 calls.
     const rows = await db
       .select({
         payment: marginPayments,
         invoice: sdpInvoices,
+        contract: contracts,
       })
       .from(marginPayments)
       .leftJoin(sdpInvoices, eq(marginPayments.sdpInvoiceId, sdpInvoices.id))
+      .leftJoin(contracts, eq(marginPayments.contractId, contracts.id))
       .where(eq(marginPayments.businessId, businessId))
       .orderBy(desc(marginPayments.createdAt));
 
-    return rows.map(r => ({ ...r.payment, invoice: r.invoice })) as any;
+    return rows.map(r => ({ ...r.payment, invoice: r.invoice, contract: r.contract })) as any;
   }
 
   async getMarginPaymentsForBusinessIds(businessIds: string[]): Promise<SelectMarginPaymentType[]> {
@@ -3992,13 +3998,15 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
       .select({
         payment: marginPayments,
         invoice: sdpInvoices,
+        contract: contracts,
       })
       .from(marginPayments)
       .leftJoin(sdpInvoices, eq(marginPayments.sdpInvoiceId, sdpInvoices.id))
+      .leftJoin(contracts, eq(marginPayments.contractId, contracts.id))
       .where(inArray(marginPayments.businessId, businessIds))
       .orderBy(desc(marginPayments.createdAt));
 
-    return rows.map(r => ({ ...r.payment, invoice: r.invoice })) as any;
+    return rows.map(r => ({ ...r.payment, invoice: r.invoice, contract: r.contract })) as any;
   }
 
   async getAllMarginPayments(): Promise<SelectMarginPaymentType[]> {

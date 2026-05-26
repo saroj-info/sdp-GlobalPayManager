@@ -37,6 +37,7 @@ import { ArrowLeft, FileText, Building, Globe, Plus, Trash2 } from "lucide-react
 const createSdpInvoiceSchema = z.object({
   fromCountryId: z.string().min(1, "SDP entity (country) is required"),
   toBusinessId: z.string().min(1, "Business is required"),
+  contractId: z.string().optional(),
   serviceType: z.string().min(1, "Service type is required"),
   description: z.string().min(1, "Description is required"),
   gstVatRate: z.string().optional(),
@@ -119,6 +120,10 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
     queryKey: ["/api/businesses"],
   });
 
+  const { data: contracts = [] } = useQuery<any[]>({
+    queryKey: ["/api/contracts"],
+  });
+
   // Line item management functions
   const addLineItem = useCallback(() => {
     setLineItems(prev => [...prev, { 
@@ -176,6 +181,7 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
       const processedData = {
         fromCountryId: data.fromCountryId,
         toBusinessId: data.toBusinessId,
+        contractId: data.contractId || null,
         serviceType: data.serviceType,
         description: data.description,
         subtotal: subtotal.toString(),
@@ -261,6 +267,54 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
   const selectedBusiness = businesses.find((b: any) => b.id === toBusinessId);
   const businessCountry = selectedBusiness?.countryId || selectedBusiness?.accessibleCountries?.[0];
   const isCrossBorder = businessCountry && businessCountry !== fromCountryId;
+
+  // Filter the Business Client dropdown by the selected SDP Entity (country).
+  // Host clients (isRegistered=false) usually don't carry their own accessibleCountries,
+  // so fall back to the parent business's countries.
+  const filteredBusinesses = fromCountryId
+    ? businesses.filter((b: any) => {
+        const own = Array.isArray(b.accessibleCountries) ? b.accessibleCountries : [];
+        if (own.includes(fromCountryId)) return true;
+        if (b.isRegistered === false && b.parentBusinessId) {
+          const parent = businesses.find((p: any) => p.id === b.parentBusinessId);
+          const parentCountries = Array.isArray(parent?.accessibleCountries) ? parent!.accessibleCountries : [];
+          return parentCountries.includes(fromCountryId);
+        }
+        return false;
+      })
+    : businesses;
+
+  // Filter contracts by selected business. For a host-client business, match on
+  // customerBusinessId (contract's host-client side). For a registered/employing
+  // business, match on businessId.
+  const isSelectedHostClient = selectedBusiness?.isRegistered === false;
+  const filteredContracts = toBusinessId
+    ? contracts.filter((c: any) => (isSelectedHostClient
+        ? c.customerBusinessId === toBusinessId
+        : c.businessId === toBusinessId))
+    : [];
+
+  // If the currently-selected business is no longer in the filtered list
+  // (because the SDP entity changed), clear it — and clear the contract too.
+  useEffect(() => {
+    if (toBusinessId && filteredBusinesses.length > 0 && !filteredBusinesses.some((b: any) => b.id === toBusinessId)) {
+      form.setValue('toBusinessId', '');
+      form.setValue('contractId', undefined);
+    }
+  }, [fromCountryId, filteredBusinesses, toBusinessId, form]);
+
+  // When the business changes, clear the contract selection so we never carry
+  // a contract that no longer belongs to the picked business.
+  const currentContractId = form.watch('contractId');
+  useEffect(() => {
+    if (currentContractId && !filteredContracts.some((c: any) => c.id === currentContractId)) {
+      form.setValue('contractId', undefined);
+    }
+  }, [toBusinessId, filteredContracts, currentContractId, form]);
+
+  const getContractLabel = (c: any): string => {
+    return c.contractName || c.customRoleTitle || c.roleTitle?.title || c.roleTitle?.name || c.jobTitle || `Contract ${String(c.id).slice(0, 8)}`;
+  };
 
   return (
     <Dialog open onOpenChange={onClose}>
@@ -480,18 +534,23 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Business Client</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
+                    <Select onValueChange={field.onChange} value={field.value} disabled={!fromCountryId}>
                       <FormControl>
                         <SelectTrigger data-testid="select-to-business">
-                          <SelectValue placeholder="Select business" />
+                          <SelectValue placeholder={fromCountryId ? "Select business" : "Select SDP entity first"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {businesses.filter((business: any) => business.id && business.name).map((business: any) => (
-                          <SelectItem key={business.id} value={business.id}>
-                            {business.name}
-                          </SelectItem>
-                        ))}
+                        {filteredBusinesses.filter((business: any) => business.id && business.name).length === 0 ? (
+                          <div className="px-2 py-1.5 text-sm text-gray-500">No businesses available for this entity</div>
+                        ) : (
+                          filteredBusinesses.filter((business: any) => business.id && business.name).map((business: any) => (
+                            <SelectItem key={business.id} value={business.id}>
+                              {business.name}
+                              {business.isRegistered === false && <span className="ml-1 text-xs text-gray-500">(host client)</span>}
+                            </SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -499,6 +558,45 @@ export function CreateSdpInvoiceModal({ onClose, onSuccess }: CreateSdpInvoiceMo
                 )}
               />
             </div>
+
+            {/* Contract selector — filtered by selected business. For a host
+                client business, contracts are matched via customerBusinessId. */}
+            {toBusinessId && (
+              <FormField
+                control={form.control}
+                name="contractId"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Contract (optional)</FormLabel>
+                    <Select
+                      onValueChange={(v) => field.onChange(v === "__none__" ? undefined : v)}
+                      value={field.value || "__none__"}
+                    >
+                      <FormControl>
+                        <SelectTrigger data-testid="select-contract">
+                          <SelectValue placeholder="No contract" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="__none__">No contract</SelectItem>
+                        {filteredContracts.length === 0 ? (
+                          <div className="px-2 py-1.5 text-sm text-gray-500">
+                            No contracts for {isSelectedHostClient ? 'this host client' : 'this business'}
+                          </div>
+                        ) : (
+                          filteredContracts.map((c: any) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              {getContractLabel(c)}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {/* PO selector: only shown when a business is selected and has open POs */}
             {toBusinessId && (

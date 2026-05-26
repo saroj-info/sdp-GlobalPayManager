@@ -8564,6 +8564,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const {
         fromCountryId,
         toBusinessId,
+        contractId: rawContractId,
         serviceType,
         description,
         subtotal,
@@ -8626,6 +8627,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         invoiceCategory,
         fromCountryId,
         toBusinessId,
+        contractId: rawContractId || null,
         serviceType,
         description,
         subtotal: subtotalAmount.toString(),
