@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -33,7 +33,8 @@ import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { Calendar as CalendarIcon, Plus, Clock, Check, X, AlertCircle, Search, Plane, CalendarDays, Hourglass } from "lucide-react";
+import { Calendar as CalendarIcon, Plus, Clock, Check, X, AlertCircle, Search, Plane, CalendarDays, Hourglass, LayoutGrid, List as ListIcon, ArrowUpDown } from "lucide-react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PageLoader } from "@/components/ui/loader";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -51,6 +52,9 @@ export default function LeavePage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  // View + sort parity with the admin /leave-requests page.
+  const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
+  const [sortBy, setSortBy] = useState<'recent' | 'startDate' | 'type' | 'status'>('recent');
   const [selectedRequest, setSelectedRequest] = useState<any | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -164,6 +168,26 @@ export default function LeavePage() {
     });
   }, [leaveRequests, statusFilter, typeFilter, searchQuery]);
 
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    switch (sortBy) {
+      case 'startDate':
+        arr.sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+        break;
+      case 'type':
+        arr.sort((a, b) => String(a.leaveType).localeCompare(String(b.leaveType)));
+        break;
+      case 'status':
+        arr.sort((a, b) => String(a.status).localeCompare(String(b.status)));
+        break;
+      case 'recent':
+      default:
+        arr.sort((a, b) => new Date(b.createdAt || b.submittedAt || 0).getTime() - new Date(a.createdAt || a.submittedAt || 0).getTime());
+        break;
+    }
+    return arr;
+  }, [filtered, sortBy]);
+
   const {
     pageItems,
     page,
@@ -171,7 +195,11 @@ export default function LeavePage() {
     pageSize,
     totalPages,
     totalItems,
-  } = usePagination(filtered, { pageSize: 9 });
+  } = usePagination(sorted, { pageSize: viewMode === 'list' ? 20 : 9 });
+
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, typeFilter, searchQuery, sortBy, viewMode, setPage]);
 
   if (isLoading || profileLoading) {
     return <PageLoader label="Loading leave requests" />;
@@ -326,13 +354,51 @@ export default function LeavePage() {
               </SelectContent>
             </Select>
           </div>
-          <Button
-            onClick={() => setShowForm(true)}
-            data-testid="button-new-leave-request"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            New Leave Request
-          </Button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex border border-secondary-300 rounded-md overflow-hidden">
+              <Button
+                variant={viewMode === 'card' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('card')}
+                className="rounded-none border-r border-secondary-300 h-9"
+                data-testid="button-leave-view-card"
+              >
+                <LayoutGrid className="h-4 w-4 mr-1" />
+                Card
+              </Button>
+              <Button
+                variant={viewMode === 'list' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('list')}
+                className="rounded-none h-9"
+                data-testid="button-leave-view-list"
+              >
+                <ListIcon className="h-4 w-4 mr-1" />
+                List
+              </Button>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <ArrowUpDown className="h-4 w-4 text-secondary-600" />
+              <Select value={sortBy} onValueChange={(v: any) => setSortBy(v)}>
+                <SelectTrigger className="w-[150px] h-9 text-sm" data-testid="select-leave-sort">
+                  <SelectValue placeholder="Sort by" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="recent">Most recent</SelectItem>
+                  <SelectItem value="startDate">Start date</SelectItem>
+                  <SelectItem value="type">Leave type</SelectItem>
+                  <SelectItem value="status">Status</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              onClick={() => setShowForm(true)}
+              data-testid="button-new-leave-request"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              New Leave Request
+            </Button>
+          </div>
         </div>
 
         <Dialog
@@ -528,75 +594,125 @@ export default function LeavePage() {
                 </div>
               </CardContent>
             </Card>
-          ) : filtered.length === 0 ? (
+          ) : sorted.length === 0 ? (
             <Card>
               <CardContent className="flex items-center justify-center py-10 text-center text-sm text-secondary-600">
                 No leave requests match the current filters.
               </CardContent>
             </Card>
-          ) : (
-            pageItems.map((request: any) => (
-              <Card
-                key={request.id}
-                className="hover:shadow-md hover:border-primary/40 transition-all cursor-pointer"
-                onClick={() => setSelectedRequest(request)}
-                data-testid={`card-leave-request-${request.id}`}
-              >
-                <CardContent className="pt-6">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-2">
-                      <div className="flex items-center space-x-2">
-                        <Badge variant={getStatusBadgeVariant(request.status)} className="flex items-center gap-1">
-                          {getStatusIcon(request.status)}
-                          {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
-                        </Badge>
-                        <span className="text-sm text-gray-600">
-                          {request.leaveType.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())} Leave
-                        </span>
-                      </div>
-                      <div className="text-sm text-gray-600">
-                        <strong>{format(new Date(request.startDate), "PPP")}</strong> to <strong>{format(new Date(request.endDate), "PPP")}</strong>
-                        <span className="ml-2">({request.totalDays} day{request.totalDays !== 1 ? 's' : ''})</span>
-                      </div>
-                      {request.reason && (
-                        <p className="text-sm text-gray-800">{request.reason}</p>
-                      )}
-                      {request.rejectionReason && (
-                        <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
-                          <p className="text-sm text-red-800">
-                            <strong>Rejection Reason:</strong> {request.rejectionReason}
-                          </p>
-                        </div>
-                      )}
+          ) : viewMode === 'card' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {pageItems.map((request: any) => (
+                <Card
+                  key={request.id}
+                  className="hover:shadow-md hover:border-primary/40 transition-all cursor-pointer"
+                  onClick={() => setSelectedRequest(request)}
+                  data-testid={`card-leave-request-${request.id}`}
+                >
+                  <CardContent className="p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <Badge variant={getStatusBadgeVariant(request.status)} className="flex items-center gap-1 text-xs whitespace-nowrap">
+                        {getStatusIcon(request.status)}
+                        {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
+                      </Badge>
+                      <span className="text-xs text-secondary-500 ml-auto">
+                        Submitted {format(new Date(request.submittedAt), "MMM dd")}
+                      </span>
                     </div>
-                    <div className="flex flex-col items-end gap-2">
-                      <div className="text-right text-sm text-gray-600">
-                        <div>Submitted: {format(new Date(request.submittedAt), "MMM dd, yyyy")}</div>
-                        {request.approvedAt && (
-                          <div>Approved: {format(new Date(request.approvedAt), "MMM dd, yyyy")}</div>
-                        )}
-                        {request.rejectedAt && (
-                          <div>Rejected: {format(new Date(request.rejectedAt), "MMM dd, yyyy")}</div>
-                        )}
+                    <div className="text-sm font-medium capitalize">
+                      {request.leaveType.replace('_', ' ')} Leave
+                      <span className="ml-2 text-xs text-secondary-500 font-normal">
+                        · {request.totalDays} day{request.totalDays !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="text-xs text-secondary-600">
+                      {format(new Date(request.startDate), "MMM dd, yyyy")} – {format(new Date(request.endDate), "MMM dd, yyyy")}
+                    </div>
+                    {request.reason && (
+                      <p className="text-xs text-secondary-700 bg-gray-50 rounded px-2 py-1.5 line-clamp-2" title={request.reason}>
+                        {request.reason}
+                      </p>
+                    )}
+                    {request.rejectionReason && (
+                      <div className="p-2 bg-red-50 border border-red-200 rounded text-xs text-red-800 line-clamp-2" title={request.rejectionReason}>
+                        <strong>Rejected:</strong> {request.rejectionReason}
                       </div>
-                      {request.status === 'pending' && (
+                    )}
+                    {request.status === 'pending' && (
+                      <div className="pt-1" onClick={(e) => e.stopPropagation()}>
                         <Button
                           size="sm"
                           variant="outline"
+                          className="h-7 px-3 text-xs w-full"
                           onClick={(e) => { e.stopPropagation(); openEditDialog(request); }}
                           data-testid={`button-edit-leave-${request.id}`}
                         >
                           Edit
                         </Button>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <div className="bg-white rounded-lg shadow border border-secondary-100 overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Period</TableHead>
+                    <TableHead className="text-right">Days</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Submitted</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pageItems.map((request: any) => (
+                    <TableRow
+                      key={request.id}
+                      className="cursor-pointer hover:bg-secondary-50"
+                      onClick={() => setSelectedRequest(request)}
+                      data-testid={`row-leave-request-${request.id}`}
+                    >
+                      <TableCell className="text-sm capitalize">{request.leaveType}</TableCell>
+                      <TableCell className="text-sm whitespace-nowrap">
+                        {format(new Date(request.startDate), "MMM dd, yyyy")} – {format(new Date(request.endDate), "MMM dd, yyyy")}
+                      </TableCell>
+                      <TableCell className="text-right text-sm">{request.totalDays}</TableCell>
+                      <TableCell>
+                        <Badge variant={getStatusBadgeVariant(request.status)} className="flex items-center gap-1 text-xs w-fit">
+                          {getStatusIcon(request.status)}
+                          {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-secondary-600 whitespace-nowrap">
+                        {format(new Date(request.submittedAt), "MMM dd, yyyy")}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {request.status === 'pending' ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-xs"
+                            onClick={(e) => { e.stopPropagation(); openEditDialog(request); }}
+                            data-testid={`button-edit-leave-list-${request.id}`}
+                          >
+                            Edit
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-secondary-400">—</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
 
-          {filtered.length > 0 && (
+          {sorted.length > 0 && (
             <DataPagination
               page={page}
               totalPages={totalPages}

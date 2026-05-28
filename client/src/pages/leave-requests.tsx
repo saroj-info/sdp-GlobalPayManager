@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { Calendar, CheckCircle, XCircle, Clock, User, Plane, Plus, Search } from 'lucide-react';
+import { Calendar, CheckCircle, XCircle, Clock, User, Plane, Plus, Search, LayoutGrid, List as ListIcon, ArrowUpDown } from 'lucide-react';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { usePageHeader } from '@/contexts/AuthenticatedLayoutContext';
 import { apiRequest } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
@@ -37,6 +38,10 @@ export default function LeaveRequests() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [filterBusinessId, setFilterBusinessId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  // View mode + sort — modeled after the workforce page so the screen is
+  // dense by default and operators can switch to a compact table.
+  const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
+  const [sortBy, setSortBy] = useState<'recent' | 'startDate' | 'worker' | 'type' | 'status'>('recent');
   // Selected leave request for the read-only details modal.
   const [selectedRequest, setSelectedRequest] = useState<any | null>(null);
 
@@ -62,6 +67,34 @@ export default function LeaveRequests() {
     });
   }, [leaveRequests, statusFilter, filterBusinessId, searchQuery]);
 
+  const sortedLeaveRequests = useMemo(() => {
+    const arr = [...filteredLeaveRequests];
+    const cmpName = (a: any, b: any) => {
+      const an = `${a.worker?.firstName ?? ''} ${a.worker?.lastName ?? ''}`.toLowerCase();
+      const bn = `${b.worker?.firstName ?? ''} ${b.worker?.lastName ?? ''}`.toLowerCase();
+      return an.localeCompare(bn);
+    };
+    switch (sortBy) {
+      case 'startDate':
+        arr.sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+        break;
+      case 'worker':
+        arr.sort(cmpName);
+        break;
+      case 'type':
+        arr.sort((a, b) => String(a.leaveType).localeCompare(String(b.leaveType)) || cmpName(a, b));
+        break;
+      case 'status':
+        arr.sort((a, b) => String(a.status).localeCompare(String(b.status)) || cmpName(a, b));
+        break;
+      case 'recent':
+      default:
+        arr.sort((a, b) => new Date(b.createdAt || b.submittedAt || 0).getTime() - new Date(a.createdAt || a.submittedAt || 0).getTime());
+        break;
+    }
+    return arr;
+  }, [filteredLeaveRequests, sortBy]);
+
   const {
     pageItems: pagedLeaveRequests,
     page: lrPage,
@@ -69,13 +102,13 @@ export default function LeaveRequests() {
     pageSize: lrPageSize,
     totalPages: lrTotalPages,
     totalItems: lrTotalItems,
-  } = usePagination(filteredLeaveRequests, { pageSize: 10 });
+  } = usePagination(sortedLeaveRequests, { pageSize: viewMode === 'list' ? 20 : 12 });
 
   // Reset to page 1 whenever filters change to avoid stranding the user on
   // an empty page after narrowing.
   useEffect(() => {
     setLrPage(1);
-  }, [statusFilter, filterBusinessId, searchQuery, setLrPage]);
+  }, [statusFilter, filterBusinessId, searchQuery, sortBy, viewMode, setLrPage]);
 
   // ── Create-on-behalf / edit dialog ────────────────────────────────────
   // Same dialog handles both flows. `editingId` distinguishes mode: null →
@@ -303,14 +336,53 @@ export default function LeaveRequests() {
                 </Select>
               )}
             </div>
-            {canCreateOnBehalf && (
-              <Button
-                onClick={() => setShowCreate(true)}
-                data-testid="button-create-leave-request"
-              >
-                <Plus className="w-4 h-4 mr-1" /> New Leave Request
-              </Button>
-            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex border border-secondary-300 rounded-md overflow-hidden">
+                <Button
+                  variant={viewMode === 'card' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('card')}
+                  className="rounded-none border-r border-secondary-300 h-9"
+                  data-testid="button-leave-view-card"
+                >
+                  <LayoutGrid className="h-4 w-4 mr-1" />
+                  Card
+                </Button>
+                <Button
+                  variant={viewMode === 'list' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('list')}
+                  className="rounded-none h-9"
+                  data-testid="button-leave-view-list"
+                >
+                  <ListIcon className="h-4 w-4 mr-1" />
+                  List
+                </Button>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <ArrowUpDown className="h-4 w-4 text-secondary-600" />
+                <Select value={sortBy} onValueChange={(v: any) => setSortBy(v)}>
+                  <SelectTrigger className="w-[160px] h-9 text-sm" data-testid="select-leave-sort">
+                    <SelectValue placeholder="Sort by" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="recent">Most recent</SelectItem>
+                    <SelectItem value="startDate">Start date</SelectItem>
+                    <SelectItem value="worker">Worker name</SelectItem>
+                    <SelectItem value="type">Leave type</SelectItem>
+                    <SelectItem value="status">Status</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {canCreateOnBehalf && (
+                <Button
+                  onClick={() => setShowCreate(true)}
+                  data-testid="button-create-leave-request"
+                >
+                  <Plus className="w-4 h-4 mr-1" /> New Leave Request
+                </Button>
+              )}
+            </div>
           </div>
 
           <Dialog
@@ -457,8 +529,8 @@ export default function LeaveRequests() {
                 No leave requests match the current filters.
               </CardContent>
             </Card>
-          ) : (
-            <div className="grid gap-6">
+          ) : viewMode === 'card' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {pagedLeaveRequests.map((request: any) => (
                 <Card
                   key={request.id}
@@ -466,78 +538,73 @@ export default function LeaveRequests() {
                   onClick={() => setSelectedRequest(request)}
                   data-testid={`card-leave-request-${request.id}`}
                 >
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3">
-                        <User className="w-5 h-5 text-gray-500" />
-                        <div>
-                          <CardTitle className="text-lg">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <User className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <CardTitle className="text-base truncate">
                             {request.worker?.firstName} {request.worker?.lastName}
                           </CardTitle>
-                          <p className="text-sm text-gray-600">{request.worker?.email}</p>
+                          <p className="text-xs text-gray-500 truncate">{request.worker?.email}</p>
                         </div>
                       </div>
-                      <Badge className={getStatusColor(request.status)}>
-                        <span className="flex items-center space-x-1">
+                      <Badge className={`${getStatusColor(request.status)} text-xs whitespace-nowrap`}>
+                        <span className="flex items-center gap-1">
                           {getStatusIcon(request.status)}
                           <span className="capitalize">{request.status}</span>
                         </span>
                       </Badge>
                     </div>
                   </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                      <div className="flex items-center space-x-2">
-                        {getLeaveTypeIcon(request.leaveType)}
-                        <span className="text-sm capitalize font-medium">{request.leaveType} Leave</span>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <Calendar className="w-4 h-4 text-gray-500" />
-                        <span className="text-sm">
-                          {new Date(request.startDate).toLocaleDateString()} - {new Date(request.endDate).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <Clock className="w-4 h-4 text-gray-500" />
-                        <span className="text-sm">{calculateDays(request.startDate, request.endDate)} days</span>
-                      </div>
+                  <CardContent className="space-y-2 text-sm">
+                    <div className="flex items-center gap-2">
+                      {getLeaveTypeIcon(request.leaveType)}
+                      <span className="capitalize font-medium">{request.leaveType} Leave</span>
+                      <span className="ml-auto text-secondary-500 text-xs flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" />
+                        {calculateDays(request.startDate, request.endDate)} days
+                      </span>
                     </div>
-
+                    <div className="flex items-center gap-2 text-xs text-secondary-600">
+                      <Calendar className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>{new Date(request.startDate).toLocaleDateString()} – {new Date(request.endDate).toLocaleDateString()}</span>
+                    </div>
                     {request.reason && (
-                      <div className="mb-4">
-                        <h4 className="font-medium text-gray-900 mb-2">Reason</h4>
-                        <p className="text-sm text-gray-700 bg-gray-50 p-3 rounded">{request.reason}</p>
-                      </div>
+                      <p className="text-xs text-secondary-600 bg-gray-50 rounded px-2 py-1.5 line-clamp-2" title={request.reason}>
+                        {request.reason}
+                      </p>
                     )}
 
                     {request.status === 'pending' && (
-                      <div className="flex space-x-3" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
                         <Button
                           variant="default"
                           size="sm"
+                          className="h-7 px-3 text-xs flex-1"
                           onClick={(e) => { e.stopPropagation(); handleApprove(request.id); }}
                           disabled={statusMutation.isPending}
                           data-testid={`button-approve-${request.id}`}
                         >
                           {statusMutation.isPending && statusMutation.variables?.id === request.id && statusMutation.variables?.status === 'approved'
-                            ? 'Approving…'
-                            : 'Approve'}
+                            ? '…' : 'Approve'}
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
+                          className="h-7 px-3 text-xs flex-1"
                           onClick={(e) => { e.stopPropagation(); handleReject(request.id); }}
                           disabled={statusMutation.isPending}
                           data-testid={`button-reject-${request.id}`}
                         >
                           {statusMutation.isPending && statusMutation.variables?.id === request.id && statusMutation.variables?.status === 'rejected'
-                            ? 'Rejecting…'
-                            : 'Reject'}
+                            ? '…' : 'Reject'}
                         </Button>
                         {canCreateOnBehalf && (
                           <Button
                             variant="ghost"
                             size="sm"
+                            className="h-7 px-2 text-xs"
                             onClick={(e) => { e.stopPropagation(); openEditDialog(request); }}
                             data-testid={`button-edit-leave-${request.id}`}
                           >
@@ -546,26 +613,101 @@ export default function LeaveRequests() {
                         )}
                       </div>
                     )}
-
-                    {request.status === 'rejected' && request.rejectionReason && (
-                      <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded">
-                        <h5 className="font-medium text-red-800 mb-1">Rejection Reason</h5>
-                        <p className="text-sm text-red-700">{request.rejectionReason}</p>
-                      </div>
-                    )}
-
-                    <div className="mt-4 text-xs text-gray-500">
-                      Requested: {new Date(request.createdAt).toLocaleString()}
-                      {request.approvedAt && (
-                        <span className="ml-4">Approved: {new Date(request.approvedAt).toLocaleString()}</span>
-                      )}
-                      {request.rejectedAt && (
-                        <span className="ml-4">Rejected: {new Date(request.rejectedAt).toLocaleString()}</span>
-                      )}
-                    </div>
                   </CardContent>
                 </Card>
               ))}
+            </div>
+          ) : (
+            <div className="bg-white rounded-lg shadow border border-secondary-100 overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Worker</TableHead>
+                    {isSdpInternal && <TableHead>Business</TableHead>}
+                    <TableHead>Type</TableHead>
+                    <TableHead>Period</TableHead>
+                    <TableHead className="text-right">Days</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pagedLeaveRequests.map((request: any) => (
+                    <TableRow
+                      key={request.id}
+                      className="cursor-pointer hover:bg-secondary-50"
+                      onClick={() => setSelectedRequest(request)}
+                      data-testid={`row-leave-request-${request.id}`}
+                    >
+                      <TableCell>
+                        <div className="font-medium text-sm">
+                          {request.worker?.firstName} {request.worker?.lastName}
+                        </div>
+                        <div className="text-xs text-secondary-500 truncate max-w-[200px]">{request.worker?.email}</div>
+                      </TableCell>
+                      {isSdpInternal && (
+                        <TableCell className="text-sm">{request.business?.name || '—'}</TableCell>
+                      )}
+                      <TableCell>
+                        <span className="text-sm capitalize">{request.leaveType}</span>
+                      </TableCell>
+                      <TableCell className="text-sm whitespace-nowrap">
+                        {new Date(request.startDate).toLocaleDateString()} – {new Date(request.endDate).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="text-right text-sm">
+                        {calculateDays(request.startDate, request.endDate)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={`${getStatusColor(request.status)} text-xs`}>
+                          <span className="flex items-center gap-1">
+                            {getStatusIcon(request.status)}
+                            <span className="capitalize">{request.status}</span>
+                          </span>
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {request.status === 'pending' ? (
+                          <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-green-700"
+                              onClick={(e) => { e.stopPropagation(); handleApprove(request.id); }}
+                              disabled={statusMutation.isPending}
+                              data-testid={`button-approve-list-${request.id}`}
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-red-600"
+                              onClick={(e) => { e.stopPropagation(); handleReject(request.id); }}
+                              disabled={statusMutation.isPending}
+                              data-testid={`button-reject-list-${request.id}`}
+                            >
+                              Reject
+                            </Button>
+                            {canCreateOnBehalf && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2 text-xs"
+                                onClick={(e) => { e.stopPropagation(); openEditDialog(request); }}
+                                data-testid={`button-edit-leave-list-${request.id}`}
+                              >
+                                Edit
+                              </Button>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-secondary-400">—</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
           )}
 
