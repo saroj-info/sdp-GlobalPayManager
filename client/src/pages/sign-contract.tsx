@@ -11,7 +11,6 @@ import { CheckCircle, Clock, FileText, User, Building, Calendar, DollarSign, Map
 import { generatePeriodSchedule } from "@shared/timesheetPeriodCalculator";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { useAuth } from "@/hooks/useAuth";
 import type { ContractWithDerived } from "@/types/api";
 
 export default function SignContract() {
@@ -19,42 +18,25 @@ export default function SignContract() {
   const [signature, setSignature] = useState("");
   const [isViewed, setIsViewed] = useState(false);
   const { toast } = useToast();
-  const { user, isAuthenticated, isLoading } = useAuth();
 
   const token = params?.token;
 
-  // Redirect to login if not authenticated, with a clear message first
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      if (token) {
-        // Stored in localStorage (not sessionStorage) so the redirect-back-after-login
-        // survives the user closing the tab or starting fresh from the email link later.
-        localStorage.setItem('pendingSigningToken', token);
-      }
-      toast({
-        title: "Please log in first",
-        description: "You need to log in before signing the contract. Redirecting to login...",
-      });
-      setTimeout(() => {
-        window.location.href = '/login';
-      }, 1500);
-    }
-  }, [isAuthenticated, isLoading, token, toast]);
+  // Public signing flow — the URL token IS the authentication. No login
+  // required so the recipient can sign straight from the email link.
 
   // Fetch contract details using the token
   const { data: contract, isLoading: contractLoading, error } = useQuery<ContractWithDerived>({
     queryKey: ["/api/contracts/sign", token],
-    enabled: !!token && isAuthenticated,
+    enabled: !!token,
   });
 
-  // Track when the contract is viewed
+  // Track when the contract is viewed (token in body authorizes the audit row).
   useEffect(() => {
-    if (contract && !isViewed) {
+    if (contract && !isViewed && token) {
       setIsViewed(true);
-      // Record contract view
-      apiRequest("POST", `/api/contracts/${contract.id}/viewed`).catch(console.error);
+      apiRequest("POST", `/api/contracts/${contract.id}/viewed`, { token }).catch(console.error);
     }
-  }, [contract, isViewed]);
+  }, [contract, isViewed, token]);
 
   // Sign contract mutation
   const signContractMutation = useMutation({
@@ -87,29 +69,13 @@ export default function SignContract() {
     },
   });
 
-  if (isLoading || contractLoading) {
+  if (contractLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <Clock className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
           <p>Loading contract...</p>
         </div>
-      </div>
-    );
-  }
-
-  // User not authenticated — show login-required screen (redirect is already queued via the effect above)
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <Card className="max-w-md mx-auto">
-          <CardHeader>
-            <CardTitle className="text-blue-600">Login Required</CardTitle>
-            <CardDescription>
-              Please log in before signing your contract. Redirecting to the login page...
-            </CardDescription>
-          </CardHeader>
-        </Card>
       </div>
     );
   }

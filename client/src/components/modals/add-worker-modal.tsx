@@ -52,7 +52,13 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
       return await apiRequest('POST', '/api/workers', data);
     },
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/workers'] });
+      // Invalidate every worker-list-shaped query so the workforce page
+      // (/api/workers/list with params), the provided-workers list, and any
+      // other /api/workers* consumer all refetch — string-prefix match
+      // because React Query does exact equality on queryKey[0] by default.
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === 'string' && (q.queryKey[0] as string).startsWith('/api/workers'),
+      });
       onOpenChange(false);
       setFormData({
         workerType: 'employee',

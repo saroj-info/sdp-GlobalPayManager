@@ -324,13 +324,21 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     }
   }, [formData.timesheetFrequency]);
 
+  // Derive a worker's invitation/onboarding state from the canonical fields.
+  // Mirrors the four-state badge used on the workforce page (Active / Accepted /
+  // Invited / Pending). Pending workers (saved without invitation) are still
+  // selectable here — they'll receive the signing email when the contract is
+  // sent for signing, which doubles as their first contact with the system.
+  const workerInviteState = (worker: any): 'active' | 'accepted' | 'invited' | 'pending' => {
+    if (worker?.onboardingCompleted) return 'active';
+    if (worker?.userId) return 'accepted';
+    if (worker?.invitationSent) return 'invited';
+    return 'pending';
+  };
+
   // Filter and search workers
   const filteredWorkers = useMemo(() => {
     let filtered = workers.filter((worker: any) => worker.id && worker.id.trim() !== '');
-
-    // Only workers who have accepted their invitation (i.e. have a linked user account)
-    // can have a contract created — exclude Pending/Invited workers.
-    filtered = filtered.filter((worker: any) => !!worker.userId);
 
     // Filter by business if SDP user is creating on behalf
     if (isSDPInternal && formData.onBehalf && formData.selectedBusinessId) {
@@ -1140,8 +1148,17 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                     ? "space-y-2 max-h-96 overflow-y-auto border border-secondary-200 rounded-lg p-4" 
                     : "grid grid-cols-1 md:grid-cols-2 gap-3 max-h-96 overflow-y-auto border border-secondary-200 rounded-lg p-4"}
                 >
-                  {filteredWorkers && filteredWorkers.length > 0 ? filteredWorkers.map((worker: any, _wi: number) => (
-                    workerViewMode === 'list' ? (
+                  {filteredWorkers && filteredWorkers.length > 0 ? filteredWorkers.map((worker: any, _wi: number) => {
+                    const state = workerInviteState(worker);
+                    const stateUi = state === 'active'
+                      ? { icon: UserCheck, label: 'Active', cls: 'text-green-600' }
+                      : state === 'accepted'
+                        ? { icon: UserCheck, label: 'Accepted', cls: 'text-emerald-600' }
+                        : state === 'invited'
+                          ? { icon: UserX, label: 'Invited', cls: 'text-blue-600' }
+                          : { icon: UserX, label: 'Pending', cls: 'text-amber-600' };
+                    const StateIcon = stateUi.icon;
+                    return workerViewMode === 'list' ? (
                       <div key={worker.id} className="flex items-center space-x-3 p-3 border border-secondary-200 rounded-lg hover:border-primary-300 transition-colors">
                         <RadioGroupItem value={worker.id} id={worker.id} />
                         <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center flex-shrink-0">
@@ -1160,17 +1177,10 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                             <MapPin className="h-3 w-3 text-secondary-400" />
                             <span className="text-secondary-600">{worker.country?.name}</span>
                           </div>
-                          {worker.invitationStatus === 'invited' ? (
-                            <div className="flex items-center gap-1 text-xs text-blue-600">
-                              <UserX className="h-3 w-3" />
-                              <span>Invited</span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1 text-xs text-green-600">
-                              <UserCheck className="h-3 w-3" />
-                              <span>Active</span>
-                            </div>
-                          )}
+                          <div className={`flex items-center gap-1 text-xs ${stateUi.cls}`}>
+                            <StateIcon className="h-3 w-3" />
+                            <span>{stateUi.label}</span>
+                          </div>
                         </div>
                       </div>
                     ) : (
@@ -1195,22 +1205,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                               <MapPin className="h-3 w-3" />
                               <span>{worker.country?.name}</span>
                             </div>
-                            {worker.invitationStatus === 'invited' ? (
-                              <div className="flex items-center gap-1 text-blue-600">
-                                <UserX className="h-3 w-3" />
-                                <span>Invited</span>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-1 text-green-600">
-                                <UserCheck className="h-3 w-3" />
-                                <span>Active</span>
-                              </div>
-                            )}
+                            <div className={`flex items-center gap-1 ${stateUi.cls}`}>
+                              <StateIcon className="h-3 w-3" />
+                              <span>{stateUi.label}</span>
+                            </div>
                           </div>
                         </Label>
                       </div>
-                    )
-                  )) : (
+                    );
+                  }) : (
                     <div className="text-center py-8 text-secondary-500 col-span-full">
                       {workerSearch.trim() ? 'No workers found matching your search.' : 'No workers available. Please add workers first.'}
                     </div>

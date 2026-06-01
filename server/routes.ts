@@ -5237,48 +5237,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // Resend the appropriate invitation email based on worker type
+      // The worker may already have signed up — in that case the invite-token
+      // flow doesn't apply (signup at routes.ts:1187 rejects "already used").
+      if (worker.userId) {
+        return res.status(400).json({ message: "This worker has already accepted their invitation and signed up." });
+      }
+
+      // Resend the appropriate invitation email based on worker type.
+      // CRITICAL: must mint a fresh invitation token and persist it on the
+      // worker row, then send an email containing /signup?token=<raw>. Without
+      // a token the signup form falls through to the "create new worker"
+      // branch and produces a duplicate worker row. Mirrors the token-mint
+      // logic in POST /api/workers above.
       try {
         const business = worker.businessId ? await storage.getBusinessById(worker.businessId) : undefined;
         const businessName = business?.name || 'SDP Global Pay';
-        const workerName = `${worker.firstName} ${worker.lastName}`;
-        
-        if (worker.workerType === 'contractor') {
-          await emailService.sendContractorRegistrationConfirmation(
-            worker.email,
-            worker.firstName,
-            worker.lastName,
-            worker.phoneNumber || undefined
-          );
-          console.log(`Contractor invitation email resent to ${worker.email}`);
-        } else if (worker.workerType === 'third_party_worker') {
-          // For third-party workers, send to the third-party business contact
-          const thirdPartyBusiness = await storage.getThirdPartyBusinessById(worker.thirdPartyBusinessId!);
+
+        const rawToken = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+        const tokenExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours
+
+        await storage.updateWorkerProfile(worker.id, {
+          invitationToken: tokenHash,
+          invitationTokenExpiresAt: tokenExpiresAt,
+          invitationSent: true,
+        });
+
+        if (worker.workerType === 'third_party_worker') {
+          // For third-party workers the invitation email goes to the
+          // third-party business contact, but the token is still tied to
+          // the worker row so signup will link correctly.
+          const thirdPartyBusiness = worker.thirdPartyBusinessId
+            ? await storage.getThirdPartyBusinessById(worker.thirdPartyBusinessId)
+            : null;
           if (thirdPartyBusiness) {
-            await emailService.sendBusinessUserInvite(
+            await emailService.sendWorkerInvitationEmail(
               thirdPartyBusiness.email,
-              'generated-invite-token',
-              req.user.name || 'SDP Global Pay',
-              thirdPartyBusiness.name
+              worker.firstName,
+              rawToken,
+              thirdPartyBusiness.name,
             );
-            console.log(`Third-party business invitation resent to ${thirdPartyBusiness.email}`);
+            console.log(`Third-party worker invitation resent to ${thirdPartyBusiness.email}`);
+          } else {
+            await emailService.sendWorkerInvitationEmail(
+              worker.email,
+              worker.firstName,
+              rawToken,
+              businessName,
+            );
+            console.log(`Worker invitation resent to ${worker.email} (no third-party contact found)`);
           }
         } else {
-          // For employees, send the welcome email
-          await emailService.sendWelcomeEmail(
+          // contractor + employee: same email helper, both land at /signup?token=<raw>
+          await emailService.sendWorkerInvitationEmail(
             worker.email,
-            workerName,
-            businessName
+            worker.firstName,
+            rawToken,
+            businessName,
           );
-          console.log(`Welcome email resent to ${worker.email}`);
+          console.log(`Worker invitation email resent to ${worker.email}`);
         }
-        
-        // Update worker to mark invitation as sent
-        await storage.updateWorkerProfile(worker.id, { invitationSent: true });
-        
-        res.json({ 
+
+        res.json({
           message: "Invitation email sent successfully",
-          worker 
+          worker,
         });
       } catch (emailError: any) {
         console.error('Failed to resend invitation email:', emailError);
@@ -5838,7 +5860,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get contract for signing (by token) - requires authentication
-  app.get('/api/contracts/sign/:token', authMiddleware, async (req: any, res) => {
+  // Public — the signing token IS the authentication. No login required so the
+  // recipient can sign straight from the email link.
+  app.get('/api/contracts/sign/:token', async (req: any, res) => {
     try {
       const { token } = req.params;
       const contract: any = await storage.getContractBySigningToken(token);
@@ -5906,12 +5930,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Record contract view - requires authentication
-  app.post('/api/contracts/:id/viewed', authMiddleware, async (req: any, res) => {
+  // Public — token in body authorizes the view. Required so the signing page
+  // works without a login. Token is verified against the contract id so a
+  // caller can't spam audit-log rows for arbitrary contracts.
+  app.post('/api/contracts/:id/viewed', async (req: any, res) => {
     try {
       const { id } = req.params;
+      const { token } = req.body || {};
+      if (!token) return res.status(400).json({ message: "Signing token is required" });
+      const contract = await storage.getContractBySigningToken(token);
+      if (!contract || contract.id !== id) {
+        return res.status(403).json({ message: "Invalid signing token" });
+      }
+
       const ipAddress = req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for'];
       const userAgent = req.headers['user-agent'];
-      
+
       // Get location from IP (simplified for now)
       const location = {
         ip: ipAddress,
@@ -5924,7 +5958,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         location: JSON.stringify(location),
         userAgent: userAgent as string
       });
-      
+
       res.json({ success: true });
     } catch (error: any) {
       console.error("Error recording contract view:", error);
@@ -5932,8 +5966,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Sign contract - requires authentication
-  app.post('/api/contracts/:id/sign', authMiddleware, async (req: any, res) => {
+  // Public — the signing token IS the authentication. Verified against the
+  // contract id below; mismatch / expired contract → 400.
+  app.post('/api/contracts/:id/sign', async (req: any, res) => {
     try {
       const { id } = req.params;
       const { signature, token } = req.body;
