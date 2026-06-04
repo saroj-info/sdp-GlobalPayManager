@@ -1843,7 +1843,9 @@ export class DatabaseStorage implements IStorage {
         po: purchaseOrders,
         workerFirstName: workers.firstName,
         workerLastName: workers.lastName,
+        workerEmail: workers.email,
         businessName: businesses.name,
+        contract: contracts,
       })
       .from(purchaseOrders)
       .innerJoin(contracts, eq(purchaseOrders.contractId, contracts.id))
@@ -1853,8 +1855,10 @@ export class DatabaseStorage implements IStorage {
     return rows.map(r => ({
       ...r.po,
       contractWorkerName: `${r.workerFirstName} ${r.workerLastName}`.trim(),
+      workerEmail: r.workerEmail,
       businessName: r.businessName,
-    }));
+      contract: r.contract,
+    })) as any;
   }
 
   async getAllPurchaseOrders(filters?: { businessId?: string; status?: string }): Promise<(SelectPurchaseOrder & { contractWorkerName?: string; businessName?: string })[]> {
@@ -1863,7 +1867,9 @@ export class DatabaseStorage implements IStorage {
         po: purchaseOrders,
         workerFirstName: workers.firstName,
         workerLastName: workers.lastName,
+        workerEmail: workers.email,
         businessName: businesses.name,
+        contract: contracts,
       })
       .from(purchaseOrders)
       .innerJoin(contracts, eq(purchaseOrders.contractId, contracts.id))
@@ -1872,8 +1878,10 @@ export class DatabaseStorage implements IStorage {
     return rows.map(r => ({
       ...r.po,
       contractWorkerName: `${r.workerFirstName} ${r.workerLastName}`.trim(),
+      workerEmail: r.workerEmail,
       businessName: r.businessName,
-    }));
+      contract: r.contract,
+    })) as any;
   }
 
   async createPurchaseOrder(data: InsertPurchaseOrder): Promise<SelectPurchaseOrder> {

@@ -656,6 +656,32 @@ export const insertContractBillingLineSchema = createInsertSchema(contractBillin
 export type SelectPurchaseOrder = typeof purchaseOrders.$inferSelect;
 export type InsertPurchaseOrder = typeof purchaseOrders.$inferInsert;
 
+// Coerce the start/end date fields from the HTML `<input type="date">` shape
+// ("YYYY-MM-DD" string) into Date objects. Empty string / null → null so the
+// optional columns can be cleared. Without this drizzle's timestamp adapter
+// crashes with `value.toISOString is not a function`.
+const dateInput = z
+  .union([z.string(), z.date(), z.null()])
+  .optional()
+  .transform((v) => {
+    if (v === undefined) return undefined;
+    if (v === null || v === '') return null;
+    if (v instanceof Date) return v;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  });
+
+export const insertPurchaseOrderSchema = createInsertSchema(purchaseOrders).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  startDate: dateInput,
+  endDate: dateInput,
+});
+
+export type InsertPurchaseOrderType = z.infer<typeof insertPurchaseOrderSchema>;
+
 // Contract templates for different employment types and countries
 export const contractTemplates = pgTable("contract_templates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

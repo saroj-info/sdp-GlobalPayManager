@@ -433,48 +433,52 @@ export function ViewWorkerModal({ open, onOpenChange, worker, currentUserType }:
               </CardContent>
             </Card>
 
-            {/* Business Information (for contractors) */}
-            {worker.workerType === 'contractor' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2">
-                    <Building2 className="w-5 h-5" />
-                    <span>Business Information</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {worker.businessName && (
+            {/* Business Information (for contractors) — the contractor's *own*
+                business identity (separate from the Employing Business shown
+                in Personal Information). Always render the four rows so the
+                card never appears blank; show a hint when nothing is filled
+                in (typical for a freshly-accepted worker who hasn't completed
+                onboarding yet). */}
+            {worker.workerType === 'contractor' && (() => {
+              const hasAny = !!(worker.businessName || worker.businessStructure || worker.abn || worker.acn);
+              return (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center space-x-2">
+                      <Building2 className="w-5 h-5" />
+                      <span>Business Information</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {!hasAny && (
+                      <p className="text-sm text-muted-foreground italic">
+                        Not provided yet — the contractor will fill this in during onboarding.
+                      </p>
+                    )}
                     <div>
                       <p className="text-sm font-medium">Business Name</p>
-                      <p className="text-sm text-muted-foreground">{worker.businessName}</p>
+                      <p className="text-sm text-muted-foreground">{worker.businessName || '—'}</p>
                     </div>
-                  )}
-
-                  {worker.businessStructure && (
                     <div>
                       <p className="text-sm font-medium">Business Structure</p>
                       <p className="text-sm text-muted-foreground">
-                        {worker.businessStructure.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
+                        {worker.businessStructure
+                          ? worker.businessStructure.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())
+                          : '—'}
                       </p>
                     </div>
-                  )}
-
-                  {worker.abn && (
                     <div>
                       <p className="text-sm font-medium">ABN</p>
-                      <p className="text-sm text-muted-foreground">{worker.abn}</p>
+                      <p className="text-sm text-muted-foreground">{worker.abn || '—'}</p>
                     </div>
-                  )}
-
-                  {worker.acn && (
                     <div>
                       <p className="text-sm font-medium">ACN</p>
-                      <p className="text-sm text-muted-foreground">{worker.acn}</p>
+                      <p className="text-sm text-muted-foreground">{worker.acn || '—'}</p>
                     </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
+                  </CardContent>
+                </Card>
+              );
+            })()}
 
             {/* Banking Information */}
             <Card>

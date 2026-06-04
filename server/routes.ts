@@ -89,6 +89,7 @@ import {
   insertCountryDocumentSchema,
   type InsertRemunerationLineType,
   insertPayItemSchema,
+  insertPurchaseOrderSchema,
 } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -6689,7 +6690,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/purchase-orders', authMiddleware, async (req: any, res) => {
     try {
-      const po = await storage.createPurchaseOrder(req.body);
+      const parsed = insertPurchaseOrderSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const firstError = parsed.error.errors[0];
+        return res.status(400).json({
+          message: firstError?.message || 'Invalid purchase order data',
+          errors: parsed.error.errors,
+        });
+      }
+      const po = await storage.createPurchaseOrder(parsed.data as any);
       res.status(201).json(po);
     } catch (error: any) {
       console.error("Error creating purchase order:", error);
@@ -6700,9 +6709,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/purchase-orders/:id', authMiddleware, async (req: any, res) => {
     try {
       const { id } = req.params;
-      const po = await storage.updatePurchaseOrder(id, req.body);
+      // PATCH is a partial update — derive an optional/partial shape from the
+      // insert schema so callers can send just the fields they want to change.
+      const parsed = insertPurchaseOrderSchema.partial().safeParse(req.body);
+      if (!parsed.success) {
+        const firstError = parsed.error.errors[0];
+        return res.status(400).json({
+          message: firstError?.message || 'Invalid purchase order data',
+          errors: parsed.error.errors,
+        });
+      }
+      const po = await storage.updatePurchaseOrder(id, parsed.data as any);
       res.json(po);
     } catch (error: any) {
+      console.error("Error updating purchase order:", error);
       res.status(500).json({ message: "Failed to update purchase order" });
     }
   });

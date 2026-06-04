@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Search, Plus, Edit, Trash2, FileText, DollarSign, AlertCircle } from "lucide-react";
-import { useLocation } from "wouter";
+import { PurchaseOrderDetailsModal } from "@/components/modals/purchase-order-details-modal";
 
 function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
   switch (status) {
@@ -28,11 +28,11 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
 export default function PurchaseOrdersPage() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [, navigate] = useLocation();
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editingPO, setEditingPO] = useState<any>(null);
+  const [selectedPO, setSelectedPO] = useState<any>(null);
 
   usePageHeader(
     "Purchase Orders",
@@ -180,7 +180,7 @@ export default function PurchaseOrdersPage() {
                       <TableRow
                         key={po.id}
                         className="cursor-pointer hover:bg-secondary-50"
-                        onClick={() => navigate(`/contracts`)}
+                        onClick={() => setSelectedPO(po)}
                       >
                         <TableCell className="font-medium">{po.poNumber}</TableCell>
                         <TableCell className="text-secondary-600">{po.sowNumber || '—'}</TableCell>
@@ -319,6 +319,14 @@ export default function PurchaseOrdersPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Read-only details — opened by clicking any row. Edit lives in the
+          adjacent action button. */}
+      <PurchaseOrderDetailsModal
+        po={selectedPO}
+        open={!!selectedPO}
+        onOpenChange={(open) => { if (!open) setSelectedPO(null); }}
+      />
     </div>
   );
 }
