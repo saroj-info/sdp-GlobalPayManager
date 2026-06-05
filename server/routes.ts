@@ -128,8 +128,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize countries on startup
   await storage.initializeCountries();
 
-  // Use the working test authentication system
-  const { testLogin, testLogout, getTestUser } = await import('./testAuth');
   const { jwtAuthMiddleware, requireSdpRole } = await import('./jwtAuth');
 
   // Use JWT middleware as default auth middleware
@@ -223,10 +221,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  // Working test authentication routes (legacy - kept for compatibility)
-  app.post('/api/test-login', testLogin);
-  app.post('/api/test-logout', testLogout);
-  
   // JWT-based auth endpoint for getting current user
   app.get('/api/auth/user', async (req: any, res) => {
     const authHeader = req.headers.authorization;

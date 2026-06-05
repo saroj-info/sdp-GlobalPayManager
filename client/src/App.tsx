@@ -34,7 +34,6 @@ import HowItWorks from "@/pages/how-it-works";
 import Pricing from "@/pages/pricing";
 import Contact from "@/pages/contact";
 import Login from "@/pages/login";
-import TestLogin from "@/pages/test-login";
 import ForgotPassword from "@/pages/forgot-password";
 import ResetPassword from "@/pages/reset-password";
 import Reports from "@/pages/reports";
@@ -93,7 +92,6 @@ function Router() {
       <Route path="/pricing" component={Pricing} />
       <Route path="/contact" component={Contact} />
       <Route path="/login" component={Login} />
-      <Route path="/test-login" component={TestLogin} />
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password/:token" component={ResetPassword} />
       <Route path="/reset-password" component={ResetPassword} />

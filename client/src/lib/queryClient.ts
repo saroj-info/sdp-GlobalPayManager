@@ -7,6 +7,32 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+// Triggered whenever a request to a protected endpoint comes back 401.
+// Reasons this fires: JWT in localStorage expired, JWT was tampered with, or
+// the server returned 401 for any other reason. We clear the stale token and
+// redirect to /login so the user lands somewhere actionable instead of seeing
+// a "no token" toast and being stuck on a broken page.
+//
+// Guards:
+//   - if no `authToken` was stored, the user was never logged in → don't redirect
+//     (the 401 is "you need to sign in to see this" rather than "your session
+//     expired", and the login page itself can return 401 for bad credentials)
+//   - if we're already on /login, don't redirect (avoid loop)
+//   - module-level flag prevents concurrent fan-out from many parallel queries
+//     all triggering a redirect at once
+let isAuthExpiredHandled = false;
+function handleAuthExpired() {
+  if (typeof window === "undefined") return;
+  if (isAuthExpiredHandled) return;
+  if (window.location.pathname === "/login") return;
+  if (!localStorage.getItem("authToken")) return;
+  isAuthExpiredHandled = true;
+  try { localStorage.clear(); } catch {}
+  try { sessionStorage.clear(); } catch {}
+  try { queryClient.clear(); } catch {}
+  window.location.href = "/login?session=expired";
+}
+
 export async function apiRequest(
   method: string,
   url: string,
@@ -32,6 +58,7 @@ export async function apiRequest(
     cache: 'no-store', // Prevent browser caching
   });
 
+  if (res.status === 401) handleAuthExpired();
   await throwIfResNotOk(res);
   return res;
 }
@@ -56,8 +83,11 @@ export const getQueryFn: <T>(options: {
       cache: 'no-store', // Prevent browser caching
     });
 
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
-      return null;
+    if (res.status === 401) {
+      // Stale/expired token — clear it and bounce to /login. Guard inside the
+      // helper skips the redirect for unauthenticated users on public pages.
+      handleAuthExpired();
+      if (unauthorizedBehavior === "returnNull") return null;
     }
 
     await throwIfResNotOk(res);

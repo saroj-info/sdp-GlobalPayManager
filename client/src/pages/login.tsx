@@ -37,8 +37,11 @@ export default function Login() {
     const verified = params.get('verified');
     const verificationError = params.get('verification_error');
     const emailParam = params.get('email');
+    const sessionExpired = params.get('session') === 'expired';
 
-    if (verified === 'true') {
+    if (sessionExpired) {
+      setVerificationMessage({ type: 'info', text: 'Your session has expired. Please sign in again to continue.' });
+    } else if (verified === 'true') {
       setVerificationMessage({ type: 'success', text: 'Your email has been verified successfully. You can now log in.' });
     } else if (verified === 'already') {
       setVerificationMessage({ type: 'info', text: 'Your email address is already verified. Please log in below.' });
@@ -51,7 +54,7 @@ export default function Login() {
       setVerificationMessage({ type: 'error', text: 'Something went wrong while verifying your email. Please try again or request a new verification email.' });
     }
 
-    if (verified || verificationError) {
+    if (verified || verificationError || sessionExpired) {
       window.history.replaceState({}, '', '/login');
     }
   }, []);

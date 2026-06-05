@@ -1179,7 +1179,7 @@ export default function ContractsPage() {
             <h1 className="text-2xl font-semibold mb-4">Authentication Required</h1>
             <p className="text-muted-foreground mb-4">Please log in to access contracts.</p>
             <button 
-              onClick={() => window.location.href = '/test-login'}
+              onClick={() => window.location.href = '/login'}
               className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
             >
               Go to Login
