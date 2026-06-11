@@ -14,6 +14,8 @@ export interface JWTPayload {
   sdpRole?: string | null;
   accessibleCountries?: string[];
   accessibleBusinessIds?: string[];
+  activeRole?: string;        // Dual-role: the role the session is currently acting as. Defaults to userType.
+  availableRoles?: string[];  // Dual-role: roles this user may switch between ([userType] plus addedRole when set).
   type: 'auth' | 'pending_2fa'; // Distinguish between full auth and pending 2FA
 }
 
@@ -28,6 +30,8 @@ export function createAuthToken(userData: {
   sdpRole?: string | null;
   accessibleCountries?: string[];
   accessibleBusinessIds?: string[];
+  activeRole?: string;
+  availableRoles?: string[];
 }): { token: string; userData: JWTPayload } {
   const payload: JWTPayload = {
     ...userData,
@@ -53,6 +57,8 @@ export function createPending2FASession(userData: {
   sdpRole?: string | null;
   accessibleCountries?: string[];
   accessibleBusinessIds?: string[];
+  activeRole?: string;
+  availableRoles?: string[];
 }): string {
   const payload: JWTPayload = {
     ...userData,
@@ -116,17 +122,29 @@ export const jwtAuthMiddleware: RequestHandler = (req, res, next) => {
     return res.status(401).json({ message: 'Unauthorized - Invalid token' });
   }
 
-  // Attach user to request (matching expected format with userId field)
+  // Attach user to request (matching expected format with userId field).
+  //
+  // Dual-role: `userType` is OVERLOADED with the EFFECTIVE (active) role so that
+  // every existing authorization branch in routes.ts (`req.user.userType === ...`)
+  // transparently follows the active view with no per-branch edits. This enforces
+  // strict isolation — in worker view the user is treated exactly as a worker
+  // everywhere; in business view, exactly as a business. `primaryRole` preserves
+  // the immutable account type for the few places that genuinely need it
+  // (e.g. the role-switch / profile-setup endpoints).
+  const active = effectiveRole(payload);
   (req as any).user = {
     id: payload.id,
     userId: payload.id, // Add userId for backward compatibility
     email: payload.email,
-    userType: payload.userType,
+    userType: active,           // EFFECTIVE role (overloaded)
+    primaryRole: payload.userType,
     name: payload.name,
     isAuthenticated: true,
     sdpRole: payload.sdpRole,
     accessibleCountries: payload.accessibleCountries || [],
     accessibleBusinessIds: payload.accessibleBusinessIds || [],
+    activeRole: active,
+    availableRoles: payload.availableRoles || [payload.userType],
   };
 
   next();
@@ -145,7 +163,13 @@ export function getUserFromToken(token: string): any | null {
   return {
     id: payload.id,
     email: payload.email,
-    userType: payload.userType,
+    // Overload `userType` with the EFFECTIVE (active) role so the ~129 frontend
+    // `user.userType` reads transparently follow the active view. `primaryRole`
+    // preserves the immutable account type for the switcher / settings UI.
+    userType: effectiveRole(payload),
+    primaryRole: payload.userType,
+    activeRole: payload.activeRole || payload.userType,
+    availableRoles: payload.availableRoles || [payload.userType],
     name: payload.name,
     firstName: payload.name.split(' ')[0],
     lastName: payload.name.split(' ').slice(1).join(' ') || '',
@@ -153,6 +177,29 @@ export function getUserFromToken(token: string): any | null {
     accessibleCountries: payload.accessibleCountries || [],
     accessibleBusinessIds: payload.accessibleBusinessIds || [],
   };
+}
+
+/**
+ * Dual-role: the role the request should be authorized as.
+ * SDP internal users are NEVER switchable — always 'sdp_internal'.
+ * Otherwise the session's activeRole, falling back to the primary userType
+ * (so tokens issued before this feature keep working).
+ */
+export function effectiveRole(user: { userType: string; activeRole?: string | null }): string {
+  if (user.userType === 'sdp_internal') return 'sdp_internal';
+  return user.activeRole || user.userType;
+}
+
+/**
+ * Dual-role: the set of roles a user may switch between.
+ * SDP internal is single-role. Otherwise [userType] plus addedRole when present.
+ */
+export function computeAvailableRoles(user: { userType?: string | null; addedRole?: string | null }): string[] {
+  const primary = user.userType || 'business_user';
+  if (primary === 'sdp_internal') return ['sdp_internal'];
+  const roles = [primary];
+  if (user.addedRole && user.addedRole !== primary) roles.push(user.addedRole);
+  return roles;
 }
 
 // Role-based middleware for SDP internal users

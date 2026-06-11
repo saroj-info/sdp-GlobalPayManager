@@ -551,6 +551,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             sdpRole: pendingSession.sdpRole,
             accessibleCountries: pendingSession.accessibleCountries,
             accessibleBusinessIds: pendingSession.accessibleBusinessIds,
+            activeRole: pendingSession.activeRole || pendingSession.userType,
+            availableRoles: pendingSession.availableRoles,
           });
 
           return res.json({
@@ -1594,7 +1596,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!trusted) {
           // User has 2FA enabled and this device is NOT trusted — create pending
           // session and require 2FA verification.
-          const { createPending2FASession } = await import('./jwtAuth');
+          const { createPending2FASession, computeAvailableRoles } = await import('./jwtAuth');
           const pendingToken = createPending2FASession({
             id: user.id,
             email: user.email ?? '',
@@ -1603,6 +1605,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             sdpRole: user.sdpRole,
             accessibleCountries: user.accessibleCountries ?? undefined,
             accessibleBusinessIds: user.accessibleBusinessIds ?? undefined,
+            activeRole: user.userType ?? undefined,
+            availableRoles: computeAvailableRoles(user),
           });
 
           return res.json({
@@ -1616,7 +1620,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // No 2FA - create auth token (JWT-based)
-      const { createAuthToken } = await import('./jwtAuth');
+      const { createAuthToken, computeAvailableRoles } = await import('./jwtAuth');
       const { token, userData } = createAuthToken({
         id: user.id,
         email: user.email ?? '',
@@ -1625,6 +1629,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         sdpRole: user.sdpRole,
         accessibleCountries: user.accessibleCountries ?? undefined,
         accessibleBusinessIds: user.accessibleBusinessIds ?? undefined,
+        activeRole: user.userType ?? undefined,
+        availableRoles: computeAvailableRoles(user),
       });
 
       // Return user info with token
@@ -1666,6 +1672,189 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Logout error:", error);
       res.status(500).json({ message: "Unable to logout. Please try again." });
+    }
+  });
+
+  // ==========================================================================
+  // Dual-role: switch the active role + self-service second-role setup.
+  //
+  // `userType` (primary) stays immutable; `addedRole` records the optional second
+  // role; the JWT's activeRole picks which one the session acts as. Every request
+  // is scoped to EXACTLY ONE role (see jwtAuthMiddleware overloading + the module
+  // scope resolvers) — worker and business data are never mixed. SDP users are
+  // never dual-role and cannot reach any of these endpoints.
+  // ==========================================================================
+
+  // Switch which role the current session acts as. Re-issues a JWT whose
+  // activeRole is the requested role (must be in the user's availableRoles).
+  app.post('/api/auth/switch-role', authMiddleware, async (req: any, res) => {
+    try {
+      const { role } = req.body ?? {};
+      if (!role || typeof role !== 'string') {
+        return res.status(400).json({ message: 'role is required' });
+      }
+
+      const dbUser = await storage.getUser(req.user.id);
+      if (!dbUser) return res.status(404).json({ message: 'User not found' });
+      if (dbUser.userType === 'sdp_internal') {
+        return res.status(403).json({ message: 'SDP users cannot switch roles' });
+      }
+
+      const { createAuthToken, computeAvailableRoles } = await import('./jwtAuth');
+      const available = computeAvailableRoles(dbUser);
+      if (!available.includes(role)) {
+        return res.status(403).json({ message: 'Requested role is not available for this account' });
+      }
+
+      const { token } = createAuthToken({
+        id: dbUser.id,
+        email: dbUser.email ?? '',
+        userType: dbUser.userType ?? '',
+        name: `${dbUser.firstName} ${dbUser.lastName}`,
+        sdpRole: dbUser.sdpRole,
+        accessibleCountries: dbUser.accessibleCountries ?? undefined,
+        accessibleBusinessIds: dbUser.accessibleBusinessIds ?? undefined,
+        activeRole: role,
+        availableRoles: available,
+      });
+
+      return res.json({ message: 'Role switched', token, activeRole: role, availableRoles: available });
+    } catch (error: any) {
+      console.error('Switch role error:', error?.message || error);
+      return res.status(500).json({ message: 'Failed to switch role' });
+    }
+  });
+
+  // Worker primary -> set up a business as the second role.
+  app.post('/api/auth/setup-business', authMiddleware, async (req: any, res) => {
+    try {
+      const dbUser = await storage.getUser(req.user.id);
+      if (!dbUser) return res.status(404).json({ message: 'User not found' });
+      if (dbUser.userType === 'sdp_internal') return res.status(403).json({ message: 'Not allowed' });
+      if (dbUser.userType !== 'worker') {
+        return res.status(400).json({ message: 'Only worker accounts can set up a business' });
+      }
+      if (dbUser.addedRole) {
+        return res.status(409).json({ message: 'You already have an additional role configured' });
+      }
+      if (await storage.getBusinessByOwnerId(dbUser.id)) {
+        return res.status(409).json({ message: 'A business already exists for this account' });
+      }
+
+      const data = z.object({
+        name: z.string().min(1, 'Business name is required'),
+        country: z.string().optional(),
+      }).parse(req.body);
+
+      let countryId: string | null = null;
+      if (data.country) {
+        const allCountries = await storage.getAllCountries();
+        const country = allCountries.find(c => c.code === data.country);
+        if (!country) return res.status(400).json({ message: 'Invalid country selected' });
+        countryId = country.id;
+      }
+
+      await storage.createBusiness({
+        name: data.name,
+        ownerId: dbUser.id,
+        accessibleCountries: countryId ? [countryId] : [],
+      });
+
+      const updatedUser = await storage.upsertUser({ ...dbUser, addedRole: 'business_user' as any });
+
+      // Re-issue the token defaulting the active view to the NEW role.
+      const { createAuthToken, computeAvailableRoles } = await import('./jwtAuth');
+      const available = computeAvailableRoles(updatedUser);
+      const { token } = createAuthToken({
+        id: updatedUser.id,
+        email: updatedUser.email ?? '',
+        userType: updatedUser.userType ?? '',
+        name: `${updatedUser.firstName} ${updatedUser.lastName}`,
+        sdpRole: updatedUser.sdpRole,
+        accessibleCountries: updatedUser.accessibleCountries ?? undefined,
+        accessibleBusinessIds: updatedUser.accessibleBusinessIds ?? undefined,
+        activeRole: 'business_user',
+        availableRoles: available,
+      });
+
+      return res.json({ message: 'Business created', token, activeRole: 'business_user', availableRoles: available });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: 'Validation error', errors: error.errors });
+      }
+      console.error('Setup business error:', error?.message || error);
+      return res.status(500).json({ message: 'Failed to set up business' });
+    }
+  });
+
+  // Business primary -> set up a worker profile (independent contractor) as the second role.
+  app.post('/api/auth/setup-worker', authMiddleware, async (req: any, res) => {
+    try {
+      const dbUser = await storage.getUser(req.user.id);
+      if (!dbUser) return res.status(404).json({ message: 'User not found' });
+      if (dbUser.userType === 'sdp_internal') return res.status(403).json({ message: 'Not allowed' });
+      if (dbUser.userType !== 'business_user') {
+        return res.status(400).json({ message: 'Only business accounts can set up a worker profile' });
+      }
+      if (dbUser.addedRole) {
+        return res.status(409).json({ message: 'You already have an additional role configured' });
+      }
+      if (await storage.getWorkerByUserId(dbUser.id)) {
+        return res.status(409).json({ message: 'A worker profile already exists for this account' });
+      }
+
+      const data = z.object({
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        phoneNumber: z.string().optional(),
+        country: z.string().optional(),
+      }).parse(req.body);
+
+      let countryId: string | null = null;
+      if (data.country) {
+        const allCountries = await storage.getAllCountries();
+        const country = allCountries.find(c => c.code === data.country);
+        if (!country) return res.status(400).json({ message: 'Invalid country selected' });
+        countryId = country.id;
+      }
+
+      await storage.createWorker({
+        userId: dbUser.id,
+        businessId: null, // independent contractor — not tied to the user's own business
+        firstName: data.firstName || dbUser.firstName || '',
+        lastName: data.lastName || dbUser.lastName || '',
+        email: dbUser.email || '',
+        phoneNumber: data.phoneNumber || dbUser.phoneNumber || '',
+        countryId: countryId,
+        workerType: 'contractor',
+        personalDetailsCompleted: false,
+        bankDetailsCompleted: false,
+        onboardingCompleted: false,
+      } as any);
+
+      const updatedUser = await storage.upsertUser({ ...dbUser, addedRole: 'worker' as any });
+
+      const { createAuthToken, computeAvailableRoles } = await import('./jwtAuth');
+      const available = computeAvailableRoles(updatedUser);
+      const { token } = createAuthToken({
+        id: updatedUser.id,
+        email: updatedUser.email ?? '',
+        userType: updatedUser.userType ?? '',
+        name: `${updatedUser.firstName} ${updatedUser.lastName}`,
+        sdpRole: updatedUser.sdpRole,
+        accessibleCountries: updatedUser.accessibleCountries ?? undefined,
+        accessibleBusinessIds: updatedUser.accessibleBusinessIds ?? undefined,
+        activeRole: 'worker',
+        availableRoles: available,
+      });
+
+      return res.json({ message: 'Worker profile created', token, activeRole: 'worker', availableRoles: available });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: 'Validation error', errors: error.errors });
+      }
+      console.error('Setup worker error:', error?.message || error);
+      return res.status(500).json({ message: 'Failed to set up worker profile' });
     }
   });
 
@@ -1934,7 +2123,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         id: user.id,
         ...data,
         profileImageUrl: normalizedProfileImageUrl, // Use the normalized URL
-        userType: user.userType, // Preserve userType
+        userType: user.primaryRole ?? user.userType, // Preserve PRIMARY userType (req.user.userType is the overloaded active role)
         isActive: user.isActive // Preserve status
       });
 

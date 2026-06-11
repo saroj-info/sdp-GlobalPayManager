@@ -69,6 +69,7 @@ export const users = pgTable("users", {
   postcode: varchar("postcode"),
   country: varchar("country"),
   userType: userTypeEnum("user_type").default('business_user'),
+  addedRole: userTypeEnum("added_role"), // Optional second role for dual-role users (worker<->business_user). Never set for sdp_internal.
   sdpRole: sdpRoleEnum("sdp_role"), // Required for sdp_internal users
   accessibleCountries: text("accessible_countries").array().default([]), // for SDP internal users
   accessibleBusinessIds: text("accessible_business_ids").array().default([]), // for client scoping

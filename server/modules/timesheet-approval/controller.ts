@@ -36,7 +36,7 @@ export function registerTimesheetApprovalRoutes(
           timesheetId: id,
           status,
           rejectionReason,
-          user: { id: userId, userType },
+          user: { id: userId, userType, activeRole: req.user?.activeRole, availableRoles: req.user?.availableRoles },
         });
 
         if (!result.ok) return res.status(result.status).json({ message: result.message });

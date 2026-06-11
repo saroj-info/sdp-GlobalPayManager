@@ -8,6 +8,8 @@
 export interface AuthUser {
   id: string;
   userType: string;
+  activeRole?: string;        // Dual-role: the role this session is acting as (defaults to userType)
+  availableRoles?: string[];
 }
 
 export type SortKey = "name" | "country" | "type" | "business" | "created";

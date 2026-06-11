@@ -7,6 +7,7 @@
  */
 
 import { storage } from "../../storage";
+import { effectiveRole } from "../../jwtAuth";
 import type { AuthUser, AuthorizeResult } from "./types";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -31,18 +32,21 @@ export async function authorizeStatusUpdate(input: {
 }): Promise<AuthorizeResult> {
   const { contract, user } = input;
 
-  if (user.userType === "worker") {
+  // Dual-role: authorize strictly as the ACTIVE role.
+  const role = effectiveRole(user);
+
+  if (role === "worker") {
     return { allowed: false, status: 403, message: "Workers cannot approve timesheets" };
   }
 
   const approverRole: string | null = contract.timesheetApproverRole || null;
 
-  if (user.userType === "sdp_internal") {
+  if (role === "sdp_internal") {
     if (approverRole && approverRole !== "sdp") return deny(approverRole);
     return { allowed: true };
   }
 
-  if (user.userType === "business_user") {
+  if (role === "business_user") {
     const business = await storage.getBusinessByOwnerId(user.id);
     if (!business) return { allowed: false, status: 404, message: "Business not found" };
 

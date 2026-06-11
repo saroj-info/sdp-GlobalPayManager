@@ -218,7 +218,7 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
                 </div>
               </div>
               <DropdownMenuSeparator />
-              
+
               {/* Business Profile - Only for business users */}
               {(user as any)?.userType === 'business' && (
                 <DropdownMenuItem data-testid="menu-business-profile" onClick={() => window.location.href = '/business-setup'}>

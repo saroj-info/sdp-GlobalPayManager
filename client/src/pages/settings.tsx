@@ -9,6 +9,7 @@ import { User, Upload, Save, Mail, Phone, MapPin } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
+import { RolesCard } from "@/components/settings/RolesCard";
 import sampleUserPhoto from "@assets/generated_images/Professional_business_headshot_8ca64f96.png";
 
 export default function Settings() {
@@ -211,7 +212,9 @@ export default function Settings() {
   return (
     <div className="flex-1 overflow-auto p-6">
       <div className="max-w-4xl mx-auto space-y-8">
-        
+
+        <RolesCard />
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

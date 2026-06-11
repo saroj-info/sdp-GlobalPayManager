@@ -8,20 +8,24 @@
  */
 
 import { storage } from "../../storage";
+import { effectiveRole } from "../../jwtAuth";
 import type { AuthUser, WorkerListScope } from "./types";
 
 export async function resolveWorkerListScope(user: AuthUser): Promise<WorkerListScope> {
-  if (user.userType === "sdp_internal") {
+  // Dual-role: scope strictly to the ACTIVE role, never a union of both.
+  const role = effectiveRole(user);
+
+  if (role === "sdp_internal") {
     return { kind: "all" };
   }
 
-  if (user.userType === "worker") {
+  if (role === "worker") {
     const worker = await storage.getWorkerByUserId(user.id);
     if (!worker) return { kind: "denied", status: 404, message: "Worker profile not found" };
     return { kind: "self", workerId: worker.id };
   }
 
-  if (user.userType === "business_user") {
+  if (role === "business_user") {
     const business = await storage.getBusinessByOwnerId(user.id);
     if (!business) return { kind: "denied", status: 404, message: "Business not found" };
     // A business may also be a host client — include workers placed at them

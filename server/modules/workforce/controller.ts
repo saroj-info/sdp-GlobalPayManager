@@ -46,7 +46,10 @@ export function registerWorkforceRoutes(
       const userType = req.user?.userType;
       if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-      const result = await listWorkers({ id: userId, userType }, parseQuery(req));
+      const result = await listWorkers(
+        { id: userId, userType, activeRole: req.user?.activeRole, availableRoles: req.user?.availableRoles },
+        parseQuery(req),
+      );
       if (!result.ok) return res.status(result.status).json({ message: result.message });
       return res.json(result.data);
     } catch (error: any) {

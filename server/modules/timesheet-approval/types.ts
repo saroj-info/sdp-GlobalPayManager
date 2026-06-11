@@ -9,6 +9,8 @@
 export interface AuthUser {
   id: string;
   userType: string;
+  activeRole?: string;        // Dual-role: the role this session is acting as (defaults to userType)
+  availableRoles?: string[];
 }
 
 /** Single invoice line item. Matches `storage.createSdpInvoiceLineItems(...)` input shape. */

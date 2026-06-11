@@ -101,6 +101,11 @@ export interface InvoiceWithContext extends Invoice {
 export interface AuthUser extends Omit<User, 'country'> {
   business?: Business | null;
   country?: string | Country | null;
+  // Dual-role: `userType` is the EFFECTIVE (active) role the server resolved.
+  // These extra fields expose the switcher state.
+  primaryRole?: string;        // immutable account type
+  activeRole?: string;         // currently-active role (= userType)
+  availableRoles?: string[];   // roles this user may switch between
 }
 
 export interface DashboardStats {
