@@ -1362,27 +1362,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Email verification endpoint
   app.get('/api/verify-email/:token', async (req: any, res) => {
     const frontendUrl = getEmailBaseUrl();
+
+    // Whatever the outcome, the user MUST land at /login as a fresh visitor.
+    // A leftover session from signup (or any earlier login in this browser)
+    // makes the login page's "if (isAuthenticated) redirect to /dashboard"
+    // guard punt them past the success message — and then the dashboard 401s
+    // because there's no JWT in localStorage. Wipe the session before the
+    // redirect so the user authenticates cleanly.
+    const clearSessionThenRedirect = (target: string) => {
+      try {
+        if (req.session) {
+          req.session.destroy(() => res.redirect(target));
+          return;
+        }
+      } catch {}
+      res.redirect(target);
+    };
+
     try {
       const { token } = req.params;
-      
+
       if (!token) {
-        return res.redirect(`${frontendUrl}/login?verification_error=invalid`);
+        return clearSessionThenRedirect(`${frontendUrl}/login?verification_error=invalid`);
       }
 
       const providedTokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
       const user = await storage.getUserByEmailVerificationToken(providedTokenHash);
-      
+
       if (!user) {
-        return res.redirect(`${frontendUrl}/login?verification_error=invalid`);
+        return clearSessionThenRedirect(`${frontendUrl}/login?verification_error=invalid`);
       }
 
       if (user.emailVerificationExpiresAt && new Date() > user.emailVerificationExpiresAt) {
-        return res.redirect(`${frontendUrl}/login?verification_error=expired&email=${encodeURIComponent(user.email || '')}`);
+        return clearSessionThenRedirect(`${frontendUrl}/login?verification_error=expired&email=${encodeURIComponent(user.email || '')}`);
       }
 
       if (user.emailVerified) {
-        return res.redirect(`${frontendUrl}/login?verified=already`);
+        return clearSessionThenRedirect(`${frontendUrl}/login?verified=already`);
       }
 
       await storage.upsertUser({
@@ -1406,10 +1423,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      res.redirect(`${frontendUrl}/login?verified=true`);
+      return clearSessionThenRedirect(`${frontendUrl}/login?verified=true`);
     } catch (error: any) {
       console.error("Email verification error:", error);
-      res.redirect(`${frontendUrl}/login?verification_error=error`);
+      return clearSessionThenRedirect(`${frontendUrl}/login?verification_error=error`);
     }
   });
 

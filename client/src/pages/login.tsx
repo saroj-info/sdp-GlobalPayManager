@@ -26,10 +26,23 @@ export default function Login() {
   // guard a user could open /login while still authenticated and see the
   // form again. Wait for authLoading so we don't flash a redirect on a
   // genuinely-not-logged-in user during initial /api/auth/user fetch.
+  //
+  // EXCEPTION: when the URL carries a verification / session-expired flag,
+  // the user came here to sign in fresh AFTER something else happened
+  // (verified their email, session timed out). They might still have a
+  // stale session cookie that makes isAuthenticated=true, but they don't
+  // have a JWT in localStorage — punting them to /dashboard leaves them
+  // stuck on a page that 401s every request. Always show the login form
+  // in that case.
   useEffect(() => {
-    if (!authLoading && isAuthenticated) {
-      setLocation('/dashboard');
-    }
+    if (authLoading || !isAuthenticated) return;
+    const params = new URLSearchParams(window.location.search);
+    const cameFromAuthEvent =
+      params.has('verified') ||
+      params.has('verification_error') ||
+      params.get('session') === 'expired';
+    if (cameFromAuthEvent) return;
+    setLocation('/dashboard');
   }, [authLoading, isAuthenticated, setLocation]);
 
   useEffect(() => {
