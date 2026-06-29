@@ -41,6 +41,7 @@ import AcceptBusinessInvitation from "@/pages/accept-business-invitation";
 import AcceptSdpInvite from "@/pages/accept-sdp-invite";
 import Settings from "@/pages/settings";
 import SecuritySettings from "@/pages/security-settings";
+import TeamMembers from "@/pages/team-members";
 import InviteBusiness from "@/pages/invite-business";
 import NewClientInvoice from "@/pages/new-client-invoice";
 import InvoiceView from "@/pages/invoice-view";
@@ -194,6 +195,10 @@ function Router() {
       <Route path="/security-settings" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;
         return <AuthenticatedLayout><SecuritySettings /></AuthenticatedLayout>;
+      }} />
+      <Route path="/team-members" component={() => {
+        if (!authReady) return <AuthLoadingSkeleton />;
+        return <AuthenticatedLayout><TeamMembers /></AuthenticatedLayout>;
       }} />
       <Route path="/invite-business" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;

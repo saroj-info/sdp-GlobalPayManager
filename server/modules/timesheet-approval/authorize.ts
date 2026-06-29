@@ -47,7 +47,7 @@ export async function authorizeStatusUpdate(input: {
   }
 
   if (role === "business_user") {
-    const business = await storage.getBusinessByOwnerId(user.id);
+    const business = await storage.getPrimaryBusinessForUser(user.id);
     if (!business) return { allowed: false, status: 404, message: "Business not found" };
 
     const isEmployingBusiness = contract.businessId === business.id;

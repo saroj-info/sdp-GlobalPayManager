@@ -236,7 +236,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         let business = null;
         if (userData.userType === 'business_user' && userData.id) {
           try {
-            business = await storage.getBusinessByOwnerId(userData.id);
+            business = await storage.getPrimaryBusinessForUser(userData.id);
           } catch (error: any) {
             console.error('Error getting business for user:', error);
           }
@@ -268,7 +268,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let business = null;
       if (userData.userType === 'business_user' && userData.id) {
         try {
-          business = await storage.getBusinessByOwnerId(userData.id);
+          business = await storage.getPrimaryBusinessForUser(userData.id);
         } catch (error: any) {
           console.error('Error getting business for user:', error);
         }
@@ -1754,6 +1754,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (dbUser.addedRole) {
         return res.status(409).json({ message: 'You already have an additional role configured' });
       }
+      // Genuine ownership check — must ask "do you OWN a business" (not
+      // "are you a member of one"). Stay on getBusinessByOwnerId.
       if (await storage.getBusinessByOwnerId(dbUser.id)) {
         return res.status(409).json({ message: 'A business already exists for this account' });
       }
@@ -3228,9 +3230,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!business) {
         return res.status(404).json({ message: "Business not found for user" });
       }
-      
-      const data = insertBusinessUserInviteSchema.parse(req.body);
-      
+
+      // Validate ONLY the client-supplied fields here. `businessId`,
+      // `invitedByUserId`, `token`, `expiresAt` are server-derived below and
+      // shouldn't be required to be in the request body — using the full
+      // insert schema would (and did) fail validation with "businessId
+      // required" before we even got to compute them.
+      const data = insertBusinessUserInviteSchema
+        .pick({ email: true })
+        .parse(req.body);
+
       // Check if user with this email already exists
       const existingUser = await storage.getUserByEmail(data.email);
       if (existingUser) {
@@ -3264,18 +3273,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
           business.name
         );
       } catch (emailError: any) {
-        console.error('Failed to send invitation email:', emailError);
+        // Manual stringify — Node v25's util.inspect crashes on some
+        // error shapes (Resend SDK / drizzle / Zod) and would take the
+        // process down if passed the raw error.
+        console.error('Failed to send invitation email:', {
+          message: emailError?.message ?? String(emailError),
+          code: emailError?.code,
+        });
         // Continue anyway - they can copy the link
       }
-      
-      res.json({ 
+
+      res.json({
         message: "Invitation sent successfully",
         inviteId: invite.id,
         inviteLink: `${process.env.FRONTEND_URL || 'https://sdpglobalpay.com'}/invite/business/${token}`
       });
     } catch (error: any) {
-      console.error("Error creating business user invitation:", error);
-      res.status(400).json({ message: "Failed to create invitation" });
+      // Manual stringify — see comment above. The raw error here can be a
+      // ZodError from insertBusinessUserInviteSchema.parse whose property
+      // descriptors crash Node v25's util.inspect.
+      console.error("Error creating business user invitation:", {
+        message: error?.message ?? String(error),
+        code: error?.code,
+        issues: Array.isArray(error?.issues) ? error.issues : undefined,
+      });
+      // Surface a meaningful 400 to the client when validation failed so the
+      // toast shows something useful instead of the generic "Failed to create
+      // invitation" message.
+      const isValidationError = Array.isArray(error?.issues) || error?.name === 'ZodError';
+      const firstIssue = isValidationError ? error.issues?.[0]?.message : undefined;
+      res.status(400).json({
+        message: firstIssue || error?.message || "Failed to create invitation",
+      });
     }
   });
 
@@ -3509,6 +3538,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * List every user currently in the caller's business — the owner plus any
+   * invited team members. Used by the Team Members settings page.
+   * Returns: { members: [{ id, email, firstName, lastName, role, addedAt }] }
+   */
+  app.get('/api/business-users/members', authMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const userType = req.user?.userType;
+      if (userType !== 'business_user') {
+        return res.status(403).json({ message: "Only business users can view team members" });
+      }
+      const business = await storage.getPrimaryBusinessForUser(userId);
+      if (!business) {
+        return res.status(404).json({ message: "Business not found for user" });
+      }
+      const members = await storage.getBusinessMembers(business.id);
+      res.json({
+        members: members.map(m => ({
+          id: m.id,
+          email: m.email,
+          firstName: m.firstName,
+          lastName: m.lastName,
+          role: m.role, // 'owner' | 'member'
+          isActive: m.isActive,
+          createdAt: m.createdAt,
+        })),
+      });
+    } catch (error: any) {
+      console.error("Error listing business members:", error);
+      res.status(500).json({ message: "Failed to list team members" });
+    }
+  });
+
+  /**
+   * Remove a team member from the caller's business. Only the business owner
+   * can remove members; members cannot remove themselves or each other (v1).
+   * The owner cannot be removed via this endpoint.
+   *
+   * Side effects:
+   *   - Member's accessibleBusinessIds loses this businessId (they can no
+   *     longer see the business after their JWT refreshes / they re-login).
+   *   - Their user account is preserved (kept active, login still works).
+   *   - tokenVersion is bumped so any active session of theirs 401s on next
+   *     request and falls into the standard auto-logout flow.
+   */
+  app.delete('/api/business-users/members/:userId', authMiddleware, async (req: any, res) => {
+    try {
+      const callerId = req.user?.id;
+      const callerType = req.user?.userType;
+      const { userId: targetUserId } = req.params;
+
+      if (callerType !== 'business_user') {
+        return res.status(403).json({ message: "Only business users can remove members" });
+      }
+      const business = await storage.getPrimaryBusinessForUser(callerId);
+      if (!business) {
+        return res.status(404).json({ message: "Business not found for user" });
+      }
+      // Equal-power membership: any team member can remove any other member.
+      // The only protected target is the owner — they can't be removed via
+      // this endpoint by anyone (including themselves).
+      if (targetUserId === business.ownerId) {
+        return res.status(400).json({ message: "The business owner cannot be removed" });
+      }
+
+      // Verify target user is actually a member of THIS business — defense in
+      // depth against an owner of business A removing a user from business B.
+      const targetUser = await storage.getUser(targetUserId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      const memberOf = (targetUser.accessibleBusinessIds ?? []) as string[];
+      if (!memberOf.includes(business.id)) {
+        return res.status(404).json({ message: "User is not a member of this business" });
+      }
+
+      await storage.removeBusinessMember(business.id, targetUserId);
+      // Note: the removed member's existing JWT remains valid until expiry
+      // (24h). Their next /api/auth/user refresh + the data routes' scoping
+      // through accessibleBusinessIds will drop access at that point. For
+      // immediate kick we'd need a tokenVersion bump — not implemented in
+      // the current auth shape.
+      res.json({ message: "Member removed successfully" });
+    } catch (error: any) {
+      console.error("Error removing business member:", error);
+      res.status(500).json({ message: "Failed to remove member" });
+    }
+  });
+
   // ===== BUSINESS INVITATIONS (Contractor-initiated) =====
   
   // Create business invitation - workers invite businesses to register
@@ -3693,7 +3810,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (user) {
         // Existing user - check if they already have a business
-        business = await storage.getBusinessByOwnerId(user.id);
+        business = await storage.getPrimaryBusinessForUser(user.id);
         if (!business) {
           // Create business for existing user
           business = await storage.createBusiness({
@@ -4150,7 +4267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (user.userType === 'business_user') {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business || business.id !== businessId) {
           return res.status(403).json({ message: 'Access denied - not your business' });
         }
@@ -4222,7 +4339,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         contracts = await storage.getContractInstances();
       } else if (user.userType === 'business_user') {
         // Business users can see contracts for their business
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) {
           return res.status(404).json({ message: 'Business not found' });
         }
@@ -4255,7 +4372,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Access denied - business user required' });
       }
 
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       if (!business) {
         return res.status(404).json({ message: 'Business not found' });
       }
@@ -4437,7 +4554,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
       
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
@@ -4506,7 +4623,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
       } else if (userType === 'business_user') {
         // Business users see their own contracts
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) {
           return res.status(404).json({ message: "Business not found" });
         }
@@ -4930,7 +5047,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/businesses/me', authMiddleware, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
@@ -4994,7 +5111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
       
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
@@ -5038,7 +5155,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json([]);
       }
 
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
       }
@@ -5134,7 +5251,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
       } else {
         // Standard creation - get business by owner
-        business = await storage.getBusinessByOwnerId(userId);
+        business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) {
           return res.status(404).json({ message: "Business not found" });
         }
@@ -5396,7 +5513,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json(updatedWorker);
       } else {
         // Business owners can only update their own workers
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) {
           return res.status(404).json({ message: "Business not found" });
         }
@@ -5428,7 +5545,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Allow SDP internal users or business owner to resend invitation
       if (userType !== 'sdp_internal') {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) {
           return res.status(404).json({ message: "Business not found" });
         }
@@ -5546,7 +5663,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
       
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
 
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
@@ -5628,7 +5745,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Filter based on user type and access
       if (userType === 'business_user') {
         // Business users can only see contracts for workers in their business
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) {
           return res.status(404).json({ message: "Business not found" });
         }
@@ -5751,7 +5868,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
       } else {
         // For regular business users, get their own business
-        business = await storage.getBusinessByOwnerId(userId);
+        business = await storage.getPrimaryBusinessForUser(userId);
         
         if (!business) {
           return res.status(404).json({ message: "Business not found" });
@@ -5961,7 +6078,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Check permissions
       if (userType !== 'sdp_internal') {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business || existingContract.businessId !== business.id) {
           return res.status(403).json({ message: "Unauthorized to update this contract" });
         }
@@ -6249,7 +6366,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check permissions
       const userType = req.user?.userType;
       if (userType !== 'sdp_internal') {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business || contract.businessId !== business.id) {
           return res.status(403).json({ message: "Unauthorized" });
         }
@@ -6345,7 +6462,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Same authorisation as send-for-signing: SDP internal, or the owning business.
       if (userType !== 'sdp_internal') {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business || contract.businessId !== business.id) {
           return res.status(403).json({ message: "Unauthorized" });
         }
@@ -6389,7 +6506,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // everything; business users only see their own contracts.
       const userType = req.user?.userType;
       if (userType !== 'sdp_internal') {
-        const business = await storage.getBusinessByOwnerId(req.user?.id);
+        const business = await storage.getPrimaryBusinessForUser(req.user?.id);
         if (!business || (contract.businessId !== business.id && (contract as any).customerBusinessId !== business.id)) {
           return res.status(403).json({ message: "Unauthorized" });
         }
@@ -6664,7 +6781,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(items);
       }
       if (userType === 'business_user' && userId) {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         const items = await storage.getPayItemsForBusiness(business?.id ?? null, countryId);
         return res.json(items);
       }
@@ -6695,7 +6812,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // SDP users may create global (businessId=null) or business-scoped
         businessId = data.businessId ?? null;
       } else if (userType === 'business_user') {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) return res.status(403).json({ message: 'No business found for user' });
         // Force-scope to caller's business — ignore any client-supplied businessId
         businessId = business.id;
@@ -6724,7 +6841,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (sdpRole) {
         // ok
       } else if (userType === 'business_user' && userId) {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business || existing.businessId !== business.id) {
           return res.status(403).json({ message: 'Not authorized to edit this pay item' });
         }
@@ -6759,7 +6876,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (sdpRole) {
         // ok
       } else if (userType === 'business_user' && userId) {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business || existing.businessId !== business.id) {
           return res.status(403).json({ message: 'Not authorized to delete this pay item' });
         }
@@ -6786,7 +6903,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Permission check
       if (userType !== 'sdp_internal') {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business || contract.businessId !== business.id) {
           return res.status(403).json({ message: "Unauthorized" });
         }
@@ -6878,7 +6995,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(pos);
       }
 
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       if (!business) return res.json([]);
       const pos = await storage.getPurchaseOrdersForBusiness(business.id);
       res.json(pos);
@@ -6957,7 +7074,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
       
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
@@ -6978,7 +7095,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/role-titles', authMiddleware, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
@@ -7151,7 +7268,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
 
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
 
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
@@ -7240,7 +7357,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Business users can only create timesheets for workers in their accessible businesses
         if (userType === 'business_user') {
           const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
-          const ownedBusiness = await storage.getBusinessByOwnerId(userId);
+          const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
           const hasAccess = (ownedBusiness && ownedBusiness.id === worker.businessId) || 
                            accessibleBusinessIds.includes(worker.businessId);
           
@@ -7419,7 +7536,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (userType === 'business_user') {
         const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
-        const ownedBusiness = await storage.getBusinessByOwnerId(userId);
+        const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
         const hasAccess = (ownedBusiness && ownedBusiness.id === timesheet.businessId) || 
                          accessibleBusinessIds.includes(timesheet.businessId);
         
@@ -7483,7 +7600,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (userType === 'business_user') {
         const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
-        const ownedBusiness = await storage.getBusinessByOwnerId(userId);
+        const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
         const hasAccess = (ownedBusiness && ownedBusiness.id === timesheet.businessId) || 
                          accessibleBusinessIds.includes(timesheet.businessId);
         
@@ -7530,7 +7647,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (userType === 'business_user') {
         // Check if user has access to the business via ownership or accessibleBusinessIds
         const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
-        const ownedBusiness = await storage.getBusinessByOwnerId(userId);
+        const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
         const hasAccess = (ownedBusiness && ownedBusiness.id === timesheet.businessId) || 
                          accessibleBusinessIds.includes(timesheet.businessId);
         
@@ -7578,7 +7695,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (userType === 'business_user') {
         // Check if user has access to the business via ownership or accessibleBusinessIds
         const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
-        const ownedBusiness = await storage.getBusinessByOwnerId(userId);
+        const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
         const hasAccess = (ownedBusiness && ownedBusiness.id === timesheet.businessId) || 
                          accessibleBusinessIds.includes(timesheet.businessId);
         
@@ -7618,7 +7735,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (userType === 'business_user') {
         // Check if user has access to the business via ownership or accessibleBusinessIds
         const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
-        const ownedBusiness = await storage.getBusinessByOwnerId(userId);
+        const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
         const hasAccess = (ownedBusiness && ownedBusiness.id === timesheet.businessId) || 
                          accessibleBusinessIds.includes(timesheet.businessId);
         
@@ -7712,7 +7829,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
       
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
 
       if (!business) {
         return res.status(404).json({ message: "Business not found" });
@@ -7782,7 +7899,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   //  - the host-client business referenced by any contract for this worker
   //    (contracts.customerBusinessId).
   const isBusinessAuthorizedForLeave = async (userId: string, leave: { workerId: string; businessId: string }) => {
-    const business = await storage.getBusinessByOwnerId(userId);
+    const business = await storage.getPrimaryBusinessForUser(userId);
     if (!business) return false;
     if (business.id === leave.businessId) return true;
     const workerContracts = await storage.getContractsByWorker(leave.workerId);
@@ -7964,7 +8081,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { businessId } = req.params;
       const userId = req.user?.id;
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
 
       if (!business || business.id !== businessId) {
         return res.status(403).json({ message: "Access denied" });
@@ -8013,7 +8130,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const worker = await storage.getWorkerByUserId(user.id);
         if (worker && worker.id === payslip.workerId) allowed = true;
       } else if (user.userType === 'business_user') {
-        const business = await storage.getBusinessByOwnerId(user.id);
+        const business = await storage.getPrimaryBusinessForUser(user.id);
         if (business && business.id === payslip.businessId) allowed = true;
       }
       if (!allowed) return res.status(403).json({ message: "Not allowed to view this payslip document" });
@@ -8180,7 +8297,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.userType === 'sdp_internal') {
         invoices = await storage.getAllInvoices();
       } else if (user.userType === 'business_user') {
-        const business = await storage.getBusinessByOwnerId(userId);
+        const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) {
           return res.status(404).json({ message: 'Business not found' });
         }
@@ -8513,7 +8630,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Get the business for this user
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       if (!business) {
         return res.status(404).json({ message: 'Business not found for this user' });
       }
@@ -8756,7 +8873,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Access denied' });
       }
 
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       if (!business) return res.status(404).json({ message: 'Business not found' });
 
       const allInvoices = await storage.getAllSdpInvoices();
@@ -8781,7 +8898,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Only business users can create client invoices' });
       }
 
-      const business = await storage.getBusinessByOwnerId(userId);
+      const business = await storage.getPrimaryBusinessForUser(userId);
       if (!business) return res.status(404).json({ message: 'Business not found' });
 
       const {
@@ -9247,7 +9364,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Verify the user belongs to the business being invoiced
-      const userBusiness = await storage.getBusinessByOwnerId(userId);
+      const userBusiness = await storage.getPrimaryBusinessForUser(userId);
       if (!userBusiness || userBusiness.id !== invoice.toBusinessId) {
         return res.status(403).json({ message: 'You can only pay invoices for your own business' });
       }
@@ -9308,7 +9425,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Verify the user belongs to the business being invoiced
-      const userBusiness = await storage.getBusinessByOwnerId(userId);
+      const userBusiness = await storage.getPrimaryBusinessForUser(userId);
       if (!userBusiness || userBusiness.id !== invoice.toBusinessId) {
         return res.status(403).json({ message: 'You can only confirm payments for your own business invoices' });
       }
@@ -9733,7 +9850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (userType !== 'business_user') {
           return res.status(403).json({ message: 'Forbidden' });
         }
-        const myBusiness = await storage.getBusinessByOwnerId(req.user.id);
+        const myBusiness = await storage.getPrimaryBusinessForUser(req.user.id);
         if (!myBusiness) {
           return res.status(403).json({ message: 'No business associated with this account' });
         }

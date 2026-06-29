@@ -175,6 +175,9 @@ export interface IStorage {
   getBusinessByOwnerId(ownerId: string): Promise<Business | undefined>;
   getBusinessById(businessId: string): Promise<Business | undefined>;
   getBusinessesForUser(userId: string): Promise<Business[]>;
+  // Team-member management (Phase 1 of Multi-User-Per-Business)
+  getBusinessMembers(businessId: string): Promise<(User & { role: 'owner' | 'member' })[]>;
+  removeBusinessMember(businessId: string, userId: string): Promise<void>;
   getPrimaryBusinessForUser(userId: string): Promise<Business | undefined>;
   updateBusinessCountryAccess(businessId: string, countries: string[]): Promise<void>;
   getHostClientsForBusiness(parentBusinessId: string): Promise<Business[]>;
@@ -927,13 +930,64 @@ export class DatabaseStorage implements IStorage {
   // Helper method to get primary business for a user (for backwards compatibility)
   async getPrimaryBusinessForUser(userId: string): Promise<Business | undefined> {
     const businesses = await this.getBusinessesForUser(userId);
-    
+
     // First check if user owns a business
     const ownedBusiness = businesses.find(b => b.ownerId === userId);
     if (ownedBusiness) return ownedBusiness;
-    
+
     // Otherwise return the first accessible business
     return businesses[0];
+  }
+
+  /**
+   * List every user who can access a given business:
+   *   - the owner (businesses.ownerId)
+   *   - any user whose `accessibleBusinessIds` array contains this businessId
+   *     AND whose userType is 'business_user' (excludes SDP agents whose
+   *     accessibleBusinessIds is used for a separate scoping concern).
+   * Each row is tagged with `role: 'owner' | 'member'` so the UI can sort
+   * and gate destructive actions accordingly.
+   */
+  async getBusinessMembers(businessId: string): Promise<(User & { role: 'owner' | 'member' })[]> {
+    const business = await this.getBusinessById(businessId);
+    if (!business) return [];
+
+    const ownerRow = await this.getUser(business.ownerId);
+    const memberRows = await db
+      .select()
+      .from(users)
+      .where(
+        and(
+          eq(users.userType, 'business_user'),
+          // accessibleBusinessIds is text[] — check membership with the `?` (any) op
+          sql`${businessId} = ANY(${users.accessibleBusinessIds})`,
+          // exclude the owner from the membership scan; they're added back below
+          ownerRow ? sql`${users.id} != ${business.ownerId}` : sql`true`,
+        ),
+      );
+
+    const tagged: (User & { role: 'owner' | 'member' })[] = [];
+    if (ownerRow) tagged.push({ ...ownerRow, role: 'owner' });
+    for (const m of memberRows) tagged.push({ ...m, role: 'member' });
+    return tagged;
+  }
+
+  /**
+   * Revoke a member's access by removing the businessId from their
+   * `accessibleBusinessIds` array. Does NOT delete the user — they keep their
+   * login and any other business memberships they had. The business owner
+   * cannot be removed through this path (caller must check).
+   */
+  async removeBusinessMember(businessId: string, userId: string): Promise<void> {
+    const user = await this.getUser(userId);
+    if (!user) return;
+    const current = (user.accessibleBusinessIds ?? []) as string[];
+    const next = current.filter(id => id !== businessId);
+    if (next.length === current.length) return; // nothing changed
+    await db
+      .update(users)
+      .set({ accessibleBusinessIds: next, updatedAt: new Date() })
+      .where(eq(users.id, userId));
   }
 
   async updateBusinessCountryAccess(businessId: string, countryIds: string[]): Promise<void> {

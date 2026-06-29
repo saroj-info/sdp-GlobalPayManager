@@ -17,7 +17,7 @@ export async function resolveTimesheetListScope(user: AuthUser): Promise<Timeshe
   }
 
   if (role === "business_user") {
-    const business = await storage.getBusinessByOwnerId(user.id);
+    const business = await storage.getPrimaryBusinessForUser(user.id);
     if (!business) return { kind: "denied", status: 404, message: "Business not found" };
     return { kind: "business", businessId: business.id };
   }

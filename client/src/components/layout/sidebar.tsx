@@ -50,6 +50,7 @@ export function Sidebar() {
     { name: 'Leave Requests', href: '/leave-requests', icon: 'fas fa-calendar-day' },
     { name: 'Invoices', href: '/invoices', icon: 'fas fa-file-invoice' },
     { name: 'Pay Items', href: '/pay-items', icon: 'fas fa-coins' },
+    { name: 'Team Members', href: '/team-members', icon: 'fas fa-user-friends' },
     { name: 'Resources', href: '/resources', icon: 'fas fa-calculator' },
   ];
 
