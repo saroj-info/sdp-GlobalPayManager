@@ -72,6 +72,57 @@ class EmailService {
     return null;
   }
 
+  /**
+   * Resolve the sender configuration for the outgoing mail.
+   *
+   * Priority (highest wins):
+   *   1. Per-call `options.from` (existing behaviour — used by tests / edge
+   *      cases; when present, headers derive their domain from it too).
+   *   2. `email_settings` row (singleton table, admin-editable). Provides
+   *      the display name, local part, and reply-to local part; domain is
+   *      still taken from `EMAIL_FROM` since DNS isn't in the DB.
+   *   3. `EMAIL_FROM` env var — full address, wrapped in the "SDP Global
+   *      Pay <...>" display name.
+   *   4. Resend's shared onboarding domain (`onboarding@resend.dev`) as
+   *      a last-resort fallback. Emails sent from here will almost
+   *      always land in spam; production should always set EMAIL_FROM.
+   */
+  private async resolveSenderConfig(overrideFrom?: string): Promise<{
+    from: string;
+    replyTo?: string;
+    domain: string;
+  }> {
+    if (overrideFrom) {
+      const domain = overrideFrom.match(/@([^>\s]+)/)?.[1] ?? 'resend.dev';
+      return { from: overrideFrom, domain };
+    }
+
+    const envFrom = process.env.EMAIL_FROM || 'onboarding@resend.dev';
+    const envDomain = envFrom.split('@')[1] || 'resend.dev';
+
+    let displayName = 'SDP Global Pay';
+    let localPart = envFrom.split('@')[0];
+    let replyToLocalPart: string | undefined;
+    try {
+      const settings = await storage.getEmailSettings();
+      if (settings) {
+        if (settings.defaultFromDisplayName) displayName = settings.defaultFromDisplayName;
+        if (settings.defaultFromLocalPart)  localPart = settings.defaultFromLocalPart;
+        if (settings.replyToLocalPart)      replyToLocalPart = settings.replyToLocalPart;
+      }
+    } catch (err) {
+      // Never let a DB blip stop mail — fall back to env-only.
+      console.warn('[email] getEmailSettings failed, using env fallback:', (err as any)?.message ?? err);
+    }
+
+    const from = `${displayName} <${localPart}@${envDomain}>`;
+    const replyTo = replyToLocalPart
+      ? `${replyToLocalPart}@${envDomain}`
+      : (process.env.EMAIL_REPLY_TO || undefined);
+
+    return { from, replyTo, domain: envDomain };
+  }
+
   async sendEmail(options: EmailOptions): Promise<boolean> {
     if (!process.env.RESEND_API_KEY || !resend) {
       console.warn('RESEND_API_KEY not configured - email functionality disabled');
@@ -79,16 +130,29 @@ class EmailService {
     }
 
     try {
-      const fromAddress = options.from || this.defaultFrom;
-      
+      const senderConfig = await this.resolveSenderConfig(options.from);
+      const fromAddress = senderConfig.from;
+
+      // Deliverability headers. `List-Unsubscribe` is required by Gmail /
+      // Yahoo / Outlook 2024 rules for bulk-ish mail; missing it silently
+      // lowers the domain's reputation. `List-Unsubscribe-Post` opts in to
+      // Gmail's one-click unsubscribe UX. `mailto:unsubscribe@<domain>`
+      // doesn't need to be a real inbox — a catch-all rule handles it.
+      const deliverabilityHeaders: Record<string, string> = {
+        'List-Unsubscribe': `<mailto:unsubscribe@${senderConfig.domain}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      };
+
       const { data, error } = await resend.emails.send({
         from: fromAddress,
         to: Array.isArray(options.to) ? options.to : [options.to],
         cc: options.cc ? (Array.isArray(options.cc) ? options.cc : [options.cc]) : undefined,
         bcc: options.bcc ? (Array.isArray(options.bcc) ? options.bcc : [options.bcc]) : undefined,
+        replyTo: senderConfig.replyTo,
         subject: options.subject,
         text: options.text || '',
         html: options.html,
+        headers: deliverabilityHeaders,
         attachments: options.attachments?.map(att => ({
           filename: att.filename,
           content: att.content,

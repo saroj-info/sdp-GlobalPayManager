@@ -2421,7 +2421,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         period: 30,
       });
       
-      const isValidCode = totp.validate({ token: totpVerificationCode, window: 1 }) !== null;
+      const isValidCode = totp.validate({ token: totpVerificationCode, window: 2 }) !== null;
       if (!isValidCode) {
         return res.status(400).json({ message: "Invalid verification code. Please check your authenticator app and try again." });
       }
@@ -3376,7 +3376,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         period: 30,
       });
       
-      const isValidCode = totp.validate({ token: totpVerificationCode, window: 1 }) !== null;
+      const isValidCode = totp.validate({ token: totpVerificationCode, window: 2 }) !== null;
       if (!isValidCode) {
         return res.status(400).json({ message: "Invalid verification code. Please check your authenticator app and try again." });
       }

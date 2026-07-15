@@ -88,9 +88,22 @@ export async function generateQRCode(otpauthUrl: string): Promise<string> {
 }
 
 /**
- * Verify TOTP code with time window tolerance
+ * Verify TOTP code with time window tolerance.
+ *
+ * Default window is 2 (±60 s / 150 s total accepted range). Widened from
+ * the industry-common `1` (±30 s) because real-world clock skew between
+ * user phones and our server routinely exceeds 30 s — cloud VMs drift
+ * between NTP syncs, phones drift after airplane mode / power saving,
+ * etc. The user-visible symptom of a too-narrow window is exactly what
+ * we saw: "the same code fails once, then works when I re-submit a few
+ * seconds later" — the phone's slot advances into the server's ±window
+ * only after a beat.
+ *
+ * A code stolen and replayed within 60 s of expiry is a threat that's
+ * already open with `window: 1`, so we're not meaningfully weakening
+ * security by going to 2. Google's own docs recommend 1-2 slots.
  */
-export function verifyTOTPCode(secret: string, token: string, window: number = 1): boolean {
+export function verifyTOTPCode(secret: string, token: string, window: number = 2): boolean {
   try {
     const totp = new TOTP({
       algorithm: 'SHA1',
@@ -99,9 +112,18 @@ export function verifyTOTPCode(secret: string, token: string, window: number = 1
       secret: Secret.fromBase32(secret),
     });
 
-    // Verify with window tolerance (±1 period = ±30 seconds)
+    // Verify with window tolerance
     const delta = totp.validate({ token, window });
-    return delta !== null;
+    if (delta === null) {
+      // Diagnostic: if we're consistently rejecting valid-looking codes
+      // (6 digits) the underlying cause is almost always clock skew, not
+      // a wrong code. This log lets us confirm.
+      if (/^\d{6}$/.test(token)) {
+        console.warn('[TOTP] validation failed for a well-formed 6-digit code — likely clock skew. window=' + window);
+      }
+      return false;
+    }
+    return true;
   } catch (error) {
     console.error('Error verifying TOTP code:', error);
     return false;
