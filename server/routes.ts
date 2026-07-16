@@ -3337,34 +3337,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Accept business user invitation - requires password and 2FA setup
+  // Accept business user invitation - requires password
+  // NOTE (temp): 2FA setup is disabled during accept. When re-enabling,
+  // restore the totpSecret/totpVerificationCode validation, encryption
+  // and the enrollment DB writes further down. See git blame for the
+  // exact block.
   app.post('/api/business-users/accept', async (req: any, res) => {
     try {
-      const { token, firstName, lastName, password, totpSecret, totpVerificationCode } = req.body;
-      
-      // Validate required fields
-      if (!token || !firstName || !lastName || !password || !totpSecret || !totpVerificationCode) {
+      const { token, firstName, lastName, password /* , totpSecret, totpVerificationCode */ } = req.body;
+
+      // Validate required fields (2FA fields temporarily not required)
+      if (!token || !firstName || !lastName || !password) {
         return res.status(400).json({ message: "Missing required fields" });
       }
-      
+
       // Validate password strength (minimum 8 characters)
       if (password.length < 8) {
         return res.status(400).json({ message: "Password must be at least 8 characters long" });
       }
-      
+
       const invite = await storage.getBusinessUserInviteByToken(token);
       if (!invite) {
         return res.status(404).json({ message: "Invalid invitation token" });
       }
-      
+
       if (invite.acceptedAt) {
         return res.status(400).json({ message: "Invitation already accepted" });
       }
-      
+
       if (invite.expiresAt < new Date()) {
         return res.status(400).json({ message: "Invitation expired" });
       }
-      
+
+      /* --- BEGIN 2FA disabled block ---
       // Verify the TOTP code before proceeding
       const secret = OTPAuth.Secret.fromBase32(totpSecret);
       const totp = new OTPAuth.TOTP({
@@ -3375,26 +3380,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         digits: 6,
         period: 30,
       });
-      
+
       const isValidCode = totp.validate({ token: totpVerificationCode, window: 2 }) !== null;
       if (!isValidCode) {
         return res.status(400).json({ message: "Invalid verification code. Please check your authenticator app and try again." });
       }
-      
-      // Hash the password
-      const passwordHash = await bcrypt.hash(password, 10);
-      
+
       // Encrypt the TOTP secret
       const encryptedTotpSecret = twoFactorAuth.encrypt(totpSecret);
-      
+
       // Generate backup codes (10 codes)
-      const backupCodes = Array.from({ length: 10 }, () => 
+      const backupCodes = Array.from({ length: 10 }, () =>
         crypto.randomBytes(4).toString('hex').toUpperCase()
       );
       const hashedBackupCodes = await Promise.all(
         backupCodes.map(code => bcrypt.hash(code, 10))
       );
       const encryptedBackupCodes = hashedBackupCodes.map(hash => twoFactorAuth.encrypt(hash));
+      --- END 2FA disabled block --- */
+
+      // Hash the password
+      const passwordHash = await bcrypt.hash(password, 10);
       
       // Check if user already exists with this email
       let user = await storage.getUserByEmail(invite.email);
@@ -3434,14 +3440,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      // Create or update 2FA record
-      await storage.upsertUserTwoFactorAuth({
-        userId: user.id,
-        method: 'totp',
-        totpSecret: encryptedTotpSecret,
-        isEnabled: true,
-      });
-      await storage.enableUserTwoFactorAuth(user.id, encryptedBackupCodes);
+      // 2FA enrollment temporarily disabled — see the commented block above.
+      // When re-enabling, restore both writes:
+      //   await storage.upsertUserTwoFactorAuth({ userId: user.id, method: 'totp', totpSecret: encryptedTotpSecret, isEnabled: true });
+      //   await storage.enableUserTwoFactorAuth(user.id, encryptedBackupCodes);
       
       // Send registration confirmation email for new business users
       if (isNewUser && user.email) {
@@ -3461,10 +3463,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Mark invitation as accepted
       await storage.updateBusinessUserInvite(invite.id, { acceptedAt: new Date() });
       
-      res.json({ 
+      res.json({
         message: "Account created successfully",
         userId: user.id,
-        backupCodes // Return backup codes to display to the user
+        backupCodes: [] // 2FA disabled — no backup codes to hand back for now
       });
     } catch (error: any) {
       console.error("Error accepting business user invitation:", error);

@@ -123,13 +123,11 @@ export default function AcceptBusinessInvitation() {
       errors.confirmPassword = "Passwords do not match";
     }
 
-    if (!setup2FA) {
-      errors.verificationCode = "Please set up two-factor authentication";
-    } else if (!verificationCode) {
-      errors.verificationCode = "Verification code is required";
-    } else if (!/^\d{6}$/.test(verificationCode)) {
-      errors.verificationCode = "Verification code must be 6 digits";
-    }
+    // 2FA setup temporarily disabled during accept — no verification-code
+    // check here. Restore the following block to re-enable:
+    //   if (!setup2FA) errors.verificationCode = "Please set up two-factor authentication";
+    //   else if (!verificationCode) errors.verificationCode = "Verification code is required";
+    //   else if (!/^\d{6}$/.test(verificationCode)) errors.verificationCode = "Verification code must be 6 digits";
 
     setFormErrors(errors);
     return !errors.firstName && !errors.lastName && !errors.password && !errors.confirmPassword && !errors.verificationCode;
@@ -151,8 +149,10 @@ export default function AcceptBusinessInvitation() {
         firstName,
         lastName,
         password,
-        totpSecret,
-        totpVerificationCode: verificationCode,
+        // 2FA setup temporarily disabled — restore these two fields when
+        // re-enabling the accept-side enrollment flow.
+        // totpSecret,
+        // totpVerificationCode: verificationCode,
       });
 
       const json = await data.json() as { backupCodes?: string[] };
@@ -221,7 +221,7 @@ export default function AcceptBusinessInvitation() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+            {/* <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
               <h3 className="font-semibold text-amber-900 mb-2">⚠️ Important: Backup Codes</h3>
               <p className="text-sm text-amber-800 mb-3">
                 These backup codes can be used if you lose access to your authenticator app. 
@@ -250,7 +250,7 @@ export default function AcceptBusinessInvitation() {
                   </>
                 )}
               </Button>
-            </div>
+            </div> */}
             <Button
               onClick={() => setLocation("/login")}
               className="w-full"
@@ -401,14 +401,16 @@ export default function AcceptBusinessInvitation() {
               </div>
             </div>
 
-            {/* 2FA Setup */}
+            {/* 2FA Setup — temporarily hidden. Restore this block (and the
+                submit-button `!setup2FA` guard below) when re-enabling 2FA
+                during accept.
             <div className="space-y-4">
               <h3 className="font-semibold text-gray-900">Two-Factor Authentication (Required)</h3>
-              
+
               {!setup2FA ? (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                   <p className="text-sm text-blue-900 mb-3">
-                    Two-factor authentication adds an extra layer of security to your account. 
+                    Two-factor authentication adds an extra layer of security to your account.
                     You'll need an authenticator app like Google Authenticator, Authy, or 1Password.
                   </p>
                   <Button
@@ -427,9 +429,9 @@ export default function AcceptBusinessInvitation() {
                     <h4 className="font-medium text-gray-900 mb-3">Scan QR Code</h4>
                     <div className="flex justify-center mb-4">
                       {qrCodeUrl && (
-                        <img 
-                          src={qrCodeUrl} 
-                          alt="2FA QR Code" 
+                        <img
+                          src={qrCodeUrl}
+                          alt="2FA QR Code"
                           className="w-48 h-48"
                           data-testid="img-qr-code"
                         />
@@ -478,6 +480,7 @@ export default function AcceptBusinessInvitation() {
                 </div>
               )}
             </div>
+            */}
 
             {error && (
               <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded" data-testid="error-message">
@@ -485,10 +488,11 @@ export default function AcceptBusinessInvitation() {
               </div>
             )}
 
-            <Button 
-              type="submit" 
-              className="w-full" 
-              disabled={accepting || !setup2FA}
+            <Button
+              type="submit"
+              className="w-full"
+              // 2FA gate temporarily removed — was: disabled={accepting || !setup2FA}
+              disabled={accepting}
               data-testid="button-create-account"
             >
               {accepting ? (
