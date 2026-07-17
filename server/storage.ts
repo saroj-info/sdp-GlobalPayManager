@@ -255,6 +255,15 @@ export interface IStorage {
   getWorkersByBusiness(businessId: string): Promise<(Worker & { country: Country })[]>;
   getAllWorkers(): Promise<(Worker & { country: Country; business: Business })[]>;
   createWorker(worker: InsertWorker): Promise<Worker>;
+  // Ensure a dual-role user has a `workers` row on their own business's
+  // workforce (idempotent). See implementation for the four cases handled.
+  ensureSelfWorkerRow(userId: string, businessId: string, userFields: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    phoneNumber?: string | null;
+    countryId?: string | null;
+  }): Promise<Worker>;
   getWorkerById(id: string): Promise<Worker | undefined>;
   getWorkerByUserId(userId: string): Promise<Worker | undefined>;
   getWorkerByInvitationToken(tokenHash: string): Promise<Worker | undefined>;
@@ -1571,6 +1580,70 @@ export class DatabaseStorage implements IStorage {
 
   async createWorker(worker: InsertWorker): Promise<Worker> {
     const [created] = await db.insert(workers).values(worker).returning();
+    return created;
+  }
+
+  /**
+   * Guarantee that a dual-role user has a `workers` row on their own
+   * business's workforce. Called from the setup-worker / setup-business /
+   * switch-role handlers so the business side can treat the owner as a
+   * normal worker (contracts, timesheets, invoices…).
+   *
+   * Idempotent — safe to call on every switch. Four cases:
+   *   1. No worker row for this user yet → CREATE on the given business.
+   *   2. Worker row exists with `businessId = null` (the old setup-worker
+   *      "independent contractor" shape) → REPURPOSE it: set the businessId
+   *      to the caller-provided one. Preserves any partial onboarding data.
+   *   3. Worker row exists with `businessId = <given>` → NO-OP, return it.
+   *   4. Worker row exists on a different business → CREATE a new row on
+   *      this business. Schema allows multiple worker rows per user.
+   */
+  async ensureSelfWorkerRow(
+    userId: string,
+    businessId: string,
+    userFields: {
+      firstName: string;
+      lastName: string;
+      email: string;
+      phoneNumber?: string | null;
+      countryId?: string | null;
+    },
+  ): Promise<Worker> {
+    const existing = await db.select().from(workers).where(eq(workers.userId, userId));
+
+    // Case 3: already on the right business.
+    const onTargetBiz = existing.find(w => w.businessId === businessId);
+    if (onTargetBiz) return onTargetBiz;
+
+    // Case 2: repurpose a null-business row (previous setup-worker output).
+    const nullBizRow = existing.find(w => w.businessId === null);
+    if (nullBizRow) {
+      const [updated] = await db
+        .update(workers)
+        .set({ businessId, updatedAt: new Date() })
+        .where(eq(workers.id, nullBizRow.id))
+        .returning();
+      console.log(`[dual-role] repurposed worker ${nullBizRow.id} onto business ${businessId} for user ${userId}`);
+      return updated;
+    }
+
+    // Case 1 & 4: create a fresh worker row on this business.
+    const [created] = await db.insert(workers).values({
+      userId,
+      businessId,
+      firstName: userFields.firstName,
+      lastName: userFields.lastName,
+      email: userFields.email,
+      phoneNumber: userFields.phoneNumber ?? null,
+      countryId: userFields.countryId ?? null,
+      workerType: 'contractor',
+      personalDetailsCompleted: false,
+      businessDetailsCompleted: false,
+      bankDetailsCompleted: false,
+      onboardingCompleted: false,
+      createdByUserId: userId,
+    } as any).returning();
+    console.log(`[dual-role] created worker ${created.id} on business ${businessId} for user ${userId}`);
     return created;
   }
 

@@ -1723,6 +1723,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Requested role is not available for this account' });
       }
 
+      // Self-heal for accounts that predate the "self-worker on own business"
+      // invariant. On any switch, if the user owns a business, guarantee they
+      // have a worker row on it. Idempotent — no-ops when the row already
+      // exists. Runs on every switch (both directions) so a worker row lands
+      // regardless of which role we're moving TO.
+      const ownBusiness = await storage.getBusinessByOwnerId(dbUser.id);
+      if (ownBusiness) {
+        await storage.ensureSelfWorkerRow(dbUser.id, ownBusiness.id, {
+          firstName: dbUser.firstName || '',
+          lastName: dbUser.lastName || '',
+          email: dbUser.email || '',
+          phoneNumber: dbUser.phoneNumber || null,
+          // users table has no countryId column — worker onboarding wizard
+          // will collect it. Leave null for the self-heal path.
+          countryId: null,
+        });
+      }
+
       const { token } = createAuthToken({
         id: dbUser.id,
         email: dbUser.email ?? '',
@@ -1773,10 +1791,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         countryId = country.id;
       }
 
-      await storage.createBusiness({
+      const createdBusiness = await storage.createBusiness({
         name: data.name,
         ownerId: dbUser.id,
         accessibleCountries: countryId ? [countryId] : [],
+      });
+
+      // Dual-role: this user is a worker who just spun up a business. Land
+      // them on the new business's workforce so the business side can create
+      // contracts / timesheets / invoices where they are also the worker.
+      // Idempotent — if they already have a worker row with null businessId
+      // (independent contractor state), it gets repurposed to this business.
+      await storage.ensureSelfWorkerRow(dbUser.id, createdBusiness.id, {
+        firstName: dbUser.firstName || '',
+        lastName: dbUser.lastName || '',
+        email: dbUser.email || '',
+        phoneNumber: dbUser.phoneNumber || null,
+        countryId: countryId,
       });
 
       const updatedUser = await storage.upsertUser({ ...dbUser, addedRole: 'business_user' as any });
@@ -1837,19 +1868,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         countryId = country.id;
       }
 
-      await storage.createWorker({
-        userId: dbUser.id,
-        businessId: null, // independent contractor — not tied to the user's own business
+      // If this business_user owns a business, land the new worker row on
+      // that business's workforce so they appear as a normal worker and the
+      // business side can create contracts / timesheets / invoices for them.
+      // If they don't own one (edge case — team-member without ownership),
+      // fall back to the historical "independent contractor" shape.
+      const ownBusiness = await storage.getBusinessByOwnerId(dbUser.id);
+      const workerFields = {
         firstName: data.firstName || dbUser.firstName || '',
         lastName: data.lastName || dbUser.lastName || '',
         email: dbUser.email || '',
         phoneNumber: data.phoneNumber || dbUser.phoneNumber || '',
         countryId: countryId,
-        workerType: 'contractor',
-        personalDetailsCompleted: false,
-        bankDetailsCompleted: false,
-        onboardingCompleted: false,
-      } as any);
+      };
+      if (ownBusiness) {
+        await storage.ensureSelfWorkerRow(dbUser.id, ownBusiness.id, workerFields);
+      } else {
+        await storage.createWorker({
+          userId: dbUser.id,
+          businessId: null,
+          ...workerFields,
+          workerType: 'contractor',
+          personalDetailsCompleted: false,
+          bankDetailsCompleted: false,
+          onboardingCompleted: false,
+        } as any);
+      }
 
       const updatedUser = await storage.upsertUser({ ...dbUser, addedRole: 'worker' as any });
 
