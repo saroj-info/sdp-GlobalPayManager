@@ -773,6 +773,24 @@ export const contractChangeLog = pgTable("contract_change_log", {
 export type ContractChangeLog = typeof contractChangeLog.$inferSelect;
 export type InsertContractChangeLog = typeof contractChangeLog.$inferInsert;
 
+// Append-only audit log of worker profile edits. Same shape/purpose as
+// contractChangeLog. Rendered as "Change History" on the workforce details
+// modal so operators can see who touched a bank account / tax ID / etc.
+export const workerChangeLog = pgTable("worker_change_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").references(() => workers.id, { onDelete: 'cascade' }).notNull(),
+  fieldName: varchar("field_name").notNull(),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  changedBy: varchar("changed_by").references(() => users.id),
+  changedAt: timestamp("changed_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_worker_change_log_worker").on(table.workerId, table.changedAt),
+]);
+
+export type WorkerChangeLog = typeof workerChangeLog.$inferSelect;
+export type InsertWorkerChangeLog = typeof workerChangeLog.$inferInsert;
+
 // Timesheets for tracking worker hours
 export const timesheets = pgTable("timesheets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1504,6 +1522,46 @@ export const insertWorkerSchema = createInsertSchema(workers).omit({
   onBehalf: z.boolean().optional(), // UI flag to indicate creating on behalf
   selectedBusinessId: z.string().optional(), // The business ID when creating on behalf
 });
+
+// Update-side validator. Whitelist covers every column an SDP admin can edit
+// on the workforce details modal. System columns (ids, tokens, audit,
+// *Completed flags) are intentionally NOT in the omit list — createInsertSchema
+// doesn't include primary key / references here anyway, but we keep the
+// .partial() so an edit can send any subset of fields.
+// The `workerType` field is accepted at the schema layer; the route handler
+// enforces the "no active contracts" guard before persisting.
+export const updateWorkerSchema = createInsertSchema(workers)
+  .omit({
+    id: true,
+    businessId: true,
+    thirdPartyBusinessId: true,
+    userId: true,
+    invitationToken: true,
+    invitationTokenExpiresAt: true,
+    invitationSent: true,
+    personalDetailsCompleted: true,
+    businessDetailsCompleted: true,
+    bankDetailsCompleted: true,
+    onboardingCompleted: true,
+    createdByUserId: true,
+    createdOnBehalfOfBusinessId: true,
+    createdAt: true,
+    updatedAt: true,
+  })
+  .partial()
+  .extend({
+    // "" (empty picker) → null; "YYYY-MM-DD" → Date. Matches the coercion
+    // pattern the ad-hoc PATCH handler used before this schema existed.
+    dateOfBirth: z
+      .union([z.string(), z.date(), z.null()])
+      .optional()
+      .transform((val) => {
+        if (val === null || val === undefined) return val ?? undefined;
+        if (val instanceof Date) return val;
+        if (typeof val === 'string') return val === '' ? null : new Date(val);
+        return undefined;
+      }),
+  });
 
 export const insertBusinessInvitationSchema = createInsertSchema(businessInvitations).omit({
   id: true,

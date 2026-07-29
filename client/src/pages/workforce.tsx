@@ -522,10 +522,20 @@ export default function Workforce() {
             countries={accessibleCountries}
           />
           
-          <ViewWorkerModal 
+          <ViewWorkerModal
             open={!!selectedWorker}
             onOpenChange={(open) => !open && setSelectedWorker(null)}
-            worker={selectedWorker}
+            // Look the worker up by id in the current list every render so
+            // that when the list refetches after an edit, the modal reflects
+            // the fresh row without a page reload. Fall back to the last
+            // captured snapshot if the id has fallen off the current page.
+            worker={
+              selectedWorker
+                ? workers.find((w: any) => w.id === selectedWorker.id)
+                    ?? (providedWorkers as any[]).find((w: any) => w.id === selectedWorker.id)
+                    ?? selectedWorker
+                : null
+            }
             currentUserType={(user as any)?.userType}
           />
         </div>

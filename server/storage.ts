@@ -115,7 +115,7 @@ import {
   type InsertPurchaseOrder,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, inArray, sql, isNull, isNotNull, desc } from "drizzle-orm";
+import { eq, and, or, inArray, sql, isNull, isNotNull, desc, gt } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 // Interface for storage operations
@@ -272,6 +272,11 @@ export interface IStorage {
   // Contract operations
   getContractsByBusiness(businessId: string): Promise<(Contract & { worker: Worker; country: Country; roleTitle?: RoleTitle })[]>;
   getContractsByWorker(workerId: string): Promise<(Contract & { business: Business; country: Country; roleTitle?: RoleTitle })[]>;
+  // Returns true when the worker is party to any non-terminated /
+  // non-completed contract whose end_date is either null or in the future.
+  // Used to block workerType (engagement type) changes while a live
+  // engagement exists.
+  hasLiveContractForWorker(workerId: string): Promise<boolean>;
   getAllContracts(): Promise<(Contract & { worker: Worker; business: Business; country: Country; roleTitle?: RoleTitle })[]>;
   createContract(contract: InsertContract): Promise<Contract>;
   getContractById(id: string): Promise<Contract | undefined>;
@@ -1714,6 +1719,25 @@ export class DatabaseStorage implements IStorage {
       country: row.countries,
       roleTitle: row.role_titles || undefined
     }));
+  }
+
+  async hasLiveContractForWorker(workerId: string): Promise<boolean> {
+    // "Live" = draft/pending/active-shaped statuses (i.e. anything that could
+    // still be worked or invoiced against) AND end_date is either open or
+    // still in the future. Excludes terminated and completed. Excludes rows
+    // whose fixed term has already passed even if the status wasn't flipped.
+    const [row] = await db
+      .select({ id: contracts.id })
+      .from(contracts)
+      .where(
+        and(
+          eq(contracts.workerId, workerId),
+          inArray(contracts.status, ['draft', 'pending_sdp_review', 'ready_to_issue', 'pending', 'active'] as any),
+          or(isNull(contracts.endDate), gt(contracts.endDate, new Date())),
+        ),
+      )
+      .limit(1);
+    return !!row;
   }
 
   async getAllContracts(): Promise<(Contract & { worker: Worker; business: Business; country: Country; roleTitle?: RoleTitle; thirdPartyBusinessName?: string })[]> {

@@ -516,6 +516,63 @@ class EmailService {
     });
   }
 
+  /**
+   * Notify the worker that an admin edited their profile. Sensitive fields
+   * (bank account, tax IDs) arrive with their old/new values already masked
+   * by the caller via `maskSensitive`. The intent is a heads-up + audit
+   * trail, not a value re-broadcast, so we deliberately do not reprint the
+   * raw new values here.
+   */
+  async sendWorkerDetailsUpdatedEmail(params: {
+    to: string;
+    workerName: string;
+    changedByName: string;
+    changes: Array<{ label: string; oldValueDisplay: string; newValueDisplay: string }>;
+  }): Promise<boolean> {
+    const { to, workerName, changedByName, changes } = params;
+    const rows = changes
+      .map(
+        (c) => `
+          <tr>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;">${c.label}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#6b7280;">${c.oldValueDisplay || '—'}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#111827;">${c.newValueDisplay || '—'}</td>
+          </tr>`,
+      )
+      .join('');
+    const textRows = changes
+      .map((c) => `- ${c.label}: ${c.oldValueDisplay || '—'} → ${c.newValueDisplay || '—'}`)
+      .join('\n');
+    return this.sendEmail({
+      to,
+      subject: 'Your SDP Global Pay profile was updated',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto;">
+          <h2>Hi ${workerName},</h2>
+          <p>Your profile on SDP Global Pay was just updated by <strong>${changedByName}</strong>.</p>
+          <p style="color:#6b7280;font-size:14px;">Sensitive values (bank account, tax IDs) show only the last 4 characters below for security.</p>
+          <table style="width:100%;border-collapse:collapse;margin-top:16px;">
+            <thead>
+              <tr style="background:#f3f4f6;">
+                <th align="left" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">Field</th>
+                <th align="left" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">From</th>
+                <th align="left" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">To</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <p style="margin-top:24px;color:#6b7280;font-size:14px;">If this wasn't expected, please contact SDP support immediately.</p>
+        </div>
+      `,
+      text:
+        `Hi ${workerName},\n\n` +
+        `Your profile on SDP Global Pay was just updated by ${changedByName}.\n` +
+        `(Sensitive values show only the last 4 characters.)\n\n` +
+        `Changes:\n${textRows}\n\n` +
+        `If this wasn't expected, contact SDP support.`,
+    });
+  }
+
   async sendBusinessRegistrationConfirmation(to: string, firstName: string, accountType: string): Promise<boolean> {
     const template = getBusinessRegistrationTemplate(firstName, accountType);
     return this.sendEmail({

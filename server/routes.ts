@@ -10,7 +10,13 @@ import { registerTimesheetApprovalRoutes } from "./modules/timesheet-approval";
 import { registerWorkforceRoutes } from "./modules/workforce";
 import { registerContractsRoutes } from "./modules/contracts";
 import { logContractChanges, TRACKED_CONTRACT_FIELDS } from "./modules/contracts/changeLog";
-import { contractChangeLog, users as usersTable } from "@shared/schema";
+import {
+  logWorkerChanges,
+  diffWorkerFields,
+  maskSensitive,
+  TRACKED_WORKER_FIELDS,
+} from "./modules/workforce/changeLog";
+import { contractChangeLog, workerChangeLog, users as usersTable } from "@shared/schema";
 import { desc, eq as drizzleEq } from "drizzle-orm";
 import { db as drizzleDb } from "./db";
 import { registerTimesheetsListRoutes } from "./modules/timesheets";
@@ -90,6 +96,7 @@ import {
   type InsertRemunerationLineType,
   insertPayItemSchema,
   insertPurchaseOrderSchema,
+  updateWorkerSchema,
 } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -5534,46 +5541,196 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin endpoint to update any worker by ID
+  // Admin endpoint to update any worker by ID.
+  //
+  // Wire-level shape is enforced by `updateWorkerSchema` — the client can
+  // only send business-editable columns; system columns (ids, tokens,
+  // *Completed flags, audit) are dropped. Business users can still hit
+  // this route but only for workers on their own business; the field
+  // surface they see in the UI is narrower — the schema does not enforce
+  // that today (matching prior behaviour).
+  //
+  // On success we (a) log every changed field to `worker_change_log`,
+  // (b) email the worker a summary with sensitive values masked to last 4.
   app.patch('/api/workers/:id', authMiddleware, async (req: any, res) => {
     try {
       const userId = req.user?.id;
       const userType = req.user?.userType;
       const { id: workerId } = req.params;
-      
+
       const worker = await storage.getWorkerById(workerId);
       if (!worker) {
         return res.status(404).json({ message: "Worker not found" });
       }
-      
-      // Convert dateOfBirth string to Date object if present
-      const updates = { ...req.body };
-      if (updates.dateOfBirth && typeof updates.dateOfBirth === 'string') {
-        updates.dateOfBirth = new Date(updates.dateOfBirth);
-      }
-      
-      // Allow SDP internal users or business owner to update worker
-      if (userType === 'sdp_internal') {
-        // SDP internal can update any worker
-        const updatedWorker = await storage.updateWorkerProfile(workerId, updates);
-        res.json(updatedWorker);
-      } else {
-        // Business owners can only update their own workers
+
+      // Tenant guard: SDP internal → any; business_user → own-business only.
+      if (userType !== 'sdp_internal') {
         const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) {
           return res.status(404).json({ message: "Business not found" });
         }
-        
         if (worker.businessId !== business.id) {
           return res.status(403).json({ message: "Access denied - can only update your own workers" });
         }
-        
-        const updatedWorker = await storage.updateWorkerProfile(workerId, updates);
-        res.json(updatedWorker);
       }
+
+      // Whitelist the incoming shape. Anything not in the schema is dropped.
+      let updates: Record<string, any>;
+      try {
+        updates = updateWorkerSchema.parse(req.body) as Record<string, any>;
+      } catch (e: any) {
+        if (e instanceof z.ZodError) {
+          return res.status(400).json({ message: 'Validation error', errors: e.errors });
+        }
+        throw e;
+      }
+
+      // workerType guard: can't switch engagement type while live contracts exist.
+      if (
+        'workerType' in updates &&
+        updates.workerType !== worker.workerType &&
+        (await storage.hasLiveContractForWorker(workerId))
+      ) {
+        return res.status(409).json({
+          message: 'Cannot change engagement type while this worker has active contracts. End or terminate them first.',
+          code: 'WORKER_TYPE_LOCKED',
+        });
+      }
+
+      const updatedWorker = await storage.updateWorkerProfile(workerId, updates);
+
+      // Change log + email — best-effort; failures here do not roll the
+      // write back. Skip both when nothing actually changed.
+      try {
+        const changes = diffWorkerFields(worker as any, updates);
+        if (changes.length > 0) {
+          await logWorkerChanges({
+            workerId,
+            before: worker as any,
+            after: updates,
+            changedBy: userId ?? null,
+          });
+
+          try {
+            const actor = await storage.getUser(userId);
+            const changedByName = actor
+              ? `${actor.firstName ?? ''} ${actor.lastName ?? ''}`.trim() || actor.email || 'an administrator'
+              : 'an administrator';
+            const notifyChanges = changes.map((c) => ({
+              label: c.label,
+              oldValueDisplay: c.sensitive ? maskSensitive(c.oldValue) : (c.oldValue ?? '—'),
+              newValueDisplay: c.sensitive ? maskSensitive(c.newValue) : (c.newValue ?? '—'),
+            }));
+            if (updatedWorker.email) {
+              await emailService.sendWorkerDetailsUpdatedEmail({
+                to: updatedWorker.email,
+                workerName: `${updatedWorker.firstName ?? ''} ${updatedWorker.lastName ?? ''}`.trim() || 'there',
+                changedByName,
+                changes: notifyChanges,
+              });
+            }
+          } catch (emailErr: any) {
+            console.error('Failed to send worker profile-updated email:', emailErr?.message || emailErr);
+          }
+        }
+      } catch (logErr: any) {
+        console.error('Failed to write worker change-log:', logErr?.message || logErr);
+      }
+
+      res.json(updatedWorker);
     } catch (error: any) {
       console.error('Error updating worker:', error);
       res.status(500).json({ message: 'Failed to update worker' });
+    }
+  });
+
+  // Lightweight status flags for the workforce details modal (currently just
+  // the "live contracts" boolean used to gate engagement-type changes). Kept
+  // separate from the list endpoint so the list query stays cheap.
+  app.get('/api/workers/:id/lock-status', authMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const userType = req.user?.userType;
+      const { id: workerId } = req.params;
+
+      const worker = await storage.getWorkerById(workerId);
+      if (!worker) return res.status(404).json({ message: 'Worker not found' });
+
+      if (userType !== 'sdp_internal') {
+        const business = await storage.getPrimaryBusinessForUser(userId);
+        if (!business) return res.status(404).json({ message: 'Business not found' });
+        if (worker.businessId !== business.id) {
+          return res.status(403).json({ message: 'Access denied' });
+        }
+      }
+
+      const hasLiveContracts = await storage.hasLiveContractForWorker(workerId);
+      res.json({ hasLiveContracts });
+    } catch (error: any) {
+      console.error('Error fetching worker lock status:', error?.message || error);
+      res.status(500).json({ message: 'Failed to fetch worker lock status' });
+    }
+  });
+
+  // Change history for a worker. Same tenant guard as the PATCH above.
+  app.get('/api/workers/:id/change-log', authMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const userType = req.user?.userType;
+      const { id: workerId } = req.params;
+      const limit = Math.min(parseInt(String(req.query.limit ?? '100'), 10) || 100, 500);
+
+      const worker = await storage.getWorkerById(workerId);
+      if (!worker) return res.status(404).json({ message: 'Worker not found' });
+
+      if (userType !== 'sdp_internal') {
+        const business = await storage.getPrimaryBusinessForUser(userId);
+        if (!business) return res.status(404).json({ message: 'Business not found' });
+        if (worker.businessId !== business.id) {
+          return res.status(403).json({ message: 'Access denied' });
+        }
+      }
+
+      const rows = await drizzleDb
+        .select({
+          id: workerChangeLog.id,
+          fieldName: workerChangeLog.fieldName,
+          oldValue: workerChangeLog.oldValue,
+          newValue: workerChangeLog.newValue,
+          changedAt: workerChangeLog.changedAt,
+          changedBy: workerChangeLog.changedBy,
+          actorFirstName: usersTable.firstName,
+          actorLastName: usersTable.lastName,
+          actorEmail: usersTable.email,
+        })
+        .from(workerChangeLog)
+        .leftJoin(usersTable, drizzleEq(workerChangeLog.changedBy, usersTable.id))
+        .where(drizzleEq(workerChangeLog.workerId, workerId))
+        .orderBy(desc(workerChangeLog.changedAt))
+        .limit(limit);
+
+      const labelByKey = new Map(TRACKED_WORKER_FIELDS.map((f) => [f.key, f]));
+      const enriched = rows.map((r) => {
+        const meta = labelByKey.get(r.fieldName);
+        const sensitive = !!meta?.sensitive;
+        return {
+          id: r.id,
+          fieldName: r.fieldName,
+          label: meta?.label ?? r.fieldName,
+          oldValueDisplay: sensitive ? maskSensitive(r.oldValue) : (r.oldValue ?? '—'),
+          newValueDisplay: sensitive ? maskSensitive(r.newValue) : (r.newValue ?? '—'),
+          changedAt: r.changedAt,
+          changedByName:
+            r.actorFirstName || r.actorLastName
+              ? `${r.actorFirstName ?? ''} ${r.actorLastName ?? ''}`.trim()
+              : r.actorEmail || 'System',
+        };
+      });
+
+      res.json(enriched);
+    } catch (error: any) {
+      console.error('Error fetching worker change log:', error?.message || error);
+      res.status(500).json({ message: 'Failed to fetch worker change log' });
     }
   });
 

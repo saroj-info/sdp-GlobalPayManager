@@ -31,3 +31,4 @@ vite.config.ts.*
 *.tar.gz
 /uploads/
 /CLAUDE.md
+AI_INTEGRATION_PLAN.md
