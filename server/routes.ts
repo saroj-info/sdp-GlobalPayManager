@@ -20,6 +20,7 @@ import { contractChangeLog, workerChangeLog, users as usersTable } from "@shared
 import { desc, eq as drizzleEq } from "drizzle-orm";
 import { db as drizzleDb } from "./db";
 import { registerTimesheetsListRoutes } from "./modules/timesheets";
+import { registerAiContractRoutes, isAiEnabled } from "./modules/ai";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -251,11 +252,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         return res.json({
           ...userData,
-          business
+          business,
+          featureFlags: { aiContractDraftEnabled: isAiEnabled() },
         });
       }
     }
-    
+
     // Fallback to session-based auth (for legacy/Replit OAuth)
     const sessionUser = req.session?.user;
     if (sessionUser) {
@@ -270,7 +272,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         accessibleCountries: sessionUser.accessibleCountries || [],
         accessibleBusinessIds: sessionUser.accessibleBusinessIds || []
       };
-      
+
       // Get business info for business users
       let business = null;
       if (userData.userType === 'business_user' && userData.id) {
@@ -280,10 +282,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error('Error getting business for user:', error);
         }
       }
-      
+
       return res.json({
         ...userData,
-        business
+        business,
+        featureFlags: { aiContractDraftEnabled: isAiEnabled() },
       });
     }
     
@@ -6094,6 +6097,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         targetBusinessId = business.id;
       }
       
+      // Snapshot-fill: when the payload references a host client via
+      // customerBusinessId but the snapshot columns (clientName /
+      // clientContactEmail / clientAddress) are empty, populate them from
+      // the host client row. The wizard's edit view reads these snapshot
+      // columns directly (no join fallback), so leaving them null makes
+      // "Host Client Name" and "Contact Email" render blank on edit.
+      if (contractData.customerBusinessId && (!contractData.clientName || !contractData.clientContactEmail || !contractData.clientAddress)) {
+        try {
+          const hc = await storage.getBusinessById(contractData.customerBusinessId);
+          if (hc) {
+            if (!contractData.clientName) contractData.clientName = (hc as any).name ?? null;
+            if (!contractData.clientContactEmail) contractData.clientContactEmail = (hc as any).contactEmail ?? null;
+            if (!contractData.clientAddress) contractData.clientAddress = (hc as any).address ?? null;
+          }
+        } catch {
+          // Best-effort backfill — if the lookup fails, fall through and let
+          // the row be inserted with whatever the caller supplied.
+        }
+      }
+
       // Parse contract data without audit fields (they're omitted from schema)
       const parseResult = insertContractSchema.safeParse({
         ...contractData,
@@ -6135,14 +6158,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // If a custom role title is provided, create it as a reusable role title
+      // If a custom role title is provided, create it as a reusable role title.
+      // Description sources, in order: finalContractData.jobDescription (wizard's
+      // submit-time mapped field), then finalContractData.roleDescription
+      // (AI modal's canonical field, in case the client didn't map it), then
+      // empty string. This means the AI's auto-generated description also
+      // lands on role_titles.description — visible to future contracts that
+      // pick this role via searchRoleTitles.
       if (finalContractData.customRoleTitle && !finalContractData.roleTitleId) {
+        const roleDesc =
+          (finalContractData as any).jobDescription ||
+          (finalContractData as any).roleDescription ||
+          '';
         try {
           const existingRole = await storage.getRoleTitleByName(finalContractData.customRoleTitle, targetBusinessId);
           if (!existingRole) {
             const newRoleTitle = await storage.createRoleTitle({
               title: finalContractData.customRoleTitle,
-              description: finalContractData.jobDescription || '',
+              description: roleDesc,
               businessId: targetBusinessId,
               applicableCountries: [finalContractData.countryId]
             });
@@ -7618,6 +7651,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Timesheets listing (paginated) — owned by the timesheets module
   registerTimesheetsListRoutes(app, authMiddleware);
+
+  // AI-drafted contract creation — owned by the ai module. Endpoint is
+  // env-gated (AI_CONTRACT_DRAFT_ENABLED); the controller 404s when disabled.
+  registerAiContractRoutes(app, authMiddleware);
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {

@@ -12,10 +12,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, FileText, Clock, CheckCircle, AlertCircle, Users, Building2, MapPin, DollarSign, Edit, Save, X, Mail, ExternalLink, LayoutGrid, List as ListIcon, ArrowUpDown, RotateCcw, Lock, ChevronDown, ChevronUp, Trash2, Info } from "lucide-react";
+import { Plus, FileText, Clock, CheckCircle, AlertCircle, Users, Building2, MapPin, DollarSign, Edit, Save, X, Mail, ExternalLink, LayoutGrid, List as ListIcon, ArrowUpDown, RotateCcw, Lock, ChevronDown, ChevronUp, Trash2, Info, Sparkles } from "lucide-react";
 import { Loader, PageLoader } from "@/components/ui/loader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
+import { AiContractChatModal } from "@/components/modals/ai-contract-chat-modal";
 import { useAuth } from "@/hooks/useAuth";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { getContractStatusLabel, getContractStatusVariant } from "@shared/contractHelpers";
@@ -948,6 +949,7 @@ function ContractRateLinesPanel({ contractId, currency, rateType }: { contractId
 
 export default function ContractsPage() {
   const [showContractWizard, setShowContractWizard] = useState(false);
+  const [showAiContractChat, setShowAiContractChat] = useState(false);
   const [selectedContract, setSelectedContract] = useState<any>(null);
   const [showContractDetails, setShowContractDetails] = useState(false);
   const [showContractDocument, setShowContractDocument] = useState(false);
@@ -1239,10 +1241,22 @@ export default function ContractsPage() {
               
               {/* Only show Create Contract button for business users and SDP internal */}
               {(user as any)?.userType !== 'worker' && (
-                <Button onClick={() => setShowContractWizard(true)} data-testid="button-create-contract">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Create Contract
-                </Button>
+                <div className="flex items-center gap-2">
+                  {(user as any)?.featureFlags?.aiContractDraftEnabled && (
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowAiContractChat(true)}
+                      data-testid="button-draft-with-ai"
+                    >
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Create Contract with AI
+                    </Button>
+                  )}
+                  <Button onClick={() => setShowContractWizard(true)} data-testid="button-create-contract">
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create Contract
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -1620,6 +1634,12 @@ export default function ContractsPage() {
         editMode={isEditingContract}
         existingContract={isEditingContract ? selectedContract : null}
         preselectedWorkerId={preselectedWorkerId}
+      />
+
+      {/* AI Contract Chat Modal */}
+      <AiContractChatModal
+        open={showAiContractChat}
+        onOpenChange={setShowAiContractChat}
       />
 
       {/* Contract Details Modal - Comprehensive Summary */}

@@ -791,6 +791,31 @@ export const workerChangeLog = pgTable("worker_change_log", {
 export type WorkerChangeLog = typeof workerChangeLog.$inferSelect;
 export type InsertWorkerChangeLog = typeof workerChangeLog.$inferInsert;
 
+// Audit trail for AI-mediated actions (currently: contract draft-from-prompt).
+// One row per /api/ai/* request. Powers cost tracking, debugging ("what did the
+// AI see when this went wrong?"), and adversarial-input review.
+export const aiPromptLog = pgTable("ai_prompt_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id),
+  businessId: varchar("business_id").references(() => businesses.id),
+  endpoint: varchar("endpoint").notNull(), // e.g. 'contract-draft'
+  model: varchar("model"),
+  promptHash: varchar("prompt_hash"),
+  promptPreview: text("prompt_preview"), // first ~200 chars; full text only when AI_LOG_FULL_PROMPTS=true
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  toolCalls: jsonb("tool_calls"), // [{tool, args, resultHash}]
+  latencyMs: integer("latency_ms"),
+  resultStatus: varchar("result_status"), // 'ok' | 'validation_failed' | 'upstream_error' | 'unauthorized'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_ai_prompt_log_user").on(table.userId, table.createdAt),
+  index("idx_ai_prompt_log_endpoint").on(table.endpoint, table.createdAt),
+]);
+
+export type AiPromptLog = typeof aiPromptLog.$inferSelect;
+export type InsertAiPromptLog = typeof aiPromptLog.$inferInsert;
+
 // Timesheets for tracking worker hours
 export const timesheets = pgTable("timesheets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
