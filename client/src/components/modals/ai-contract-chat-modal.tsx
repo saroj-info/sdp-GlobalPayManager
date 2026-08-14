@@ -97,7 +97,7 @@ const FIELD_LABEL: Record<string, string> = {
   paymentDay: "Specific Payment Day",
   paymentDaysAfterPeriod: "Days After Period End",
   paymentHolidayRule: "Pay on previous working day if holiday",
-  isForClient: "Work Arrangement",
+  isForClient: "Customer Work",
   customerBusinessId: "Host Client",
   clientName: "Host Client Name (Auto-filled)",
   clientContactName: "Contact Name",
@@ -121,6 +121,14 @@ const FIELD_LABEL: Record<string, string> = {
 };
 
 const labelOf = (key: string) => FIELD_LABEL[key] ?? key;
+
+// Optional inline descriptions rendered under a field's label in the draft
+// preview, for fields whose meaning isn't self-evident from the label alone.
+const FIELD_DESCRIPTION: Record<string, string> = {
+  isForClient: "Worker provides services for one of your customers",
+};
+
+const descriptionOf = (key: string): string | undefined => FIELD_DESCRIPTION[key];
 
 // Four steps mirroring the manual wizard's data-entry steps. The AI is told
 // about these via the primer's STEPPED CONVERSATION block and per-turn
@@ -484,6 +492,44 @@ function humanizeEnum(v: string): string {
 
 const CUSTOM_ROLE_SENTINEL = "__custom_role__";
 
+// Compact stepper pill labels — the full wizard titles are too long to fit
+// four pills across the preview pane at md widths and get truncated to
+// "Worker &…" / "Custome…". Use one-word labels on the pill and keep the
+// full title in the section header + pill tooltip.
+const STEP_PILL_LABEL: Record<StepNumber, string> = {
+  1: "Worker",
+  2: "Client",
+  3: "Billing",
+  4: "Contract",
+};
+
+// Sample prompts shown under the AI's greeting on a fresh modal, to help users
+// see what a good first message looks like. Cover the four common shapes:
+// annual employee, hourly contractor, client-billed contractor, host-client
+// contract. Clicking a sample loads it into the composer for the user to edit.
+const SAMPLE_PROMPTS: Array<{ label: string; text: string }> = [
+  {
+    label: "Annual employee, fixed term",
+    text:
+      "Hire @ as Finance Manager in Australia, three-month fixed term starting 1 July 2026, $80k annual salary, two weeks notice.",
+  },
+  {
+    label: "Hourly contractor with timesheets",
+    text:
+      "Hire @ as a Backend Engineer contractor in the UK, $75/hr, weekly timesheets approved by business, paid every Friday, starting next Monday.",
+  },
+  {
+    label: "Contractor billed to a client",
+    text:
+      "Hire @ as Senior React Contractor in the US for our client #, $100/hr worker rate, bill the client $180/hr, invoice through SDP, net-30.",
+  },
+  {
+    label: "Fixed-price project for a client",
+    text:
+      "Hire @ as a Data Analyst in Singapore for our client #, 6-month fixed term starting 1 Aug 2026, fixed price $12,000/month, weekly timesheets approved by client.",
+  },
+];
+
 export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalProps) {
   const { toast } = useToast();
   const { countries } = useAuthenticatedLayout();
@@ -570,17 +616,10 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     enabled: open && mention?.type === "hostClient",
   });
 
-  // Reset when the modal is opened for a fresh session.
+  // Reset when the modal is opened for a fresh session. No canned greeting
+  // bubble — the hero intro card below the chat list handles the welcome
+  // state until the user sends their first message.
   useEffect(() => {
-    if (open && messages.length === 0) {
-      setMessages([
-        {
-          role: "assistant",
-          content:
-            "Hi! Describe the hire in a sentence or two — worker, country, rate, dates, whether it's for a client, anything you know. I'll fill what I can, then walk you through the rest. Tip: you can click any field on the right to edit it directly.",
-        },
-      ]);
-    }
     if (!open) {
       setMessages([]);
       setDraft({});
@@ -799,10 +838,29 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       const resp = await apiRequest("POST", "/api/contracts", contractPayload);
       return resp.json();
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast({ title: "Contract created", description: "The AI-drafted contract has been saved." });
-      queryClient.invalidateQueries({
-        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/contracts"),
+      // Broad invalidation: creating a contract can also mint a new role_titles
+      // row (customRoleTitle upsert) and a new host client (POST /api/businesses/
+      // host-clients earlier in the mutation). The wizard's Edit view reads
+      // /api/role-titles, /api/businesses, /api/businesses/host-clients, and
+      // /api/contract-templates/... to populate its dropdowns; if any of these
+      // lists is stale, dropdowns won't show the newly-created rows and the
+      // contract will look mis-linked on Edit until a hard page reload.
+      // Await the invalidation so the parent page's active queries actually
+      // refetch before we close the modal.
+      const RELATED_PREFIXES = [
+        "/api/contracts",
+        "/api/role-titles",
+        "/api/businesses",
+        "/api/workers",
+        "/api/contract-templates",
+        "/api/timesheets",
+      ];
+      await queryClient.invalidateQueries({
+        predicate: (q) =>
+          typeof q.queryKey[0] === "string" &&
+          RELATED_PREFIXES.some((p) => (q.queryKey[0] as string).startsWith(p)),
       });
       onOpenChange(false);
     },
@@ -1351,8 +1409,8 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
             </div>
             Draft a contract with AI
           </DialogTitle>
-          <DialogDescription>
-            Describe the hire in one or two sentences. I'll fill what I can and ask about anything unclear — click any field on the right to edit it directly.
+          <DialogDescription className="sr-only">
+            Draft a contract by describing the hire in natural language.
           </DialogDescription>
         </DialogHeader>
 
@@ -1384,6 +1442,63 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                   )}
                 </div>
               ))}
+              {/* Hero intro — shown only when there are no chat messages yet.
+                  Replaces the old canned greeting bubble with a cleaner
+                  welcome + inline sample prompts. Disappears the moment the
+                  user sends their first message. */}
+              {messages.length === 0 && !sendMutation.isPending && (
+                <div className="py-2" data-testid="chat-intro">
+                  <div className="text-center space-y-1.5 mb-5">
+                    <div className="mx-auto h-11 w-11 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+                      <Sparkles className="h-5 w-5 text-primary" />
+                    </div>
+                    <div className="text-base font-semibold text-foreground">
+                      Describe the hire and I'll draft it
+                    </div>
+                    <div className="text-xs text-muted-foreground max-w-md mx-auto leading-relaxed">
+                      Rate, dates, whether it's for a client — mention what you know and I'll ask about the rest. Fields on the right update as we go.
+                    </div>
+                  </div>
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 pl-1">
+                    Try one of these
+                  </div>
+                  <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {SAMPLE_PROMPTS.map((s) => (
+                      <li key={s.label}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInput(s.text);
+                            requestAnimationFrame(() => {
+                              const el = textareaRef.current;
+                              if (!el) return;
+                              el.focus();
+                              const end = s.text.length;
+                              el.setSelectionRange(end, end);
+                            });
+                          }}
+                          className="group w-full h-full text-left rounded-lg border border-border bg-card hover:border-primary/40 hover:bg-primary/[0.03] px-3 py-2.5 transition-all"
+                          data-testid={`sample-prompt-${s.label.toLowerCase().replace(/\s+/g, "-")}`}
+                        >
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <Sparkles className="h-3 w-3 text-primary opacity-70 group-hover:opacity-100 transition-opacity" />
+                            <span className="text-xs font-semibold text-foreground">
+                              {s.label}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-muted-foreground leading-relaxed line-clamp-3">
+                            {s.text}
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="text-[10px] text-muted-foreground mt-2 pl-1 leading-relaxed">
+                    Replace <span className="font-mono text-foreground">@</span> with a worker name and <span className="font-mono text-foreground">#</span> with a host client — pickers open as you type.
+                  </div>
+                </div>
+              )}
+
               {sendMutation.isPending && (
                 <div className="flex gap-2 justify-start" data-testid="chat-loading">
                   <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
@@ -1559,20 +1674,34 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                 <Sparkles className="h-3.5 w-3.5 text-primary" /> Draft preview
               </div>
               <div className="text-xs mt-1">
-                {serverGateReady ? (
-                  <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
-                    <CheckCircle2 className="h-3 w-3" /> Ready to create
-                  </span>
-                ) : (
-                  <div className="space-y-1">
-                    <span className="text-muted-foreground">
-                      {nextSteps.required.length + nextSteps.conditional.length} field
-                      {nextSteps.required.length + nextSteps.conditional.length === 1 ? "" : "s"} still needed
-                    </span>
-                    {(() => {
-                      const missing = [...nextSteps.required, ...nextSteps.conditional];
-                      if (missing.length === 0) return null;
-                      return (
+                {(() => {
+                  const missing = [...nextSteps.required, ...nextSteps.conditional];
+                  const isEmpty = Object.keys(draft).length === 0;
+                  // Fresh modal — nothing drafted, no server turn yet.
+                  if (isEmpty && !hasServerResponded) {
+                    return (
+                      <span className="text-muted-foreground">
+                        Send a message to start drafting
+                      </span>
+                    );
+                  }
+                  // Server has spoken AND everything's green — really ready.
+                  if (hasServerResponded && missing.length === 0) {
+                    return (
+                      <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 className="h-3 w-3" /> Ready to create
+                      </span>
+                    );
+                  }
+                  // Fields still needed — surface them as clickable chips.
+                  return (
+                    <div className="space-y-1.5">
+                      <span className="text-muted-foreground">
+                        {missing.length > 0
+                          ? `${missing.length} field${missing.length === 1 ? "" : "s"} still needed`
+                          : "Drafting…"}
+                      </span>
+                      {missing.length > 0 && (
                         <div className="flex flex-wrap gap-1" data-testid="missing-fields-chips">
                           {missing.map((k) => {
                             const targetStep =
@@ -1593,19 +1722,21 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                                 data-testid={`missing-chip-${k}`}
                               >
                                 {labelOf(k)}
-                                <span className="ml-1 opacity-60">· Step {targetStep}</span>
+                                <span className="ml-1 opacity-60">· {STEP_PILL_LABEL[targetStep]}</span>
                               </button>
                             );
                           })}
                         </div>
-                      );
-                    })()}
-                  </div>
-                )}
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
             <div className="flex-1 overflow-y-auto p-3 space-y-3">
-              {/* Stepper: 4 pills at the top of the preview pane. */}
+              {/* Stepper: 4 pills at the top of the preview pane. Compact
+                  labels so nothing gets truncated at md widths; the full
+                  wizard title still appears in the section header + tooltip. */}
               <div className="flex items-center gap-1 pb-1" data-testid="stepper">
                 {STEP_DEFS.map((s) => {
                   const skipped = stepIsSkipped(s.step, draft);
@@ -1619,9 +1750,10 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                         setActiveStep(s.step);
                         setManuallyNavigated(true);
                       }}
-                      className={`flex-1 min-w-0 flex items-center gap-1.5 px-2 py-1.5 rounded-md border text-xs transition-colors cursor-pointer ${
+                      title={s.title}
+                      className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border text-xs transition-colors cursor-pointer ${
                         isActive
-                          ? "border-primary/50 bg-primary/10 text-foreground"
+                          ? "border-primary/50 bg-primary/10 text-foreground shadow-sm"
                           : complete
                           ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300 hover:bg-emerald-100/70"
                           : "border-border bg-muted/40 text-muted-foreground hover:bg-muted/60"
@@ -1640,7 +1772,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                         {complete ? <CheckIcon className="h-3 w-3" /> : s.step}
                       </span>
                       <span className="truncate font-medium">
-                        {s.title}
+                        {STEP_PILL_LABEL[s.step]}
                         {skipped && (
                           <span className="ml-1 text-[9px] font-normal opacity-70">(n/a)</span>
                         )}
@@ -1852,7 +1984,14 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                             }`}
                             data-testid={`row-${key}`}
                           >
-                            <div className="text-muted-foreground flex-shrink-0">{labelOf(key)}</div>
+                            <div className="text-muted-foreground flex-shrink-0 flex flex-col">
+                              <span>{labelOf(key)}</span>
+                              {descriptionOf(key) && (
+                                <span className="text-[10px] text-muted-foreground/70 leading-tight">
+                                  {descriptionOf(key)}
+                                </span>
+                              )}
+                            </div>
                             <div className="flex items-center gap-1.5 justify-end min-w-0 flex-1">
                               {filled ? (
                                 <span
