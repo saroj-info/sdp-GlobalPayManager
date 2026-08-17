@@ -305,9 +305,17 @@ const STEP_DEFS: StepDef[] = [
       return list;
     },
     displayFields: (draft) => {
-      const list: string[] = [
-        "templateId",
-        "roleTitleId",
+      const list: string[] = ["templateId"];
+      // Role Title — mutually exclusive with Custom Role Title, mirroring the
+      // wizard's dropdown-vs-free-text pattern. Show whichever is populated;
+      // if neither is set, show the roleTitleId row as an unfilled placeholder
+      // (the AI's role-title upsert flow eventually fills one or the other).
+      if (hasValue(draft.customRoleTitle)) {
+        list.push("customRoleTitle");
+      } else {
+        list.push("roleTitleId");
+      }
+      list.push(
         "roleDescription",
         "startDate",
         "endDate",
@@ -315,13 +323,11 @@ const STEP_DEFS: StepDef[] = [
         "rateStructure",
         "rate",
         "currency",
-      ];
+      );
       // Show totalPackageValue only when relevant (annual rateType).
       if (draft.rateType === "annual" || hasValue(draft.totalPackageValue)) {
         list.push("totalPackageValue");
       }
-      // Show customRoleTitle when the user has typed one (roleTitleId===null path).
-      if (hasValue(draft.customRoleTitle)) list.push("customRoleTitle");
       list.push("requiresTimesheet");
       const requiresTimesheet =
         draft.requiresTimesheet === true ||
@@ -530,10 +536,37 @@ const SAMPLE_PROMPTS: Array<{ label: string; text: string }> = [
   },
 ];
 
+// Admin variant — each prompt starts with a `&Business` mention because an
+// SDP-internal caller must scope the contract to a specific business before
+// worker / host-client resolution can happen. Mirrors the four shapes above.
+const SAMPLE_PROMPTS_ADMIN: Array<{ label: string; text: string }> = [
+  {
+    label: "Annual employee, fixed term",
+    text:
+      "For &, hire @ as Finance Manager in Australia, three-month fixed term starting 1 July 2026, $80k annual salary, two weeks notice.",
+  },
+  {
+    label: "Hourly contractor with timesheets",
+    text:
+      "For &, hire @ as a Backend Engineer contractor in the UK, $75/hr, weekly timesheets approved by business, paid every Friday, starting next Monday.",
+  },
+  {
+    label: "Contractor billed to a client",
+    text:
+      "For &, hire @ as Senior React Contractor in the US for our client #, $100/hr worker rate, bill the client $180/hr, invoice through SDP, net-30.",
+  },
+  {
+    label: "Fixed-price project for a client",
+    text:
+      "For &, hire @ as a Data Analyst in Singapore for our client #, 6-month fixed term starting 1 Aug 2026, fixed price $12,000/month, weekly timesheets approved by client.",
+  },
+];
+
 export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalProps) {
   const { toast } = useToast();
   const { countries } = useAuthenticatedLayout();
   const { activeRole } = useAuth();
+  const isAdmin = activeRole === "sdp_internal";
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState<Record<string, any>>({});
@@ -553,11 +586,12 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
   // yanked forward again. Reset on send (new turn resumes natural flow) and
   // on modal close.
   const [manuallyNavigated, setManuallyNavigated] = useState(false);
-  // Mention state — active while a `@` (worker) or `#` (host client) popover
-  // is open in the composer. Null when no popover is open.
+  // Mention state — active while a `@` (worker), `#` (host client), or `&`
+  // (business, sdp_internal only) popover is open in the composer. Null when
+  // no popover is open.
   const [mention, setMention] = useState<
     | null
-    | { type: "worker" | "hostClient"; triggerIndex: number; query: string }
+    | { type: "worker" | "hostClient" | "business"; triggerIndex: number; query: string }
   >(null);
 
   // Inline-edit state — one field open at a time keeps the mental model simple.
@@ -826,6 +860,18 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       if (typeof contractPayload.paymentTerms === "number") {
         contractPayload.paymentTerms = String(contractPayload.paymentTerms);
       }
+      // CTC mirror: for annual contracts the wizard's Edit view reads
+      // `contracts.totalPackageValue` directly; if the AI skipped the mirror
+      // rule in the primer, the CTC input renders empty on Edit even though
+      // Pay Mode is Annual. Belt-and-braces backfill from `rate` so a stale
+      // draft (pre-server-fix) still saves a usable CTC value.
+      if (
+        contractPayload.rateType === "annual" &&
+        hasValue(contractPayload.rate) &&
+        !hasValue(contractPayload.totalPackageValue)
+      ) {
+        contractPayload.totalPackageValue = contractPayload.rate;
+      }
       // Force billingMode="direct" for internal contracts (wizard does this
       // silently). Overrides anything a stale draft may have left behind.
       if (isInternal) {
@@ -903,7 +949,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       }
       // Trigger char removed by user → close.
       const triggerChar = value[mention.triggerIndex];
-      if (triggerChar !== "@" && triggerChar !== "#") {
+      if (triggerChar !== "@" && triggerChar !== "#" && triggerChar !== "&") {
         setMention(null);
         return;
       }
@@ -916,14 +962,18 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       setMention({ ...mention, query });
       return;
     }
-    // No active mention — check for a fresh @/# at cursor-1 at a word boundary.
+    // No active mention — check for a fresh @/#/& at cursor-1 at a word boundary.
+    // `&` is admin-only; for non-admins it falls through as literal text so
+    // "R&D" in a role name doesn't hijack the composer.
     if (cursor === 0) return;
     const char = value[cursor - 1];
-    if (char !== "@" && char !== "#") return;
+    if (char !== "@" && char !== "#" && !(char === "&" && isAdmin)) return;
     const prev = cursor - 2 >= 0 ? value[cursor - 2] : null;
     if (prev !== null && !/\s/.test(prev)) return;
+    const type: "worker" | "hostClient" | "business" =
+      char === "@" ? "worker" : char === "#" ? "hostClient" : "business";
     setMention({
-      type: char === "@" ? "worker" : "hostClient",
+      type,
       triggerIndex: cursor - 1,
       query: "",
     });
@@ -994,6 +1044,75 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       const next = new Set(prev);
       next.delete("customerBusinessId");
       next.delete("isForClient");
+      return next;
+    });
+    setMention(null);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(caretPos, caretPos);
+    });
+  };
+
+  // Admin-only: pick a business via the `&` mention. Sets the two control
+  // fields the server contract requires (selectedBusinessId + onBehalf) and
+  // clears any worker/host-client from a previous business so a stale pick
+  // from one tenant can't leak into another.
+  const pickMentionBusiness = (biz: any) => {
+    const name = biz?.name ?? "";
+    if (!mention || !name) {
+      setMention(null);
+      return;
+    }
+    const before = input.slice(0, mention.triggerIndex);
+    const after = input.slice(mention.triggerIndex + 1 + mention.query.length);
+    const insert = `&${name} `;
+    const caretPos = before.length + insert.length;
+    setInput(before + insert + after);
+
+    const switchingBusiness =
+      typeof draft.selectedBusinessId === "string" &&
+      draft.selectedBusinessId !== biz.id;
+
+    setDraft((d) => {
+      const next: Record<string, any> = {
+        ...d,
+        selectedBusinessId: biz.id,
+        onBehalf: true,
+      };
+      if (switchingBusiness) {
+        // A worker or host client from the previous business must not persist —
+        // they belong to a different tenant.
+        delete next.workerId;
+        delete next.customerBusinessId;
+        delete next.clientName;
+        delete next.clientContactName;
+        delete next.clientContactEmail;
+        delete next.clientAddress;
+      }
+      return next;
+    });
+    setResolvedRefs((r) => {
+      const next: Record<string, string> = { ...r, selectedBusinessId: name };
+      if (switchingBusiness) {
+        delete next.workerId;
+        delete next.customerBusinessId;
+      }
+      return next;
+    });
+    setNextSteps((prev) => ({
+      required: prev.required.filter((k) => k !== "selectedBusinessId"),
+      conditional: prev.conditional.filter((k) => k !== "selectedBusinessId"),
+      optionalRecommended: prev.optionalRecommended.filter((k) => k !== "selectedBusinessId"),
+    }));
+    setAiFilledFields((prev) => {
+      const next = new Set(prev);
+      next.delete("selectedBusinessId");
+      if (switchingBusiness) {
+        next.delete("workerId");
+        next.delete("customerBusinessId");
+      }
       return next;
     });
     setMention(null);
@@ -1463,7 +1582,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                     Try one of these
                   </div>
                   <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {SAMPLE_PROMPTS.map((s) => (
+                    {(isAdmin ? SAMPLE_PROMPTS_ADMIN : SAMPLE_PROMPTS).map((s) => (
                       <li key={s.label}>
                         <button
                           type="button"
@@ -1494,7 +1613,15 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                     ))}
                   </ul>
                   <div className="text-[10px] text-muted-foreground mt-2 pl-1 leading-relaxed">
-                    Replace <span className="font-mono text-foreground">@</span> with a worker name and <span className="font-mono text-foreground">#</span> with a host client — pickers open as you type.
+                    {isAdmin ? (
+                      <>
+                        Type <span className="font-mono text-foreground">&</span> for a business, <span className="font-mono text-foreground">@</span> for a worker, <span className="font-mono text-foreground">#</span> for a host client — pickers open as you type.
+                      </>
+                    ) : (
+                      <>
+                        Replace <span className="font-mono text-foreground">@</span> with a worker name and <span className="font-mono text-foreground">#</span> with a host client — pickers open as you type.
+                      </>
+                    )}
                   </div>
                 </div>
               )}
@@ -1555,7 +1682,11 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                           e.currentTarget.selectionStart ?? e.currentTarget.value.length,
                         );
                       }}
-                      placeholder="Type your message (Enter to send · @worker · #host-client)"
+                      placeholder={
+                        isAdmin
+                          ? "Type your message (Enter to send · &business · @worker · #host-client)"
+                          : "Type your message (Enter to send · @worker · #host-client)"
+                      }
                       rows={2}
                       className="resize-none focus-visible:ring-primary/40 focus-visible:ring-2 focus-visible:ring-offset-0"
                       data-testid="input-ai-chat"
@@ -1621,9 +1752,18 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                 )}
                 {mention?.type === "hostClient" && (() => {
                   const q = mention.query.toLowerCase();
-                  const filtered = hostClientList.filter(
-                    (c: any) => !q || (c.name ?? "").toLowerCase().includes(q),
-                  );
+                  // Admins may operate across many businesses; once they've
+                  // picked one via `&`, only show that business's host clients
+                  // so a pick from a different tenant can't leak into this
+                  // contract. Non-admins are already server-scoped to their
+                  // own business.
+                  const scopedByBusiness =
+                    isAdmin && typeof draft.selectedBusinessId === "string";
+                  const filtered = hostClientList.filter((c: any) => {
+                    if (q && !(c.name ?? "").toLowerCase().includes(q)) return false;
+                    if (scopedByBusiness && c.parentBusinessId !== draft.selectedBusinessId) return false;
+                    return true;
+                  });
                   const canCreateNew = mention.query.trim().length > 0 && filtered.length === 0;
                   return (
                     <Command shouldFilter={false}>
@@ -1657,6 +1797,39 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                               <Sparkles className="h-3.5 w-3.5 mr-2 text-primary" />
                               Create new host client "{mention.query}"
                             </CommandItem>
+                          </CommandGroup>
+                        )}
+                      </CommandList>
+                    </Command>
+                  );
+                })()}
+                {mention?.type === "business" && (() => {
+                  const q = mention.query.toLowerCase();
+                  const filtered = (businesses ?? []).filter(
+                    (b: any) =>
+                      b?.isRegistered !== false &&
+                      (!q || (b.name ?? "").toLowerCase().includes(q)),
+                  );
+                  return (
+                    <Command shouldFilter={false}>
+                      <div className="px-3 py-2 border-b border-border text-xs text-muted-foreground">
+                        Pick a business for &{mention.query || "…"}
+                      </div>
+                      <CommandList>
+                        {filtered.length === 0 ? (
+                          <CommandEmpty>No businesses match.</CommandEmpty>
+                        ) : (
+                          <CommandGroup>
+                            {filtered.slice(0, 8).map((b: any) => (
+                              <CommandItem
+                                key={b.id}
+                                value={b.id}
+                                onSelect={() => pickMentionBusiness(b)}
+                                data-testid={`mention-business-${b.id}`}
+                              >
+                                {b.name}
+                              </CommandItem>
+                            ))}
                           </CommandGroup>
                         )}
                       </CommandList>

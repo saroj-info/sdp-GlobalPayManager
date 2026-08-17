@@ -9,6 +9,11 @@ export interface AuthUser {
   userType: string;
   activeRole?: string;
   availableRoles?: string[];
+  // Present on JWT-decoded SDP-internal users. Country/business scoping fields
+  // used when validating an admin's picked business against their access.
+  sdpRole?: string | null;
+  accessibleBusinessIds?: string[];
+  accessibleCountries?: string[];
 }
 
 export interface ChatMessage {

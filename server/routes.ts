@@ -6193,6 +6193,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
+      // Pre-insert FK guard: validate templateId exists BEFORE hitting the
+      // database constraint. Turns a raw Postgres FK crash into a
+      // user-friendly 400 the AI modal can surface as a targeted toast.
+      // Reuses storage.getContractTemplateById (already imported elsewhere
+      // in this file). Skipped when templateId is null/undefined — the
+      // upstream `requiresClientBilling` block already covers missing IDs
+      // for client-facing contracts.
+      if (finalContractData.templateId) {
+        const tpl = await storage.getContractTemplateById(finalContractData.templateId).catch(() => undefined);
+        if (!tpl) {
+          return res.status(400).json({
+            code: "INVALID_TEMPLATE",
+            message: "The selected contract template no longer exists. Please pick another template.",
+          });
+        }
+      }
+
       const contract = await storage.createContract(finalContractData as any);
 
       // Handle remuneration lines if provided

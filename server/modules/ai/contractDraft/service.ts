@@ -37,7 +37,11 @@ import type {
 
 const MAX_TOOL_ITERATIONS = 6;
 const MAX_PROMPT_LEN = 4000; // guard against a single 100 KB paste
-const MAX_HISTORY_TURNS = 30; // drop oldest turns beyond this to keep prompts bounded
+// Cap: drop oldest turns beyond this to keep prompt size bounded. currentDraft
+// is re-serialized every turn (see below) so state itself does not leak when
+// oldest turns fall off, but earlier "you still owe me X" beats do — the
+// larger cap keeps them in the model's window for realistic long chats.
+const MAX_HISTORY_TURNS = 80;
 const DEFAULT_ASSISTANT_FALLBACK = "Here's what I have so far. Anything to add?";
 
 // Known enum values we sanity-check on the way out. If the model hallucinates
@@ -69,7 +73,18 @@ export async function draftContractFromPrompt(
     return { ok: false, status: 404, code: "AI_DISABLED", message: "AI contract drafting is not enabled" };
   }
 
-  const scope = await resolveDraftScope(user);
+  const currentDraft = (req.currentDraft && typeof req.currentDraft === "object")
+    ? req.currentDraft as Record<string, any>
+    : {};
+
+  // Admin sessions pick a business via the composer's `&` mention, which
+  // sets currentDraft.selectedBusinessId on the client. Thread it through so
+  // the tenant primer and tool calls are correctly scoped to that business.
+  const requestedBusinessId = typeof currentDraft.selectedBusinessId === "string"
+    ? currentDraft.selectedBusinessId
+    : undefined;
+
+  const scope = await resolveDraftScope(user, { requestedBusinessId });
   if (scope.kind === "denied") {
     return {
       ok: false,
@@ -88,10 +103,6 @@ export async function draftContractFromPrompt(
   if (history[history.length - 1].role !== "user") {
     return { ok: false, status: 400, code: "LAST_MESSAGE_NOT_USER", message: "The last message must be from the user" };
   }
-
-  const currentDraft = (req.currentDraft && typeof req.currentDraft === "object")
-    ? req.currentDraft as Record<string, any>
-    : {};
 
   const tenantContext = await loadTenantContext(user, scope.businessId, callerRole);
 
@@ -125,6 +136,20 @@ export async function draftContractFromPrompt(
     } else {
       messages.push({ role: m.role, content: m.content });
     }
+  }
+  // Repeat the CREATE CONTRACT GATE line AFTER the chat history. The mid-primer
+  // checklist message can drift out of the model's active attention once tens
+  // of user/assistant turns follow it — appending the deterministic gate line
+  // as the LAST system message makes gate compliance the freshest instruction
+  // the model sees, which is exactly what the "AI claims ready mid-draft" bug
+  // reports. The full checklist stays where it is; only the one-line gate is
+  // duplicated here.
+  {
+    const totalBlocking = preChecklist.required.length + preChecklist.conditional.length;
+    const gateReminder = totalBlocking === 0
+      ? `FINAL GATE REMINDER — CREATE CONTRACT GATE: OPEN. Both required-missing and conditional-missing are empty; you MAY tell the user the draft is ready.`
+      : `FINAL GATE REMINDER — CREATE CONTRACT GATE: CLOSED. ${totalBlocking} field(s) still block Create Contract. Missing required: [${preChecklist.required.join(", ") || "none"}]. Missing conditional: [${preChecklist.conditional.join(", ") || "none"}]. You MUST NOT tell the user the draft is ready or that they can click Create Contract. Ask about the specific missing field(s) instead.`;
+    messages.push({ role: "system", content: gateReminder });
   }
 
   const toolCalls: ToolCallRecord[] = [];
@@ -198,7 +223,22 @@ export async function draftContractFromPrompt(
     pendingQuestions: [],
   };
 
-  const { proposedFormData, pendingQuestions, assistantMessage } = sanitize(parsed, currentDraft);
+  const sanitized = sanitize(parsed, currentDraft);
+  const { proposedFormData, pendingQuestions } = sanitized;
+  let { assistantMessage } = sanitized;
+
+  // Deterministic backfill: for annual-salary contracts the primer tells the
+  // AI to mirror `rate` into `totalPackageValue`, but the model sometimes
+  // skips it and the wizard's Edit view then renders "Total Annual Package
+  // (CTC)" as empty even though Pay Mode is Annual. Fill it here from the
+  // merged view (currentDraft + proposedFormData) so both the draft preview
+  // and the Create Contract payload carry the CTC value.
+  const mergedRateType = proposedFormData.rateType ?? currentDraft.rateType;
+  const mergedRate = proposedFormData.rate ?? currentDraft.rate;
+  const mergedTotalPkg = proposedFormData.totalPackageValue ?? currentDraft.totalPackageValue;
+  if (mergedRateType === "annual" && hasValue(mergedRate) && !hasValue(mergedTotalPkg)) {
+    proposedFormData.totalPackageValue = mergedRate;
+  }
 
   // Compose the post-turn draft (client will merge the same way) and recompute
   // the checklist so the UI's "still needed" panel is exact.
@@ -207,6 +247,16 @@ export async function draftContractFromPrompt(
     if (!hasValue(postDraft[k])) postDraft[k] = v;
   }
   const nextSteps = computeChecklist(postDraft, callerRole);
+
+  // Ready-guard safety net: if the model claims the draft is ready but the
+  // deterministic post-turn checklist still blocks Create Contract, rewrite
+  // the assistantMessage to a truthful "still need X" prompt. The primer
+  // instructs the AI never to say "ready" while the gate is CLOSED, but the
+  // pre-turn gate line the AI sees can be stale when the same turn opens new
+  // conditional-required fields (requiresTimesheet=true, isForClient=true,
+  // etc.) — this guard prevents the false-ready claim from ever reaching the
+  // user even if the primer discipline slips.
+  assistantMessage = enforceGateInAssistantMessage(assistantMessage, nextSteps);
 
   return {
     ok: true,
@@ -220,6 +270,65 @@ export async function draftContractFromPrompt(
     },
     audit: { model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "ok" },
   };
+}
+
+// Match a compact set of "the draft is ready" phrases the model tends to emit
+// when it (incorrectly) declares completion. Only fires when the post-turn
+// gate is genuinely CLOSED, so a legit gate-OPEN "ready" message passes
+// through unchanged.
+const READY_PATTERNS = /\b(ready|click\s+create|everything\s+(i|we)\s+need|all\s+set|good\s+to\s+(go|create)|create\s+contract\s+to\s+save|i\s+have\s+all|draft\s+is\s+complete|draft\s+is\s+ready)\b/i;
+
+// Compact field-label + question map for the fields the ready-guard is
+// likely to encounter. Kept intentionally small — only the fields the
+// checklist can flag as required/conditional. Anything not listed falls
+// back to a generic "the <fieldName> field" phrasing.
+const READY_GUARD_FIELD_LABEL: Record<string, string> = {
+  workerId: "the worker",
+  selectedBusinessId: "which business this contract is for",
+  countryId: "the work location (country)",
+  employmentType: "the engagement type",
+  roleDescription: "a short role description",
+  templateId: "a contract template",
+  startDate: "the start date",
+  endDate: "the end date",
+  rateType: "the pay mode (hourly / daily / annual)",
+  rate: "the worker's rate",
+  currency: "the currency",
+  timesheetFrequency: "how often timesheets are submitted",
+  timesheetApproverRole: "who approves the timesheets (business / SDP / host client)",
+  paymentScheduleType: "the payment schedule (days after period, or a specific day)",
+  paymentDay: "which day of the week they get paid",
+  paymentDaysAfterPeriod: "how many days after the period they get paid",
+  clientName: "the host client's business name",
+  clientContactEmail: "the host client's contact email",
+  clientAddress: "the host client's business address",
+  billingMode: "the customer invoicing mode",
+  clientBillingType: "the billing type (rate-based or fixed price)",
+  customerBillingRate: "the client billing rate",
+  customerBillingRateType: "the client billing rate unit (hourly / daily)",
+  customerCurrency: "the client billing currency",
+  fixedBillingAmount: "the fixed billing amount",
+  fixedBillingFrequency: "the fixed billing frequency",
+  paymentTerms: "the payment terms in days (net-N)",
+};
+
+function labelForReadyGuard(field: string): string {
+  return READY_GUARD_FIELD_LABEL[field] ?? `the ${field} field`;
+}
+
+function enforceGateInAssistantMessage(
+  message: string,
+  nextSteps: ChecklistState,
+): string {
+  const blocking = [...nextSteps.required, ...nextSteps.conditional];
+  if (blocking.length === 0) return message;
+  if (!READY_PATTERNS.test(message)) return message;
+  const first = blocking[0];
+  const rest = blocking.length - 1;
+  const tail = rest > 0
+    ? ` (and ${rest} more field${rest === 1 ? "" : "s"} after that)`
+    : "";
+  return `Almost there — I still need ${labelForReadyGuard(first)}${tail} before you can create the contract. Could you share ${labelForReadyGuard(first)}?`;
 }
 
 function normaliseHistory(raw: unknown): ChatMessage[] {

@@ -255,12 +255,15 @@ export async function runTool(
         return { result: payload, record: record("getContractTemplates", args, payload) };
       }
       const rows = await storage.getContractTemplatesByCountry(countryId, employmentType);
-      const items = rows.map(t => ({
-        id: t.id,
-        name: t.name,
-        employmentType: t.employmentType,
-        countryCode: t.country?.code,
-      }));
+      // Skip soft-deleted templates — quoting one would fail the pre-insert
+      // FK guard in POST /api/contracts with `INVALID_TEMPLATE`, wasting a
+      // full contract-create round-trip. The DB has no businessId column on
+      // contract_templates (all templates are country + employmentType scoped,
+      // some with countryId=null for globals), so we cannot tenant-filter
+      // further here.
+      const items = rows
+        .filter((t: any) => t.isActive !== false)
+        .map(t => ({ id: t.id, name: t.name }));
       const payload = { items };
       return { result: payload, record: record("getContractTemplates", args, payload) };
     }
