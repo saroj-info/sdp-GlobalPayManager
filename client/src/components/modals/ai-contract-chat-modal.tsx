@@ -870,6 +870,14 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       if (typeof contractPayload.paymentTerms === "number") {
         contractPayload.paymentTerms = String(contractPayload.paymentTerms);
       }
+      // timesheetCalculationMethod is also a varchar column. For monthly
+      // frequency the AI is prone to emitting the day-of-month as a JSON
+      // number (e.g. 15) instead of a string ("15"). Mirror the server's
+      // NUMERIC_STRING_COLUMNS coercion here so a stale draft or an
+      // inline-editor number never reaches the POST.
+      if (typeof contractPayload.timesheetCalculationMethod === "number") {
+        contractPayload.timesheetCalculationMethod = String(contractPayload.timesheetCalculationMethod);
+      }
       // CTC mirror: for annual contracts the wizard's Edit view reads
       // `contracts.totalPackageValue` directly; if the AI skipped the mirror
       // rule in the primer, the CTC input renders empty on Edit even though

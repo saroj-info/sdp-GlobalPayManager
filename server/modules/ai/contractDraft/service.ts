@@ -49,6 +49,16 @@ const DEFAULT_ASSISTANT_FALLBACK = "Here's what I have so far. Anything to add?"
 // letting a bad enum flow to the wizard. Values MUST match the manual wizard
 // (client/src/components/modals/contract-wizard-modal.tsx) — the wizard is
 // the ground-truth DB-accepted set.
+// Free-form string columns where the AI is prone to emitting a JSON number
+// (e.g. timesheetCalculationMethod for monthly frequency: model sees 15 in
+// the wizard vocabulary and emits the JSON number 15 instead of the string
+// "15"). The DB column is varchar; Zod rejects numbers. Sanitize coerces
+// number → String(n) for keys in this set even when they're outside
+// ENUM_ALLOWLIST.
+const NUMERIC_STRING_COLUMNS = new Set<string>([
+  "timesheetCalculationMethod",
+]);
+
 const ENUM_ALLOWLIST: Record<string, string[]> = {
   rateType: ["hourly", "daily", "annual"],
   employmentType: ["contractor", "permanent", "fixed_term", "casual", "third_party_worker", "zero_hours", "at_will", "gig_worker", "on_call", "seasonal", "part_time"],
@@ -469,6 +479,16 @@ function sanitize(
     // Every other field is fair game for AI updates — including a
     // conversational "change end date to Dec 24" against an AI-set value.
     if (userEdited.has(key)) continue;
+
+    // Free-form string columns the AI sometimes emits as a JSON number.
+    // These aren't in ENUM_ALLOWLIST (their valid space is too large or
+    // frequency-dependent), but the DB column is varchar and Zod rejects
+    // numbers — coerce here so a numeric monthly-day value like 15 becomes
+    // "15" before it reaches Create Contract.
+    if (NUMERIC_STRING_COLUMNS.has(key) && typeof value === "number") {
+      out[key] = String(value);
+      continue;
+    }
 
     // Enum sanity check: if the field is in the allowlist and the value is out
     // of range, drop it into a pending question rather than lying.
