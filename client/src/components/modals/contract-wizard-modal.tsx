@@ -146,14 +146,17 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         rate: existingContract.rate?.toString() || '',
         currency: existingContract.currency || 'USD',
         requiresTimesheet: existingContract.requiresTimesheet || false,
-        timesheetFrequency: existingContract.timesheetFrequency || 'weekly',
-        timesheetCalculationMethod: existingContract.timesheetCalculationMethod || '',
-        paymentScheduleType: existingContract.paymentScheduleType || 'days_after',
-        paymentDay: existingContract.paymentDay || '',
-        paymentDaysAfterPeriod: existingContract.paymentDaysAfterPeriod || 3,
+        // Preserve DB NULL — don't hydrate seeded UI defaults, or the first
+        // Edit-save writes spurious change-log rows for fields the user never
+        // touched (null → 'weekly'/'monthly'/... is diffed as a change).
+        timesheetFrequency: existingContract.timesheetFrequency ?? '',
+        timesheetCalculationMethod: existingContract.timesheetCalculationMethod ?? '',
+        paymentScheduleType: existingContract.paymentScheduleType ?? '',
+        paymentDay: existingContract.paymentDay ?? '',
+        paymentDaysAfterPeriod: existingContract.paymentDaysAfterPeriod ?? '',
         paymentHolidayRule: existingContract.paymentHolidayRule !== undefined ? existingContract.paymentHolidayRule : true,
-        noticePeriodDays: existingContract.noticePeriodDays || 30,
-        timesheetApproverRole: existingContract.timesheetApproverRole || 'business',
+        noticePeriodDays: existingContract.noticePeriodDays ?? '',
+        timesheetApproverRole: existingContract.timesheetApproverRole ?? '',
         remunerationLines: existingContract.remunerationLines || [{ type: 'base_salary', description: 'Base Salary', amount: '', frequency: 'annual' }],
         // Client details
         isForClient: existingContract.isForClient || false,
@@ -163,24 +166,24 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         clientCountry: existingContract.clientCountry || '',
         clientContactEmail: existingContract.clientContactEmail || '',
         clientContactPhone: existingContract.clientContactPhone || '',
-        // Customer invoicing
-        billingMode: (existingContract as any).billingMode || (existingContract.invoiceCustomer ? 'invoice_through_platform' : 'invoice_separately'),
+        // Customer invoicing — same rule: no seeded defaults in edit mode.
+        billingMode: (existingContract as any).billingMode ?? '',
         invoiceCustomer: existingContract.invoiceCustomer || false,
         customerBusinessId: existingContract.customerBusinessId || '',
         customerBillingRate: existingContract.customerBillingRate?.toString() || '',
-        customerBillingRateType: existingContract.customerBillingRateType || 'hourly',
-        customerCurrency: existingContract.customerCurrency || existingContract.currency || 'USD',
-        invoicingFrequency: existingContract.invoicingFrequency || 'monthly',
-        paymentTerms: existingContract.paymentTerms || '30',
+        customerBillingRateType: existingContract.customerBillingRateType ?? '',
+        customerCurrency: existingContract.customerCurrency ?? '',
+        invoicingFrequency: existingContract.invoicingFrequency ?? '',
+        paymentTerms: existingContract.paymentTerms ?? '',
         // 3rd party vendor
         thirdPartyBusinessId: existingContract.thirdPartyBusinessId || '',
         // Pay rate structure
-        rateStructure: (existingContract as any).rateStructure || 'single',
+        rateStructure: (existingContract as any).rateStructure ?? '',
         totalPackageValue: (existingContract as any).totalPackageValue?.toString() || '',
         // Client billing type
-        clientBillingType: (existingContract as any).clientBillingType || 'rate_based',
+        clientBillingType: (existingContract as any).clientBillingType ?? '',
         fixedBillingAmount: (existingContract as any).fixedBillingAmount?.toString() || '',
-        fixedBillingFrequency: (existingContract as any).fixedBillingFrequency || 'monthly',
+        fixedBillingFrequency: (existingContract as any).fixedBillingFrequency ?? '',
         // On-behalf fields for SDP Internal users — derived from audit field on the contract
         onBehalf: isSDPInternal && !!(existingContract.createdOnBehalfOfBusinessId || existingContract.businessId),
         selectedBusinessId: isSDPInternal

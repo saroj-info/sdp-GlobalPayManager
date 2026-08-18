@@ -35,13 +35,13 @@ import type {
   ToolCallRecord,
 } from "./types";
 
-const MAX_TOOL_ITERATIONS = 6;
+const MAX_TOOL_ITERATIONS = 10;
 const MAX_PROMPT_LEN = 4000; // guard against a single 100 KB paste
 // Cap: drop oldest turns beyond this to keep prompt size bounded. currentDraft
 // is re-serialized every turn (see below) so state itself does not leak when
 // oldest turns fall off, but earlier "you still owe me X" beats do — the
 // larger cap keeps them in the model's window for realistic long chats.
-const MAX_HISTORY_TURNS = 80;
+const MAX_HISTORY_TURNS = 200;
 const DEFAULT_ASSISTANT_FALLBACK = "Here's what I have so far. Anything to add?";
 
 // Known enum values we sanity-check on the way out. If the model hallucinates
@@ -117,7 +117,7 @@ export async function draftContractFromPrompt(
     { role: "system", content: DOMAIN_PRIMER },
     { role: "system", content: buildTenantContextPrimer(tenantContext) },
     { role: "system", content: RESPONSE_JSON_INSTRUCTION },
-    { role: "system", content: `Current draft state (client-authoritative — do not overwrite these):\n${JSON.stringify(currentDraft)}` },
+    { role: "system", content: `Current draft state (treat as authoritative context; if the user's CURRENT message asks to change or correct one of these, include the new value in proposedFormData):\n${JSON.stringify(currentDraft)}` },
     { role: "system", content: formatChecklistForModel(preChecklist) },
   ];
   const stepAnnotation = formatCurrentStepForModel(req.currentStep, currentDraft, preChecklist);
@@ -199,6 +199,37 @@ export async function draftContractFromPrompt(
       finalContent = msg.content ?? "";
       break;
     }
+
+    // Tool loop exhausted without a plain-content final. Give the model one
+    // deterministic chance to summarize what it just learned from its tool
+    // results into the required JSON shape. Fixes the "first turn shows Not
+    // set" bug where a fully-specified prompt fans out through 5-6 lookups
+    // and hits the iteration cap before emitting proposedFormData.
+    if (!finalContent) {
+      try {
+        const { completion, model: usedModel, latencyMs: dt, usage } = await chatExtract({
+          messages,
+          toolChoice: "none",
+          jsonMode: true,
+        });
+        model = usedModel;
+        latencyMs += dt;
+        inputTokens += usage.promptTokens;
+        outputTokens += usage.completionTokens;
+        finalContent = completion.choices[0]?.message?.content ?? "";
+      } catch (err) {
+        if (err instanceof AiUpstreamError) {
+          return {
+            ok: false,
+            status: 503,
+            code: "AI_UPSTREAM_UNAVAILABLE",
+            message: err.message,
+            audit: { model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "upstream_error" },
+          };
+        }
+        throw err;
+      }
+    }
   } catch (err) {
     if (err instanceof AiUpstreamError) {
       return {
@@ -223,7 +254,10 @@ export async function draftContractFromPrompt(
     pendingQuestions: [],
   };
 
-  const sanitized = sanitize(parsed, currentDraft);
+  const userEditedFieldPaths = Array.isArray(req.userEditedFieldPaths)
+    ? req.userEditedFieldPaths.filter((k): k is string => typeof k === "string")
+    : [];
+  const sanitized = sanitize(parsed, currentDraft, userEditedFieldPaths);
   const { proposedFormData, pendingQuestions } = sanitized;
   let { assistantMessage } = sanitized;
 
@@ -241,10 +275,14 @@ export async function draftContractFromPrompt(
   }
 
   // Compose the post-turn draft (client will merge the same way) and recompute
-  // the checklist so the UI's "still needed" panel is exact.
+  // the checklist so the UI's "still needed" panel is exact. `sanitize`
+  // already removed user-edited fields from proposedFormData, so every entry
+  // here is safe to overwrite.
+  const userEditedSet = new Set(userEditedFieldPaths);
   const postDraft = { ...currentDraft };
   for (const [k, v] of Object.entries(proposedFormData)) {
-    if (!hasValue(postDraft[k])) postDraft[k] = v;
+    if (userEditedSet.has(k)) continue;
+    postDraft[k] = v;
   }
   const nextSteps = computeChecklist(postDraft, callerRole);
 
@@ -348,11 +386,19 @@ function normaliseHistory(raw: unknown): ChatMessage[] {
 }
 
 async function loadTenantContext(user: AuthUser, businessId: string | undefined, role: "sdp_internal" | "business_user") {
+  // When we already know which business this draft is for (business_user
+  // sessions always, admin sessions once &Business is picked), skip the
+  // full-business fetch — the tenant primer only needs that one business +
+  // its host clients. For admin sessions with no picked business yet we still
+  // need the list so the model can resolve prose like "for Acme, hire...".
+  const needFullBusinessList = user.userType === "sdp_internal" && !businessId;
   const [countries, businessesForUser, recentContracts] = await Promise.all([
     storage.getCountries().catch(() => []),
-    user.userType === "sdp_internal"
+    needFullBusinessList
       ? storage.getBusinesses().catch(() => [])
-      : storage.getBusinessesForUser(user.id).catch(() => []),
+      : businessId
+        ? storage.getBusinessById(businessId).then(b => (b ? [b] : [])).catch(() => [])
+        : storage.getBusinessesForUser(user.id).catch(() => []),
     businessId
       ? storage.getContractsByBusiness(businessId).catch(() => [])
       : Promise.resolve([]),
@@ -406,6 +452,7 @@ function safeParseFinal(content: string): { proposedFormData?: any; pendingQuest
 function sanitize(
   raw: { assistantMessage?: any; proposedFormData?: any; pendingQuestions?: any },
   currentDraft: Record<string, any>,
+  userEditedFieldPaths: string[],
 ): { assistantMessage: string; proposedFormData: Record<string, any>; pendingQuestions: PendingQuestion[] } {
   const assistantMessage = typeof raw.assistantMessage === "string" && raw.assistantMessage.trim().length > 0
     ? raw.assistantMessage.trim()
@@ -415,10 +462,13 @@ function sanitize(
 
   const out: Record<string, any> = {};
   const pending: PendingQuestion[] = [];
+  const userEdited = new Set(userEditedFieldPaths);
 
   for (const [key, value] of Object.entries(proposedIn)) {
-    // User-entered values win — never overwrite a field the caller already had.
-    if (hasValue(currentDraft[key])) continue;
+    // Only fields the user typed into the inline preview editor are locked.
+    // Every other field is fair game for AI updates — including a
+    // conversational "change end date to Dec 24" against an AI-set value.
+    if (userEdited.has(key)) continue;
 
     // Enum sanity check: if the field is in the allowlist and the value is out
     // of range, drop it into a pending question rather than lying.

@@ -62,7 +62,11 @@ export const TRACKED_CONTRACT_FIELDS: Array<{ key: string; label: string }> = [
 const TRACKED_KEYS = new Set(TRACKED_CONTRACT_FIELDS.map((f) => f.key));
 
 function normalize(value: unknown): string | null {
+  // Collapse null / undefined / "" to the same sentinel so shape-only
+  // differences (a nullable column stored as null vs a form seeded with "")
+  // never surface as user-visible history.
   if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value === "") return null;
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "boolean") return value ? "true" : "false";
   return String(value);

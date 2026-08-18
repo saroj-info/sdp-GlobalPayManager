@@ -30,6 +30,13 @@ export interface ContractChatRequest {
    * bias its questioning toward the current step; extraction is unbounded.
    */
   currentStep?: 1 | 2 | 3 | 4;
+  /**
+   * Field paths the user manually edited via the modal's inline preview
+   * editor. These are the ONLY fields the sanitizer refuses to overwrite;
+   * conversational updates against AI-set fields ("change end date to Y")
+   * always apply. Reset on modal close.
+   */
+  userEditedFieldPaths?: string[];
 }
 
 export interface PendingQuestion {

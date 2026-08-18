@@ -1695,11 +1695,68 @@ export const insertContractSchema = createInsertSchema(contracts).omit({
   roleTitleId: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
     val === '' || val === null || val === undefined ? null : val
   ),
-  // String fields that should be null when empty
+  // String fields that should be null when empty. Kept broad — every tracked
+  // enum-string column must land in the DB as `null` (not `""`) so the first
+  // Edit-save after an AI-created contract doesn't diff shape-only changes
+  // (null → "" or null → 'weekly') as user-visible history.
   paymentDay: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
     val === '' || val === null || val === undefined ? null : val
   ),
   timesheetCalculationMethod: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  paymentTerms: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  invoicingFrequency: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  timesheetApproverRole: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  clientBillingType: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  fixedBillingFrequency: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  customerBillingRateType: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  customerCurrency: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  timesheetFrequency: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  paymentScheduleType: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  rateStructure: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  clientName: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  clientAddress: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  clientCity: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  clientCountry: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  clientContactEmail: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  clientContactPhone: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  customRoleTitle: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
+    val === '' || val === null || val === undefined ? null : val
+  ),
+  contractName: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) =>
     val === '' || val === null || val === undefined ? null : val
   ),
   // billingMode — explicit billing path for customer-work contracts

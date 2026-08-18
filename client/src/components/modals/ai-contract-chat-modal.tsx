@@ -570,6 +570,10 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState<Record<string, any>>({});
+  // Field paths the user manually committed via the inline preview editor.
+  // These are the ONLY fields the AI merge skips — conversational updates
+  // ("actually make end date Dec 24") against AI-set fields always apply.
+  const [userEditedFieldPaths, setUserEditedFieldPaths] = useState<Set<string>>(new Set());
   const [aiFilledFields, setAiFilledFields] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<PendingQuestion[]>([]);
   const [nextSteps, setNextSteps] = useState<ChecklistState>({ required: [], conditional: [], optionalRecommended: [] });
@@ -657,6 +661,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     if (!open) {
       setMessages([]);
       setDraft({});
+      setUserEditedFieldPaths(new Set());
       setAiFilledFields(new Set());
       setPending([]);
       setNextSteps({ required: [], conditional: [], optionalRecommended: [] });
@@ -701,6 +706,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
         messages: historySnapshot,
         currentDraft: draft,
         currentStep: activeStep,
+        userEditedFieldPaths: Array.from(userEditedFieldPaths),
       });
       const data: ChatResponse = await resp.json();
       return data;
@@ -710,7 +716,11 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       setDraft((prev) => {
         const next = { ...prev };
         for (const [k, v] of Object.entries(data.proposedFormData || {})) {
-          if (hasValue(prev[k])) continue;
+          // Only fields the user manually typed into the inline preview
+          // editor stay pinned. AI-set fields are unconditionally overwritten
+          // so the user can conversationally correct them ("change end date
+          // to Dec 24" against an earlier AI-set Nov 20 must apply).
+          if (userEditedFieldPaths.has(k)) continue;
           next[k] = v;
         }
         return next;
@@ -1002,6 +1012,11 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       next.delete("workerId");
       return next;
     });
+    setUserEditedFieldPaths((prev) => {
+      const next = new Set(prev);
+      next.add("workerId");
+      return next;
+    });
     setMention(null);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -1044,6 +1059,16 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       const next = new Set(prev);
       next.delete("customerBusinessId");
       next.delete("isForClient");
+      return next;
+    });
+    setUserEditedFieldPaths((prev) => {
+      const next = new Set(prev);
+      next.add("customerBusinessId");
+      next.add("isForClient");
+      if (client?.name) next.add("clientName");
+      if (client?.contactEmail) next.add("clientContactEmail");
+      if (client?.address) next.add("clientAddress");
+      if (client?.contactName) next.add("clientContactName");
       return next;
     });
     setMention(null);
@@ -1115,6 +1140,20 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       }
       return next;
     });
+    setUserEditedFieldPaths((prev) => {
+      const next = new Set(prev);
+      next.add("selectedBusinessId");
+      next.add("onBehalf");
+      if (switchingBusiness) {
+        next.delete("workerId");
+        next.delete("customerBusinessId");
+        next.delete("clientName");
+        next.delete("clientContactName");
+        next.delete("clientContactEmail");
+        next.delete("clientAddress");
+      }
+      return next;
+    });
     setMention(null);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -1151,6 +1190,12 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       const next = new Set(prev);
       next.delete("isForClient");
       next.delete("clientName");
+      return next;
+    });
+    setUserEditedFieldPaths((prev) => {
+      const next = new Set(prev);
+      next.add("isForClient");
+      next.add("clientName");
       return next;
     });
     setMention(null);
@@ -1204,6 +1249,14 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     setAiFilledFields((prev) => {
       const next = new Set(prev);
       next.delete(key);
+      return next;
+    });
+    setUserEditedFieldPaths((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      if (extra) {
+        for (const k of Object.keys(extra)) next.add(k);
+      }
       return next;
     });
     setEditingField(null);

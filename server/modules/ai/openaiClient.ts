@@ -10,8 +10,8 @@
 import OpenAI from "openai";
 import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 
-const DEFAULT_EXTRACT_MODEL = "gpt-4o-mini";
-const DEFAULT_PREVIEW_MODEL = "gpt-4o";
+const DEFAULT_EXTRACT_MODEL = "gpt-5.6-terra";
+const DEFAULT_PREVIEW_MODEL = "gpt-5.6-terra";
 
 let client: OpenAI | null = null;
 
@@ -60,16 +60,26 @@ export async function chatSummary(params: ChatExtractParams): Promise<ChatCallRe
 
 async function runChat(model: string, params: ChatExtractParams): Promise<ChatCallResult> {
   const started = Date.now();
+  // Reasoning-tier models (gpt-5.x family) reject function tools on
+  // /v1/chat/completions unless reasoning_effort is 'none' — we need tools for
+  // the contract-draft loop, so force it off. Non-reasoning models ignore the
+  // field. Detection is name-based: any model starting with "gpt-5" is
+  // treated as reasoning-tier (gpt-4.x + gpt-4o do not use this param).
+  const isReasoningTier = /^gpt-5/i.test(model);
+  const createParams: Record<string, unknown> = {
+    model,
+    messages: params.messages,
+    tools: params.tools,
+    tool_choice: params.toolChoice ?? (params.tools ? "auto" : undefined),
+    temperature: params.temperature ?? 0.2,
+    max_tokens: params.maxTokens,
+    response_format: params.jsonMode ? { type: "json_object" } : undefined,
+  };
+  if (isReasoningTier) {
+    createParams.reasoning_effort = "none";
+  }
   try {
-    const completion = await getClient().chat.completions.create({
-      model,
-      messages: params.messages,
-      tools: params.tools,
-      tool_choice: params.toolChoice ?? (params.tools ? "auto" : undefined),
-      temperature: params.temperature ?? 0.2,
-      max_tokens: params.maxTokens,
-      response_format: params.jsonMode ? { type: "json_object" } : undefined,
-    });
+    const completion = await getClient().chat.completions.create(createParams as any);
     return {
       completion,
       model,
