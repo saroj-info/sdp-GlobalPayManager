@@ -24,6 +24,8 @@ import {
   Check as CheckIcon,
   X as XIcon,
   CheckCircle2,
+  Eye,
+  FileText,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -31,6 +33,8 @@ import { WorkerCombobox } from "@/components/pickers/WorkerCombobox";
 import { BusinessCombobox } from "@/components/pickers/BusinessCombobox";
 import { useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
 import { useAuth } from "@/hooks/useAuth";
+import { ContractPreviewModal, type PreviewSection, type PreviewRow } from "@/components/modals/contract-preview-modal";
+import { ContractDocumentModal, type ContractDocumentSummary } from "@/components/modals/contract-document-modal";
 
 interface AiContractChatModalProps {
   open: boolean;
@@ -565,7 +569,7 @@ const SAMPLE_PROMPTS_ADMIN: Array<{ label: string; text: string }> = [
 export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalProps) {
   const { toast } = useToast();
   const { countries } = useAuthenticatedLayout();
-  const { activeRole } = useAuth();
+  const { activeRole, user } = useAuth();
   const isAdmin = activeRole === "sdp_internal";
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -607,6 +611,18 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
   // authenticated-layout context; businesses/templates/role titles are
   // sourced from react-query below.
   const [resolvedRefs, setResolvedRefs] = useState<Record<string, string>>({});
+
+  // Preview modal state — structured 4-step summary built locally from the
+  // draft. No API round-trip; safe to open any time the draft has content.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewSections, setPreviewSections] = useState<PreviewSection[]>([]);
+  const [previewHeaderSubtitle, setPreviewHeaderSubtitle] = useState<string | undefined>(undefined);
+  // Document modal state — populated after Generate Document renders the
+  // contract text (no DB write). When the user then clicks Create, the
+  // most-recent rendered content is auto-attached to the new contract row.
+  const [documentOpen, setDocumentOpen] = useState(false);
+  const [documentContent, setDocumentContent] = useState("");
+  const [documentSummary, setDocumentSummary] = useState<ContractDocumentSummary>({});
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -673,6 +689,12 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       setActiveStep(1);
       setManuallyNavigated(false);
       setMention(null);
+      setPreviewOpen(false);
+      setPreviewSections([]);
+      setPreviewHeaderSubtitle(undefined);
+      setDocumentOpen(false);
+      setDocumentContent("");
+      setDocumentSummary({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -758,174 +780,257 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     },
   });
 
+  // Shared payload transform. Used by Create, Generate Document, and Preview
+  // paths so the same field-strip / rename / coerce rules apply everywhere —
+  // preview must see the same shape the server will actually persist.
+  // Returns the raw effectiveDraft too so callers can look up business/worker
+  // context (preview summary, generate-document businessId resolution).
+  async function buildContractPayload(): Promise<{
+    contractPayload: Record<string, any>;
+    effectiveDraft: Record<string, any>;
+  }> {
+    let effectiveDraft = draft;
+
+    // If this is a client-facing contract and the host client hasn't been
+    // resolved yet (AI only had a name, not a UUID), create the host client
+    // first — mirroring the wizard's create-then-attach pattern in
+    // contract-wizard-modal.tsx:96-128. Keeps the "no writes from the AI"
+    // invariant intact — the write happens under a real user click.
+    const needsHostClient =
+      draft.isForClient === true &&
+      !hasValue(draft.customerBusinessId) &&
+      hasValue(draft.clientName);
+
+    if (needsHostClient) {
+      const hcPayload: Record<string, any> = {
+        name: draft.clientName,
+        contactEmail: draft.clientContactEmail || undefined,
+        contactName: draft.clientContactName || undefined,
+        address: draft.clientAddress || undefined,
+      };
+      // For business_user callers the server forces parentBusinessId from
+      // the JWT; sdp_internal callers must supply it via selectedBusinessId.
+      if (draft.selectedBusinessId) hcPayload.parentBusinessId = draft.selectedBusinessId;
+
+      const hcResp = await apiRequest("POST", "/api/businesses/host-clients", hcPayload);
+      const hostClient = await hcResp.json();
+      // Mirror the freshly-created host client's snapshot fields back onto
+      // the draft — clientName / clientContactEmail / clientAddress are
+      // snapshot columns on the contract row read directly by the wizard's
+      // edit view (no join fallback there).
+      effectiveDraft = {
+        ...draft,
+        customerBusinessId: hostClient.id,
+        clientName: draft.clientName || hostClient.name || "",
+        clientContactEmail: draft.clientContactEmail || hostClient.contactEmail || "",
+        clientAddress: draft.clientAddress || hostClient.address || "",
+        ...(draft.clientContactName || hostClient.contactName
+          ? { clientContactName: draft.clientContactName || hostClient.contactName }
+          : {}),
+      };
+      // Persist in local state so a subsequent /api/contracts retry doesn't
+      // re-create the host client.
+      setDraft(effectiveDraft);
+      setResolvedRefs((p) => ({ ...p, customerBusinessId: hostClient.name }));
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses/host-clients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses"] });
+    }
+
+    // Strip empty-string keys so the server's Zod coercions don't see them
+    // as intentional values (matches the manual-edit pattern in the wizard).
+    // Also strip fields that don't apply to the chosen branches — an earlier
+    // draft turn may have set a client-billing or timesheet field before the
+    // user flipped isForClient / requiresTimesheet, and sending stale values
+    // would confuse the Edit view.
+    const isInternal = effectiveDraft.isForClient === false;
+    const timesheetOff =
+      effectiveDraft.requiresTimesheet === false ||
+      (effectiveDraft.requiresTimesheet !== true &&
+        effectiveDraft.rateType !== "hourly" &&
+        effectiveDraft.rateType !== "daily");
+    const CLIENT_ONLY_FIELDS = new Set([
+      "customerBusinessId",
+      "clientName",
+      "clientContactName",
+      "clientContactEmail",
+      "clientAddress",
+      "clientCity",
+      "clientCountry",
+      "clientContactPhone",
+      "clientBillingType",
+      "customerBillingRate",
+      "customerBillingRateType",
+      "customerCurrency",
+      "fixedBillingAmount",
+      "fixedBillingFrequency",
+      "invoicingFrequency",
+      "invoiceCustomer",
+      "paymentTerms",
+    ]);
+    const TIMESHEET_ONLY_FIELDS = new Set([
+      "timesheetFrequency",
+      "timesheetCalculationMethod",
+      "timesheetApproverRole",
+      "paymentScheduleType",
+      "paymentDay",
+      "paymentDaysAfterPeriod",
+      "paymentHolidayRule",
+    ]);
+    const contractPayload: Record<string, any> = {};
+    for (const [k, v] of Object.entries(effectiveDraft)) {
+      if (v === "") continue;
+      if (isInternal && CLIENT_ONLY_FIELDS.has(k)) continue;
+      if (timesheetOff && TIMESHEET_ONLY_FIELDS.has(k)) continue;
+      contractPayload[k] = v;
+    }
+    // Field-name parity with the wizard: the DB column is `jobDescription`,
+    // but the AI drafts under `roleDescription`. The wizard maps at submit
+    // (contract-wizard-modal.tsx:695); mirror that here so the description
+    // actually persists to contracts.jobDescription AND flows into the
+    // server's role_titles.description on upsert (server/routes.ts:6168).
+    if (hasValue(contractPayload.roleDescription) && !hasValue(contractPayload.jobDescription)) {
+      contractPayload.jobDescription = contractPayload.roleDescription;
+    }
+    delete contractPayload.roleDescription;
+    // paymentTerms is a varchar column — Zod validates z.string(). The AI
+    // sometimes returns a JSON number (7 instead of "7") which slips past
+    // the sanitizer's typeof-string enum check. Coerce here so Create
+    // Contract stops 400ing on that specific mismatch.
+    if (typeof contractPayload.paymentTerms === "number") {
+      contractPayload.paymentTerms = String(contractPayload.paymentTerms);
+    }
+    // timesheetCalculationMethod is also a varchar column. For monthly
+    // frequency the AI is prone to emitting the day-of-month as a JSON
+    // number (e.g. 15) instead of a string ("15"). Mirror the server's
+    // NUMERIC_STRING_COLUMNS coercion here so a stale draft or an
+    // inline-editor number never reaches the POST.
+    if (typeof contractPayload.timesheetCalculationMethod === "number") {
+      contractPayload.timesheetCalculationMethod = String(contractPayload.timesheetCalculationMethod);
+    }
+    // CTC mirror: for annual contracts the wizard's Edit view reads
+    // `contracts.totalPackageValue` directly; if the AI skipped the mirror
+    // rule in the primer, the CTC input renders empty on Edit even though
+    // Pay Mode is Annual. Belt-and-braces backfill from `rate` so a stale
+    // draft (pre-server-fix) still saves a usable CTC value.
+    if (
+      contractPayload.rateType === "annual" &&
+      hasValue(contractPayload.rate) &&
+      !hasValue(contractPayload.totalPackageValue)
+    ) {
+      contractPayload.totalPackageValue = contractPayload.rate;
+    }
+    // Force billingMode="direct" for internal contracts (wizard does this
+    // silently). Overrides anything a stale draft may have left behind.
+    if (isInternal) {
+      contractPayload.billingMode = "direct";
+    } else if (effectiveDraft.isForClient === true && !contractPayload.invoicingFrequency) {
+      // Wizard has no UI for invoicingFrequency; default silently to monthly
+      // so the invoice-generation flow has a stable cadence.
+      contractPayload.invoicingFrequency = "monthly";
+    }
+    return { contractPayload, effectiveDraft };
+  }
+
+  // Resolve the business the preview endpoint needs. Prefers the admin's
+  // picked business, falls back to the auth user's business, then to the
+  // worker's businessId. Returns null only if nothing is available.
+  async function resolveBusinessIdForRender(
+    contractPayload: Record<string, any>,
+  ): Promise<string | null> {
+    if (contractPayload.selectedBusinessId) return contractPayload.selectedBusinessId;
+    if (contractPayload.businessId) return contractPayload.businessId;
+    const userBiz = (user as any)?.business?.id;
+    if (userBiz) return userBiz;
+    if (contractPayload.workerId) {
+      try {
+        const resp = await apiRequest("GET", `/api/workers/${contractPayload.workerId}`);
+        const worker = await resp.json();
+        return worker?.businessId || null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // Build the request body the /api/contracts/universal/preview endpoint
+  // expects. Matches the wizard's shape at contract-wizard-modal.tsx:486-500.
+  function buildPreviewRequest(
+    contractPayload: Record<string, any>,
+    businessId: string,
+    contractId?: string,
+  ) {
+    const contractData: Record<string, any> = {
+      agreementDate: new Date().toLocaleDateString(),
+      serviceDescription: contractPayload.jobDescription || "",
+      startDate: contractPayload.startDate || "",
+      endDate: contractPayload.endDate || "",
+      rateAmount: contractPayload.rate || "",
+      rateCurrency: contractPayload.currency || "USD",
+      rateType: contractPayload.rateType || "hourly",
+      noticePeriodDays: contractPayload.noticePeriodDays || "30",
+    };
+    if (contractId) contractData.contractId = contractId;
+    return {
+      templateId: contractPayload.templateId,
+      businessId,
+      workerId: contractPayload.workerId,
+      contractData,
+    };
+  }
+
+  // Shared broad-invalidate for both create paths. Contract create can mint
+  // a new role_titles row (customRoleTitle upsert) and a new host client
+  // (host-client create-then-attach). The wizard's Edit view reads
+  // /api/role-titles, /api/businesses, /api/businesses/host-clients, and
+  // /api/contract-templates/... to populate its dropdowns; awaiting the
+  // invalidation keeps the parent page's active queries fresh.
+  async function invalidateContractQueries() {
+    const RELATED_PREFIXES = [
+      "/api/contracts",
+      "/api/role-titles",
+      "/api/businesses",
+      "/api/workers",
+      "/api/contract-templates",
+      "/api/timesheets",
+    ];
+    await queryClient.invalidateQueries({
+      predicate: (q) =>
+        typeof q.queryKey[0] === "string" &&
+        RELATED_PREFIXES.some((p) => (q.queryKey[0] as string).startsWith(p)),
+    });
+  }
+
   const createContractMutation = useMutation({
     mutationFn: async () => {
-      let effectiveDraft = draft;
-
-      // If this is a client-facing contract and the host client hasn't been
-      // resolved yet (AI only had a name, not a UUID), create the host client
-      // first — mirroring the wizard's create-then-attach pattern in
-      // contract-wizard-modal.tsx:96-128. Keeps the "no writes from the AI"
-      // invariant intact — the write happens under a real user click.
-      const needsHostClient =
-        draft.isForClient === true &&
-        !hasValue(draft.customerBusinessId) &&
-        hasValue(draft.clientName);
-
-      if (needsHostClient) {
-        const hcPayload: Record<string, any> = {
-          name: draft.clientName,
-          contactEmail: draft.clientContactEmail || undefined,
-          contactName: draft.clientContactName || undefined,
-          address: draft.clientAddress || undefined,
-        };
-        // For business_user callers the server forces parentBusinessId from
-        // the JWT; sdp_internal callers must supply it via selectedBusinessId.
-        if (draft.selectedBusinessId) hcPayload.parentBusinessId = draft.selectedBusinessId;
-
-        const hcResp = await apiRequest("POST", "/api/businesses/host-clients", hcPayload);
-        const hostClient = await hcResp.json();
-        // Mirror the freshly-created host client's snapshot fields back onto
-        // the draft — clientName / clientContactEmail / clientAddress are
-        // snapshot columns on the contract row read directly by the wizard's
-        // edit view (no join fallback there).
-        effectiveDraft = {
-          ...draft,
-          customerBusinessId: hostClient.id,
-          clientName: draft.clientName || hostClient.name || "",
-          clientContactEmail: draft.clientContactEmail || hostClient.contactEmail || "",
-          clientAddress: draft.clientAddress || hostClient.address || "",
-          ...(draft.clientContactName || hostClient.contactName
-            ? { clientContactName: draft.clientContactName || hostClient.contactName }
-            : {}),
-        };
-        // Persist in local state so a subsequent /api/contracts retry doesn't
-        // re-create the host client.
-        setDraft(effectiveDraft);
-        setResolvedRefs((p) => ({ ...p, customerBusinessId: hostClient.name }));
-        queryClient.invalidateQueries({ queryKey: ["/api/businesses/host-clients"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/businesses"] });
-      }
-
-      // Strip empty-string keys so the server's Zod coercions don't see them
-      // as intentional values (matches the manual-edit pattern in the wizard).
-      // Also strip fields that don't apply to the chosen branches — an earlier
-      // draft turn may have set a client-billing or timesheet field before the
-      // user flipped isForClient / requiresTimesheet, and sending stale values
-      // would confuse the Edit view.
-      const isInternal = effectiveDraft.isForClient === false;
-      const timesheetOff =
-        effectiveDraft.requiresTimesheet === false ||
-        (effectiveDraft.requiresTimesheet !== true &&
-          effectiveDraft.rateType !== "hourly" &&
-          effectiveDraft.rateType !== "daily");
-      const CLIENT_ONLY_FIELDS = new Set([
-        "customerBusinessId",
-        "clientName",
-        "clientContactName",
-        "clientContactEmail",
-        "clientAddress",
-        "clientCity",
-        "clientCountry",
-        "clientContactPhone",
-        "clientBillingType",
-        "customerBillingRate",
-        "customerBillingRateType",
-        "customerCurrency",
-        "fixedBillingAmount",
-        "fixedBillingFrequency",
-        "invoicingFrequency",
-        "invoiceCustomer",
-        "paymentTerms",
-      ]);
-      const TIMESHEET_ONLY_FIELDS = new Set([
-        "timesheetFrequency",
-        "timesheetCalculationMethod",
-        "timesheetApproverRole",
-        "paymentScheduleType",
-        "paymentDay",
-        "paymentDaysAfterPeriod",
-        "paymentHolidayRule",
-      ]);
-      const contractPayload: Record<string, any> = {};
-      for (const [k, v] of Object.entries(effectiveDraft)) {
-        if (v === "") continue;
-        if (isInternal && CLIENT_ONLY_FIELDS.has(k)) continue;
-        if (timesheetOff && TIMESHEET_ONLY_FIELDS.has(k)) continue;
-        contractPayload[k] = v;
-      }
-      // Field-name parity with the wizard: the DB column is `jobDescription`,
-      // but the AI drafts under `roleDescription`. The wizard maps at submit
-      // (contract-wizard-modal.tsx:695); mirror that here so the description
-      // actually persists to contracts.jobDescription AND flows into the
-      // server's role_titles.description on upsert (server/routes.ts:6168).
-      if (hasValue(contractPayload.roleDescription) && !hasValue(contractPayload.jobDescription)) {
-        contractPayload.jobDescription = contractPayload.roleDescription;
-      }
-      delete contractPayload.roleDescription;
-      // paymentTerms is a varchar column — Zod validates z.string(). The AI
-      // sometimes returns a JSON number (7 instead of "7") which slips past
-      // the sanitizer's typeof-string enum check. Coerce here so Create
-      // Contract stops 400ing on that specific mismatch.
-      if (typeof contractPayload.paymentTerms === "number") {
-        contractPayload.paymentTerms = String(contractPayload.paymentTerms);
-      }
-      // timesheetCalculationMethod is also a varchar column. For monthly
-      // frequency the AI is prone to emitting the day-of-month as a JSON
-      // number (e.g. 15) instead of a string ("15"). Mirror the server's
-      // NUMERIC_STRING_COLUMNS coercion here so a stale draft or an
-      // inline-editor number never reaches the POST.
-      if (typeof contractPayload.timesheetCalculationMethod === "number") {
-        contractPayload.timesheetCalculationMethod = String(contractPayload.timesheetCalculationMethod);
-      }
-      // CTC mirror: for annual contracts the wizard's Edit view reads
-      // `contracts.totalPackageValue` directly; if the AI skipped the mirror
-      // rule in the primer, the CTC input renders empty on Edit even though
-      // Pay Mode is Annual. Belt-and-braces backfill from `rate` so a stale
-      // draft (pre-server-fix) still saves a usable CTC value.
-      if (
-        contractPayload.rateType === "annual" &&
-        hasValue(contractPayload.rate) &&
-        !hasValue(contractPayload.totalPackageValue)
-      ) {
-        contractPayload.totalPackageValue = contractPayload.rate;
-      }
-      // Force billingMode="direct" for internal contracts (wizard does this
-      // silently). Overrides anything a stale draft may have left behind.
-      if (isInternal) {
-        contractPayload.billingMode = "direct";
-      } else if (effectiveDraft.isForClient === true && !contractPayload.invoicingFrequency) {
-        // Wizard has no UI for invoicingFrequency; default silently to monthly
-        // so the invoice-generation flow has a stable cadence.
-        contractPayload.invoicingFrequency = "monthly";
-      }
+      const { contractPayload } = await buildContractPayload();
       const resp = await apiRequest("POST", "/api/contracts", contractPayload);
-      return resp.json();
+      const created = await resp.json();
+      // If the user pre-rendered the document via Generate, attach it to the
+      // freshly-created contract row. Best-effort — a PUT failure doesn't
+      // undo the create, it just leaves the document field empty (same as
+      // the fast-path result). The `documentContent` state holds the most
+      // recent Generate output for this session.
+      if (created?.id && documentContent) {
+        try {
+          await apiRequest("PUT", `/api/contracts/${created.id}`, {
+            contractDocument: documentContent,
+          });
+        } catch (attachErr) {
+          console.error("Failed to attach generated document to contract:", attachErr);
+        }
+      }
+      return created;
     },
     onSuccess: async () => {
-      toast({ title: "Contract created", description: "The AI-drafted contract has been saved." });
-      // Broad invalidation: creating a contract can also mint a new role_titles
-      // row (customRoleTitle upsert) and a new host client (POST /api/businesses/
-      // host-clients earlier in the mutation). The wizard's Edit view reads
-      // /api/role-titles, /api/businesses, /api/businesses/host-clients, and
-      // /api/contract-templates/... to populate its dropdowns; if any of these
-      // lists is stale, dropdowns won't show the newly-created rows and the
-      // contract will look mis-linked on Edit until a hard page reload.
-      // Await the invalidation so the parent page's active queries actually
-      // refetch before we close the modal.
-      const RELATED_PREFIXES = [
-        "/api/contracts",
-        "/api/role-titles",
-        "/api/businesses",
-        "/api/workers",
-        "/api/contract-templates",
-        "/api/timesheets",
-      ];
-      await queryClient.invalidateQueries({
-        predicate: (q) =>
-          typeof q.queryKey[0] === "string" &&
-          RELATED_PREFIXES.some((p) => (q.queryKey[0] as string).startsWith(p)),
+      const withDoc = !!documentContent;
+      toast({
+        title: withDoc ? "Contract created with document" : "Contract created",
+        description: withDoc
+          ? "The AI-drafted contract and its rendered document have been saved."
+          : "The AI-drafted contract has been saved.",
       });
+      await invalidateContractQueries();
       onOpenChange(false);
     },
     onError: (err: any) => {
@@ -941,11 +1046,157 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     },
   });
 
+  // Mirror of the wizard's Generate Contract flow (contract-wizard-modal.tsx:
+  // 452-513): POST /api/contracts → render the document via the preview
+  // endpoint → PUT the rendered content onto contracts.contractDocument.
+  // Document-generation failures are logged but don't fail the create — the
+  // row is still saved, just without a document (same as Create Contract).
+  // Generate Document = render-only. Calls the preview endpoint to produce
+  // the fully-merged contract text and opens the document modal. NO write
+  // to the DB — Create is the only path that persists a contract row. If
+  // Create is clicked after Generate, the rendered content is auto-attached
+  // to the new contract via a PUT (see createContractMutation above).
+  const generateContractMutation = useMutation({
+    mutationFn: async () => {
+      const { contractPayload } = await buildContractPayload();
+      if (!contractPayload.templateId) {
+        throw new Error("A contract template is required to generate the document.");
+      }
+      if (!contractPayload.workerId) {
+        throw new Error("A worker is required to generate the document.");
+      }
+      const businessId = await resolveBusinessIdForRender(contractPayload);
+      if (!businessId) {
+        throw new Error("Could not determine the business for the document render.");
+      }
+      const resp = await apiRequest(
+        "POST",
+        "/api/contracts/universal/preview",
+        buildPreviewRequest(contractPayload, businessId),
+      );
+      const data = await resp.json();
+      return { renderedContent: data?.content ?? "", contractPayload };
+    },
+    onSuccess: ({ contractPayload, renderedContent }) => {
+      setDocumentContent(renderedContent);
+      setDocumentSummary(buildDocumentSummary(contractPayload));
+      setDocumentOpen(true);
+      if (!renderedContent) {
+        toast({
+          title: "Document rendered empty",
+          description: "The template returned no content — check that all variables have values.",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (err: any) => {
+      const msg = err?.message || "Unknown error";
+      toast({ title: "Couldn't generate document", description: msg, variant: "destructive" });
+    },
+  });
+
+  function buildDocumentSummary(contractPayload: Record<string, any>): ContractDocumentSummary {
+    const country = countries?.find?.((c: any) => c.id === contractPayload.countryId);
+    const template = contractTemplates?.find?.((t: any) => t.id === contractPayload.templateId);
+    const role = roleTitles?.find?.((r: any) => r.id === contractPayload.roleTitleId);
+    const currency = contractPayload.currency || "USD";
+    let rate = "";
+    if (contractPayload.rateType === "annual") {
+      const amount = contractPayload.totalPackageValue || contractPayload.rate;
+      if (amount) rate = `${currency} ${amount} per year`;
+    } else if (contractPayload.rate) {
+      rate = `${currency} ${contractPayload.rate} / ${contractPayload.rateType || "unit"}`;
+    }
+    const period = contractPayload.startDate
+      ? `${contractPayload.startDate}${contractPayload.endDate ? ` to ${contractPayload.endDate}` : " – Ongoing"}`
+      : undefined;
+    return {
+      workerName: resolvedRefs.workerId || undefined,
+      roleTitle: contractPayload.customRoleTitle || role?.title || undefined,
+      countryName: country?.name || undefined,
+      employmentType: contractPayload.employmentType
+        ? humanizeEnum(String(contractPayload.employmentType))
+        : undefined,
+      rate: rate || undefined,
+      period,
+      templateName: template?.name || undefined,
+    };
+  }
+
+  // Turn a single field into a display row for the structured preview modal.
+  // Returns null for fields that don't apply (e.g. an unset annual CTC on an
+  // hourly contract) so they can be filtered out of the section list.
+  function fieldRow(key: string): PreviewRow | null {
+    const rawValue = draft[key];
+    let value: string | null = null;
+    if (hasValue(rawValue)) {
+      if (key === "roleDescription" || key === "clientAddress") {
+        value = String(rawValue);
+      } else {
+        const resolved = resolveLabel(key, rawValue);
+        value = resolved && resolved.length > 0 ? resolved : displayValue(rawValue);
+      }
+    }
+    const label = FIELD_LABEL[key] ?? key;
+    // Long-form fields render across the full row.
+    const wide = key === "roleDescription" || key === "clientAddress";
+    return { label, value, wide };
+  }
+
+  function buildPreviewSections(): PreviewSection[] {
+    return STEP_DEFS.map((def) => {
+      const skipped = stepIsSkipped(def.step, draft);
+      if (skipped) {
+        return {
+          step: def.step,
+          title: def.title,
+          skipped: true,
+          emptyMessage:
+            def.step === 2
+              ? "This is an internal contract — no customer details required."
+              : def.step === 3
+                ? "This is an internal contract — billing setup is handled directly."
+                : "Not applicable for this contract.",
+          rows: [],
+        } as PreviewSection;
+      }
+      const keys = def.displayFields(draft, activeRole);
+      const rows = keys
+        .map((k) => fieldRow(k))
+        .filter((r): r is PreviewRow => r !== null);
+      return {
+        step: def.step,
+        title: def.title,
+        skipped: false,
+        rows,
+      } as PreviewSection;
+    });
+  }
+
+  function handlePreview() {
+    setPreviewSections(buildPreviewSections());
+    const worker = resolvedRefs.workerId;
+    const country = countries?.find?.((c: any) => c.id === draft.countryId)?.name;
+    const parts = [worker, country].filter(Boolean);
+    setPreviewHeaderSubtitle(
+      parts.length ? `Draft for ${parts.join(" · ")}` : "Review every step before you create the contract.",
+    );
+    setPreviewOpen(true);
+  }
+
   const serverGateReady = nextSteps.required.length === 0 && nextSteps.conditional.length === 0;
   // The server's checklist is authoritative — gate on it, but only after
   // it has actually spoken. Otherwise a fresh modal (empty nextSteps → looks
   // "ready") would let the user click Create with no draft.
-  const canCreate = hasServerResponded && serverGateReady && !createContractMutation.isPending;
+  const anyActionPending =
+    createContractMutation.isPending || generateContractMutation.isPending;
+  // All three action buttons enable on the same server-checklist signal
+  // once no other action is in flight. Generate is safe to re-run (no DB
+  // write); Create is the only path that persists a contract row.
+  const canCreate = hasServerResponded && serverGateReady && !anyActionPending;
+  // Preview may be opened freely at any time — it's a local render with no
+  // side effects, and works even on a partial draft.
+  const canPreview = hasServerResponded && !anyActionPending;
 
   const handleSend = () => {
     const text = input.trim();
@@ -2269,26 +2520,75 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
               >
                 Discard
               </Button>
-              <Button
-                type="button"
-                onClick={() => createContractMutation.mutate()}
-                disabled={!canCreate}
-                data-testid="button-ai-create-contract"
-              >
-                {createContractMutation.isPending ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Creating…
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" /> Create Contract
-                  </>
-                )}
-              </Button>
+              <div className="flex items-center justify-end gap-2 flex-nowrap min-w-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePreview}
+                  disabled={!canPreview}
+                  data-testid="button-ai-preview-contract"
+                  className="whitespace-nowrap shrink-0"
+                >
+                  <Eye className="h-3.5 w-3.5 mr-1.5" /> Preview
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => generateContractMutation.mutate()}
+                  disabled={!canCreate}
+                  data-testid="button-ai-generate-document"
+                  className="whitespace-nowrap shrink-0"
+                >
+                  {generateContractMutation.isPending ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Generating…
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="h-3.5 w-3.5 mr-1.5" /> Generate
+                    </>
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => createContractMutation.mutate()}
+                  disabled={!canCreate}
+                  data-testid="button-ai-create-contract"
+                  className="whitespace-nowrap shrink-0"
+                >
+                  {createContractMutation.isPending ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Creating…
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" /> Create
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
           </div>
         </div>
       </DialogContent>
+      <ContractPreviewModal
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        headerSubtitle={previewHeaderSubtitle}
+        sections={previewSections}
+        onGenerate={() => generateContractMutation.mutate()}
+        onGenerateDisabled={!canCreate}
+        generatePending={generateContractMutation.isPending}
+      />
+      <ContractDocumentModal
+        open={documentOpen}
+        onOpenChange={setDocumentOpen}
+        content={documentContent}
+        summary={documentSummary}
+      />
     </Dialog>
   );
 }
