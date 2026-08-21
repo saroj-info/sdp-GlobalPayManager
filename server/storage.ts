@@ -277,6 +277,10 @@ export interface IStorage {
   // Used to block workerType (engagement type) changes while a live
   // engagement exists.
   hasLiveContractForWorker(workerId: string): Promise<boolean>;
+  // Same "live" definition as hasLiveContractForWorker, scoped to a specific
+  // business. Used to block SDP admins from unlinking a shared worker while
+  // that business still has live engagements against them.
+  getLiveContractsForWorkerAndBusiness(workerId: string, businessId: string): Promise<Contract[]>;
   getAllContracts(): Promise<(Contract & { worker: Worker; business: Business; country: Country; roleTitle?: RoleTitle })[]>;
   createContract(contract: InsertContract): Promise<Contract>;
   getContractById(id: string): Promise<Contract | undefined>;
@@ -1742,6 +1746,25 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
     return !!row;
+  }
+
+  async getLiveContractsForWorkerAndBusiness(
+    workerId: string,
+    businessId: string,
+  ): Promise<Contract[]> {
+    // Same "live" shape as hasLiveContractForWorker, additionally scoped to a
+    // specific business — used by the unlink guard.
+    return await db
+      .select()
+      .from(contracts)
+      .where(
+        and(
+          eq(contracts.workerId, workerId),
+          eq(contracts.businessId, businessId),
+          inArray(contracts.status, ['draft', 'pending_sdp_review', 'ready_to_issue', 'pending', 'active'] as any),
+          or(isNull(contracts.endDate), gt(contracts.endDate, new Date())),
+        ),
+      );
   }
 
   async getAllContracts(): Promise<(Contract & { worker: Worker; business: Business; country: Country; roleTitle?: RoleTitle; thirdPartyBusinessName?: string })[]> {

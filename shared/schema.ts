@@ -302,9 +302,16 @@ export const workerBusinessAssociations = pgTable("worker_business_associations"
   addedBy: varchar("added_by").references(() => users.id), // Who added this association (business user or system)
   addedViaInvitation: boolean("added_via_invitation").default(false), // True if added through contractor invitation
   businessInvitationId: varchar("business_invitation_id").references(() => businessInvitations.id), // Link to original invitation
+  // The contract that surfaced this worker to the business. Used both for audit
+  // and to power the "block unlink while any active contract references this
+  // link" check. Nullable so pre-existing rows (added via invitation flow)
+  // don't fail the migration.
+  sourceContractId: varchar("source_contract_id").references(() => contracts.id),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("uniq_worker_business_active").on(table.workerId, table.businessId).where(sql`status = 'active'`),
+]);
 
 // Worker approval tokens - For single-click worker approval via email
 export const workerApprovals = pgTable("worker_approvals", {

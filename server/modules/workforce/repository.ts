@@ -9,7 +9,7 @@
  */
 
 import { db } from "../../db";
-import { workers, countries, businesses, contracts } from "@shared/schema";
+import { workers, countries, businesses, contracts, workerBusinessAssociations } from "@shared/schema";
 import { and, or, eq, ilike, inArray, sql, asc, desc, type SQL } from "drizzle-orm";
 import type { WorkerListQuery, WorkerListResult, WorkerListScope, SortKey } from "./types";
 
@@ -31,14 +31,25 @@ function buildWhere(scope: WorkerListScope, query: WorkerListQuery): SQL | undef
   if (scope.kind === "own_business") conditions.push(eq(workers.businessId, scope.businessId));
   if (scope.kind === "self")         conditions.push(eq(workers.id, scope.workerId));
   if (scope.kind === "own_business_or_host_client") {
-    // workers we employ OR workers placed at us via a contract's customerBusinessId
+    // Workers we employ OR workers placed at us via a contract's customerBusinessId
+    // OR workers shared into us via a worker_business_associations row (used
+    // when SDP creates an on-behalf contract for an SDP-direct worker — the
+    // customer's workforce should surface them like any other member).
     const hostClientWorkerIds = db
       .select({ workerId: contracts.workerId })
       .from(contracts)
       .where(eq(contracts.customerBusinessId, scope.businessId));
+    const linkedWorkerIds = db
+      .select({ workerId: workerBusinessAssociations.workerId })
+      .from(workerBusinessAssociations)
+      .where(and(
+        eq(workerBusinessAssociations.businessId, scope.businessId),
+        eq(workerBusinessAssociations.status, 'active'),
+      ));
     const scopeClause = or(
       eq(workers.businessId, scope.businessId),
       inArray(workers.id, hostClientWorkerIds),
+      inArray(workers.id, linkedWorkerIds),
     );
     if (scopeClause) conditions.push(scopeClause);
   }
@@ -49,7 +60,24 @@ function buildWhere(scope: WorkerListScope, query: WorkerListQuery): SQL | undef
   // by their scope — applying an extra AND on businessId would defeat the OR
   // in `own_business_or_host_client` (filtering out host-client workers).
   if (query.businessId && scope.kind === "all") {
-    conditions.push(eq(workers.businessId, query.businessId));
+    // Widen: when SDP-internal narrows the picker to a customer business,
+    // also surface SDP-direct workers so the admin can share an SDP employee
+    // into that customer via an on-behalf contract.
+    const sdpLinkedWorkerIds = db
+      .select({ workerId: workerBusinessAssociations.workerId })
+      .from(workerBusinessAssociations)
+      .where(and(
+        eq(workerBusinessAssociations.businessId, query.businessId),
+        eq(workerBusinessAssociations.status, 'active'),
+      ));
+    const pickerClause = or(
+      eq(workers.businessId, query.businessId),
+      // Any worker whose home is an SDP-owned business, regardless of the
+      // specific SDP row's id (there's only one, but this reads cleanly).
+      eq(businesses.isSdpOwned, true),
+      inArray(workers.id, sdpLinkedWorkerIds),
+    );
+    if (pickerClause) conditions.push(pickerClause);
   }
   if (query.countryId)   conditions.push(eq(workers.countryId, query.countryId));
   if (query.workerType)  conditions.push(eq(workers.workerType, query.workerType as any));
@@ -96,11 +124,29 @@ export async function fetchWorkerList(
     .limit(query.pageSize)
     .offset(offset);
 
-  const items = rows.map(r => ({
-    ...r.workers,
-    country: r.countries,
-    business: r.businesses,
-  }));
+  // For business_user scope, flag rows whose worker is home'd elsewhere
+  // (SDP-owned) so the UI can badge them as "SDP-employed" and grey out
+  // profile-edit affordances. Non-scoped views (SDP internal) always see
+  // the raw home business, so the flag is false there.
+  const currentBusinessId =
+    scope.kind === "own_business" ? scope.businessId :
+    scope.kind === "own_business_or_host_client" ? scope.businessId :
+    null;
+
+  const items = rows.map(r => {
+    const homeBiz = r.businesses as any;
+    const isSharedFromSdp = Boolean(
+      currentBusinessId
+      && homeBiz?.isSdpOwned === true
+      && r.workers.businessId !== currentBusinessId,
+    );
+    return {
+      ...r.workers,
+      country: r.countries,
+      business: r.businesses,
+      isSharedFromSdp,
+    };
+  });
 
   return { items, total, page: query.page, pageSize: query.pageSize };
 }

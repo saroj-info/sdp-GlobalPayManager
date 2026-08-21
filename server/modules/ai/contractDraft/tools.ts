@@ -177,7 +177,12 @@ export async function runTool(
       const raw = result.ok ? result.data.items : [];
       // Post-filter to the effective business (workforce repo only honours
       // query.businessId for scope='all', so we enforce it here for all scopes).
-      const inBusiness = raw.filter((w: any) => w.businessId === effectiveBusinessId);
+      // Also include SDP-direct workers — an SDP admin drafting an on-behalf
+      // contract can share an SDP employee into the customer business.
+      const inBusiness = raw.filter((w: any) =>
+        w.businessId === effectiveBusinessId
+        || w.business?.isSdpOwned === true,
+      );
 
       // Duplicate-name detection. If two rows share a normalised full name,
       // return ambiguous and NO ids — the model must ask for the email.
@@ -206,6 +211,7 @@ export async function runTool(
         workerType: w.workerType,
         countryCode: w.country?.code,
         businessName: w.business?.name,
+        sdpDirect: w.business?.isSdpOwned === true || undefined,
       }));
 
       const payload = { items, total: items.length };

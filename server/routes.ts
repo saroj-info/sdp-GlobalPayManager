@@ -8,6 +8,11 @@ import * as twoFactorAuth from "./twoFactorAuth";
 import { storage } from "./storage";
 import { registerTimesheetApprovalRoutes } from "./modules/timesheet-approval";
 import { registerWorkforceRoutes } from "./modules/workforce";
+import {
+  upsertContractAssociation,
+  isWorkerLinkedToBusiness,
+  deactivateAssociation,
+} from "./modules/workforce/associations";
 import { registerContractsRoutes } from "./modules/contracts";
 import { logContractChanges, TRACKED_CONTRACT_FIELDS } from "./modules/contracts/changeLog";
 import {
@@ -5692,7 +5697,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (userType !== 'sdp_internal') {
         const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) return res.status(404).json({ message: 'Business not found' });
-        if (worker.businessId !== business.id) {
+        // Allow shared workers: the customer business may inspect an SDP-direct
+        // worker they have an active association with (read-only).
+        const linked = worker.businessId === business.id
+          || await isWorkerLinkedToBusiness(worker.id, business.id);
+        if (!linked) {
           return res.status(403).json({ message: 'Access denied' });
         }
       }
@@ -5719,7 +5728,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (userType !== 'sdp_internal') {
         const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) return res.status(404).json({ message: 'Business not found' });
-        if (worker.businessId !== business.id) {
+        // Allow shared workers: the customer business may inspect an SDP-direct
+        // worker they have an active association with (read-only).
+        const linked = worker.businessId === business.id
+          || await isWorkerLinkedToBusiness(worker.id, business.id);
+        if (!linked) {
           return res.status(403).json({ message: 'Access denied' });
         }
       }
@@ -5764,6 +5777,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error('Error fetching worker change log:', error?.message || error);
       res.status(500).json({ message: 'Failed to fetch worker change log' });
+    }
+  });
+
+  // Unlink a shared worker (SDP-direct) from a customer business. SDP-only.
+  // Blocks the unlink while live contracts under that business exist.
+  app.post('/api/workers/:id/unlink-business', authMiddleware, async (req: any, res) => {
+    try {
+      const userType = req.user?.userType;
+      const { id: workerId } = req.params;
+      const { businessId } = req.body ?? {};
+
+      if (userType !== 'sdp_internal') {
+        return res.status(403).json({ message: 'Only SDP admins can unlink shared workers' });
+      }
+      if (!businessId || typeof businessId !== 'string') {
+        return res.status(400).json({ message: 'businessId is required in the request body' });
+      }
+
+      const worker = await storage.getWorkerById(workerId);
+      if (!worker) return res.status(404).json({ message: 'Worker not found' });
+
+      const liveContracts = await storage.getLiveContractsForWorkerAndBusiness(workerId, businessId);
+      if (liveContracts.length > 0) {
+        return res.status(409).json({
+          code: 'HAS_LIVE_CONTRACTS',
+          message: `Cannot unlink — worker has ${liveContracts.length} active contract(s) with this business. End the contracts first.`,
+        });
+      }
+
+      await deactivateAssociation(workerId, businessId);
+      res.json({ ok: true });
+    } catch (error: any) {
+      console.error('Error unlinking worker from business:', error?.message || error);
+      res.status(500).json({ message: 'Failed to unlink worker from business' });
     }
   });
 
@@ -6038,6 +6085,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       let business;
       let targetBusinessId;
+      // Hoisted so the post-create association upsert (below `storage.createContract`)
+      // can see which worker was contracted and whether it's a cross-business share.
+      let resolvedWorker: Worker | undefined;
       let auditFields: { createdByUserId: any; createdOnBehalfOfBusinessId: string | null } = {
         createdByUserId: userId,
         createdOnBehalfOfBusinessId: null,
@@ -6048,82 +6098,100 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!selectedBusinessId) {
           return res.status(400).json({ message: "Selected business ID is required when creating on behalf" });
         }
-        
+
         const sdpRole = req.user?.sdpRole;
-        
+
         // Super admins and admins have global access, agents must be restricted by accessibleBusinessIds
         if (sdpRole !== 'sdp_super_admin' && sdpRole !== 'sdp_admin') {
           if (!accessibleBusinessIds || !Array.isArray(accessibleBusinessIds) || accessibleBusinessIds.length === 0) {
             return res.status(403).json({ message: "Access denied: No accessible businesses configured for your account" });
           }
-          
+
           if (!accessibleBusinessIds.includes(selectedBusinessId)) {
             return res.status(403).json({ message: "Access denied: You don't have permission to create contracts for this business" });
           }
         }
-        
+
         // Get the selected business
         business = await storage.getBusinessById(selectedBusinessId);
         if (!business) {
           return res.status(404).json({ message: "Selected business not found" });
         }
-        
+
         // CRITICAL: Verify worker belongs to the target business (prevent cross-tenant linkage)
         if (!workerId) {
           return res.status(400).json({ message: "Worker ID is required" });
         }
-        
+
         const worker = await storage.getWorkerById(workerId);
         if (!worker) {
           return res.status(404).json({ message: "Worker not found" });
         }
-        
+
         if (worker.businessId !== selectedBusinessId) {
-          return res.status(403).json({ message: "Access denied: Worker does not belong to the selected business" });
+          // Allow SDP-direct workers to be contracted into a customer business —
+          // that's the whole "share an SDP employee with a customer" feature.
+          // Everything else (customer_A_worker → customer_B) stays forbidden.
+          const workerBusiness = worker.businessId
+            ? await storage.getBusinessById(worker.businessId)
+            : undefined;
+          if (!(workerBusiness as any)?.isSdpOwned) {
+            return res.status(403).json({ message: "Access denied: Worker does not belong to the selected business" });
+          }
         }
-        
+
+        resolvedWorker = worker;
         targetBusinessId = business.id;
         auditFields.createdOnBehalfOfBusinessId = business.id;
-        
+
       } else if (userType === 'sdp_internal') {
         // Standard SDP internal creation - determine business from the selected worker
         if (!workerId) {
           return res.status(400).json({ message: "Worker ID is required" });
         }
-        
+
         const worker = await storage.getWorkerById(workerId);
         if (!worker) {
           return res.status(404).json({ message: "Worker not found" });
         }
-        
+
         business = worker.businessId ? await storage.getBusinessById(worker.businessId) : undefined;
         if (!business) {
           return res.status(404).json({ message: "Worker's business not found" });
         }
+        resolvedWorker = worker;
         targetBusinessId = business.id;
-        
+
       } else {
         // For regular business users, get their own business
         business = await storage.getPrimaryBusinessForUser(userId);
-        
+
         if (!business) {
           return res.status(404).json({ message: "Business not found" });
         }
-        
+
         // CRITICAL: Verify worker belongs to the user's business (prevent cross-tenant linkage)
         if (!workerId) {
           return res.status(400).json({ message: "Worker ID is required" });
         }
-        
+
         const worker = await storage.getWorkerById(workerId);
         if (!worker) {
           return res.status(404).json({ message: "Worker not found" });
         }
-        
+
         if (worker.businessId !== business.id) {
-          return res.status(403).json({ message: "Access denied: Worker does not belong to your business" });
+          // Business_user may create a follow-on contract for a worker who has
+          // been shared into their business (e.g. an SDP-direct worker linked
+          // via an SDP-issued contract). Accept an active association as
+          // equivalent to owning the worker for the purposes of this write.
+          const linked = await isWorkerLinkedToBusiness(worker.id, business.id);
+          if (!linked) {
+            return res.status(403).json({ message: "Access denied: Worker does not belong to your business" });
+          }
         }
-        
+
+        resolvedWorker = worker;
         targetBusinessId = business.id;
       }
       
@@ -6241,6 +6309,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const contract = await storage.createContract(finalContractData as any);
+
+      // If the contract's business differs from the worker's home business,
+      // the worker is being shared into another business — upsert the
+      // association so they appear on the target's workforce, guards let
+      // that business use them, and future unlink can be blocked while
+      // this contract is live.
+      if (resolvedWorker && resolvedWorker.businessId && resolvedWorker.businessId !== contract.businessId) {
+        try {
+          await upsertContractAssociation(
+            resolvedWorker.id,
+            contract.businessId,
+            contract.id,
+            userId,
+          );
+        } catch (assocError: any) {
+          console.error('Failed to upsert worker-business association:', assocError?.message ?? assocError);
+          // Non-fatal — the contract exists. The next contract or an SDP-admin
+          // repair action can re-establish the association.
+        }
+      }
 
       // Handle remuneration lines if provided
       const remunerationLines = req.body.remunerationLines;
@@ -7616,7 +7704,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ...req.body,
           contractId: activeContract.id,
           workerId: worker.id,
-          businessId: worker.businessId,
+          // Timesheet ownership follows the CONTRACT, not the worker's home
+          // business. Critical for shared workers: an SDP-direct worker on
+          // a customer's on-behalf contract lands the timesheet under the
+          // customer's tenant, not SDP's, so the customer's list and their
+          // approver actually see it.
+          businessId: activeContract.businessId,
           createdBy: userId,
         };
 
@@ -7625,40 +7718,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (userType === 'sdp_internal' || userType === 'business_user') {
         // SDP internal and business users can create timesheets on behalf of workers
         const { workerId, contractId } = req.body;
-        
+
         // Validate required fields
         if (!workerId || !contractId) {
           return res.status(400).json({ message: "workerId and contractId are required" });
         }
-        
+
         // Get the worker and verify access
         const worker = await storage.getWorkerById(workerId);
         if (!worker) {
           return res.status(404).json({ message: "Worker not found" });
         }
-        
-        // Business users can only create timesheets for workers in their accessible businesses
-        if (userType === 'business_user') {
-          const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
-          const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
-          const hasAccess = (ownedBusiness && ownedBusiness.id === worker.businessId) || 
-                           accessibleBusinessIds.includes(worker.businessId);
-          
-          if (!hasAccess) {
-            return res.status(403).json({ message: "Unauthorized to create timesheets for this worker" });
-          }
-        }
-        
-        // Get the contract and verify it belongs to the worker
+
+        // Load the contract up front — auth AND businessId derivation both
+        // key off contract.businessId (see comment on the worker path).
         const contract = await storage.getContractById(contractId);
         if (!contract) {
           return res.status(404).json({ message: "Contract not found" });
         }
-        
+
         if (contract.workerId !== workerId) {
           return res.status(400).json({ message: "Contract does not belong to the specified worker" });
         }
-        
+
+        // Business users can only create timesheets for contracts they can
+        // act on. Compare against contract.businessId, not worker.businessId —
+        // shared workers have contracts under multiple businesses.
+        if (userType === 'business_user') {
+          const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
+          const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
+          const hasAccess = (ownedBusiness && ownedBusiness.id === contract.businessId) ||
+                           accessibleBusinessIds.includes(contract.businessId);
+
+          if (!hasAccess) {
+            return res.status(403).json({ message: "Unauthorized to create timesheets for this worker" });
+          }
+        }
+
         if (!contract.requiresTimesheet) {
           return res.status(400).json({ message: "Contract does not require timesheets" });
         }
@@ -7669,7 +7765,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const timesheetData = {
           ...req.body,
-          businessId: worker.businessId,
+          businessId: contract.businessId,
           createdBy: userId,
         };
 
@@ -8162,10 +8258,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Worker profile not found" });
         }
 
+        // Leave belongs to the CONTRACT's business, not the worker's home.
+        // Shared workers hold contracts across multiple businesses; using
+        // worker.businessId would file the leave under SDP even when it's
+        // taken against a customer contract.
+        const requestedContractId = body.contractId;
+        const workerContracts = await storage.getContractsByWorker(worker.id);
+        const activeContracts = workerContracts.filter((c: any) => c.status === 'active');
+
+        let scopeContract: any | undefined;
+        if (requestedContractId) {
+          scopeContract = activeContracts.find((c: any) => c.id === requestedContractId);
+          if (!scopeContract) {
+            return res.status(400).json({ message: "The specified contract is not active for this worker" });
+          }
+        } else if (activeContracts.length === 1) {
+          scopeContract = activeContracts[0];
+        } else if (activeContracts.length === 0) {
+          return res.status(400).json({ message: "No active contract found for worker" });
+        } else {
+          return res.status(400).json({
+            message: "Multiple active contracts — include contractId in the request to say which business the leave is against.",
+          });
+        }
+
+        // contractId is not a leave_requests column today (leave is
+        // worker-scoped in the schema); strip it from body before insert.
+        const { contractId: _stripContractId, ...leaveBody } = body;
         const leaveRequestData = {
-          ...body,
+          ...leaveBody,
           workerId: worker.id,
-          businessId: worker.businessId,
+          businessId: scopeContract.businessId,
         };
 
         const leaveRequest = await storage.createLeaveRequest(leaveRequestData);
@@ -8703,12 +8826,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: 'Worker not found' });
         }
 
-        // Verify business user has access to this worker
+        // Verify business user has access to this worker — own worker OR a
+        // worker shared into this business via an active association.
         if (user.userType === 'business_user') {
           const businesses = await storage.getBusinessesForUser(userId);
-          const hasAccess = businesses.some((b: Business) => b.id === businessId && worker.businessId === b.id);
-          
-          if (!hasAccess) {
+          const isOwnerOfTarget = businesses.some((b: Business) => b.id === businessId);
+          if (!isOwnerOfTarget) {
+            return res.status(403).json({ message: 'You do not have access to create invoices for this worker' });
+          }
+          const linked = worker.businessId === businessId
+            || await isWorkerLinkedToBusiness(worker.id, businessId);
+          if (!linked) {
             return res.status(403).json({ message: 'You do not have access to create invoices for this worker' });
           }
         }

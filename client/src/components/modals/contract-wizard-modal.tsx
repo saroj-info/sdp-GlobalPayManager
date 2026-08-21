@@ -343,9 +343,14 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   const filteredWorkers = useMemo(() => {
     let filtered = workers.filter((worker: any) => worker.id && worker.id.trim() !== '');
 
-    // Filter by business if SDP user is creating on behalf
+    // Filter by business if SDP user is creating on behalf. Also include
+    // SDP-direct workers so the admin can share an SDP employee into the
+    // selected customer business via this on-behalf contract.
     if (isSDPInternal && formData.onBehalf && formData.selectedBusinessId) {
-      filtered = filtered.filter((worker: any) => worker.businessId === formData.selectedBusinessId);
+      filtered = filtered.filter((worker: any) =>
+        worker.businessId === formData.selectedBusinessId
+        || worker.business?.isSdpOwned === true
+      );
     }
     
     // Filter by search term
@@ -1010,40 +1015,56 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
 
               {/* On-behalf section for SDP Internal users */}
               {isSDPInternal && (
-                <div className="p-4 bg-primary-50 border border-primary-200 rounded-lg space-y-4 mb-6">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="contractOnBehalf"
-                      checked={formData.onBehalf}
-                      onCheckedChange={(checked) => {
-                        setFormData({ 
-                          ...formData, 
-                          onBehalf: !!checked,
-                          selectedBusinessId: !!checked ? formData.selectedBusinessId : ''
-                        });
-                      }}
-                      data-testid="checkbox-onbehalf-contract"
-                    />
-                    <Label htmlFor="contractOnBehalf" className="text-sm font-medium text-primary-900 cursor-pointer">
-                      Creating contract on behalf of a business
-                    </Label>
-                  </div>
-                  
+                <div className="mb-6 rounded-xl border border-secondary-200 bg-white shadow-sm overflow-hidden">
+                  <label
+                    htmlFor="contractOnBehalf"
+                    className="flex items-start gap-3 p-4 cursor-pointer hover:bg-secondary-50 transition-colors"
+                  >
+                    <div className="flex items-center justify-center h-9 w-9 rounded-lg bg-primary-50 text-primary-600 flex-shrink-0">
+                      <Building2 className="h-4 w-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold text-secondary-900">
+                          Creating contract on behalf of a business
+                        </span>
+                        <Checkbox
+                          id="contractOnBehalf"
+                          checked={formData.onBehalf}
+                          onCheckedChange={(checked) => {
+                            setFormData({
+                              ...formData,
+                              onBehalf: !!checked,
+                              selectedBusinessId: !!checked ? formData.selectedBusinessId : ''
+                            });
+                          }}
+                          data-testid="checkbox-onbehalf-contract"
+                          className="ml-auto"
+                        />
+                      </div>
+                      <p className="text-xs text-secondary-500 mt-0.5">
+                        {formData.onBehalf
+                          ? "The contract is between the customer business and the worker."
+                          : "Off — the contract is between SDP and the worker directly."}
+                      </p>
+                    </div>
+                  </label>
+
                   {formData.onBehalf && (
-                    <div>
-                      <Label htmlFor="selectedBusinessContract" className="text-sm font-medium text-secondary-900">
-                        Select Business <span className="text-red-500">*</span>
+                    <div className="border-t border-secondary-200 bg-secondary-50/50 p-4">
+                      <Label htmlFor="selectedBusinessContract" className="text-xs font-semibold uppercase tracking-wide text-secondary-600">
+                        Business <span className="text-red-500 normal-case">*</span>
                       </Label>
-                      <Select 
-                        value={formData.selectedBusinessId} 
+                      <Select
+                        value={formData.selectedBusinessId}
                         onValueChange={(value) => setFormData({ ...formData, selectedBusinessId: value })}
                         disabled={businessesLoading || !Array.isArray(businesses) || businesses.length === 0}
                         data-testid="select-business-contract"
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="mt-1.5 bg-white">
                           <SelectValue placeholder={
-                            businessesLoading 
-                              ? "Loading businesses..." 
+                            businessesLoading
+                              ? "Loading businesses..."
                               : !Array.isArray(businesses) || businesses.length === 0
                               ? "No businesses available"
                               : "Select a business"
@@ -1057,7 +1078,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                               <>
                                 {registered.length > 0 && (
                                   <SelectGroup>
-                                    <SelectLabel className="text-xs font-semibold text-blue-700 bg-blue-50 px-2 py-1">
+                                    <SelectLabel className="text-[11px] font-semibold uppercase tracking-wide text-blue-700 bg-blue-50 px-2 py-1">
                                       Registered Businesses
                                     </SelectLabel>
                                     {registered.map((business: any) => (
@@ -1072,7 +1093,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                                 )}
                                 {hostClients.length > 0 && (
                                   <SelectGroup>
-                                    <SelectLabel className="text-xs font-semibold text-amber-700 bg-amber-50 px-2 py-1">
+                                    <SelectLabel className="text-[11px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-50 px-2 py-1">
                                       Host Clients
                                     </SelectLabel>
                                     {hostClients.map((business: any) => (
@@ -1080,7 +1101,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                                         <div className="flex items-center gap-2">
                                           <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0" />
                                           <span>{business.name}</span>
-                                          <span className="text-xs font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded ml-1">Host Client</span>
+                                          <span className="text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded ml-1 uppercase tracking-wide">Host Client</span>
                                         </div>
                                       </SelectItem>
                                     ))}
@@ -1092,7 +1113,12 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                         </SelectContent>
                       </Select>
                       {businessesLoading && (
-                        <p className="text-xs text-secondary-500 mt-1">Loading available businesses...</p>
+                        <p className="text-xs text-secondary-500 mt-2">Loading available businesses…</p>
+                      )}
+                      {!businessesLoading && formData.selectedBusinessId && (
+                        <p className="text-xs text-secondary-500 mt-2">
+                          Worker picker below will show this business's own workers plus any SDP-employed workers available to share.
+                        </p>
                       )}
                     </div>
                   )}
@@ -1171,7 +1197,17 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                         </div>
                         <div className="flex-1 min-w-0">
                           <Label htmlFor={worker.id} className="font-medium text-secondary-900 cursor-pointer block">
-                            {worker.firstName} {worker.lastName}
+                            <span className="inline-flex items-center gap-2">
+                              {worker.firstName} {worker.lastName}
+                              {worker.business?.isSdpOwned && (
+                                <span
+                                  className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded border border-primary-300 text-primary-700"
+                                  title="SDP-employed worker — sharing them into this business will surface them on the business's workforce."
+                                >
+                                  SDP
+                                </span>
+                              )}
+                            </span>
                           </Label>
                           <div className="text-sm text-secondary-600 truncate">{worker.email}</div>
                         </div>
@@ -1197,8 +1233,16 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                               </span>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="font-medium text-secondary-900 truncate">
+                              <div className="font-medium text-secondary-900 truncate inline-flex items-center gap-2">
                                 {worker.firstName} {worker.lastName}
+                                {worker.business?.isSdpOwned && (
+                                  <span
+                                    className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded border border-primary-300 text-primary-700"
+                                    title="SDP-employed worker — sharing them into this business will surface them on the business's workforce."
+                                  >
+                                    SDP
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>

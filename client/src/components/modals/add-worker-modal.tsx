@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { Building2 } from "lucide-react";
 
 interface AddWorkerModalProps {
   open: boolean;
@@ -201,45 +202,56 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
 
           {/* On-behalf section for SDP Internal users */}
           {isSDPInternal && (
-            <div className="p-4 bg-primary-50 border border-primary-200 rounded-lg space-y-4">
-              <div className="flex items-center space-x-2">
-                <Checkbox 
-                  id="onBehalf"
-                  checked={formData.onBehalf}
-                  onCheckedChange={(checked) => {
-                    setFormData({ 
-                      ...formData, 
-                      onBehalf: !!checked,
-                      selectedBusinessId: !!checked ? formData.selectedBusinessId : '' // Clear selection if unchecked
-                    });
-                  }}
-                  data-testid="checkbox-onbehalf-worker"
-                />
-                <Label htmlFor="onBehalf" className="text-sm font-medium text-primary-900 cursor-pointer">
-                  Creating worker on behalf of a business
-                </Label>
-              </div>
-              {!formData.onBehalf && (
-                <p className="text-xs text-primary-800 -mt-2 ml-6">
-                  Off = worker is employed directly by SDP.
-                </p>
-              )}
+            <div className="rounded-xl border border-secondary-200 bg-white shadow-sm overflow-hidden">
+              <label
+                htmlFor="onBehalf"
+                className="flex items-start gap-3 p-4 cursor-pointer hover:bg-secondary-50 transition-colors"
+              >
+                <div className="flex items-center justify-center h-9 w-9 rounded-lg bg-primary-50 text-primary-600 flex-shrink-0">
+                  <Building2 className="h-4 w-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold text-secondary-900">
+                      Creating worker on behalf of a business
+                    </span>
+                    <Checkbox
+                      id="onBehalf"
+                      checked={formData.onBehalf}
+                      onCheckedChange={(checked) => {
+                        setFormData({
+                          ...formData,
+                          onBehalf: !!checked,
+                          selectedBusinessId: !!checked ? formData.selectedBusinessId : ''
+                        });
+                      }}
+                      data-testid="checkbox-onbehalf-worker"
+                      className="ml-auto"
+                    />
+                  </div>
+                  <p className="text-xs text-secondary-500 mt-0.5">
+                    {formData.onBehalf
+                      ? "The worker will be employed by the selected business."
+                      : "Off — the worker is employed directly by SDP."}
+                  </p>
+                </div>
+              </label>
 
               {formData.onBehalf && (
-                <div>
-                  <Label htmlFor="selectedBusiness" className="text-sm font-medium text-secondary-900">
-                    Select Business <span className="text-red-500">*</span>
+                <div className="border-t border-secondary-200 bg-secondary-50/50 p-4">
+                  <Label htmlFor="selectedBusiness" className="text-xs font-semibold uppercase tracking-wide text-secondary-600">
+                    Business <span className="text-red-500 normal-case">*</span>
                   </Label>
-                  <Select 
-                    value={formData.selectedBusinessId} 
+                  <Select
+                    value={formData.selectedBusinessId}
                     onValueChange={(value) => setFormData({ ...formData, selectedBusinessId: value })}
                     disabled={businessesLoading || !Array.isArray(businesses) || businesses.length === 0}
                     data-testid="select-business-worker"
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="mt-1.5 bg-white">
                       <SelectValue placeholder={
-                        businessesLoading 
-                          ? "Loading businesses..." 
+                        businessesLoading
+                          ? "Loading businesses..."
                           : !Array.isArray(businesses) || businesses.length === 0
                           ? "No businesses available"
                           : "Select a business"
@@ -254,7 +266,7 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
                     </SelectContent>
                   </Select>
                   {businessesLoading && (
-                    <p className="text-xs text-secondary-500 mt-1">Loading available businesses...</p>
+                    <p className="text-xs text-secondary-500 mt-2">Loading available businesses…</p>
                   )}
                 </div>
               )}

@@ -256,9 +256,14 @@ export default function Workforce() {
                             <Badge variant={worker.workerType === 'employee' ? 'default' : 'secondary'} className="capitalize flex-shrink-0">
                               {worker.workerType === 'third_party_worker' ? 'Third Party' : worker.workerType}
                             </Badge>
-                            {worker.business?.isSdpOwned && (
+                            {worker.business?.isSdpOwned && !worker.isSharedFromSdp && (
                               <Badge variant="outline" className="border-primary-300 text-primary-700 flex-shrink-0">
                                 SDP (direct)
+                              </Badge>
+                            )}
+                            {worker.isSharedFromSdp && (
+                              <Badge variant="outline" className="border-blue-300 text-blue-700 flex-shrink-0" title="This worker is employed by SDP and shared into your business. Profile edits are SDP-only.">
+                                SDP-employed
                               </Badge>
                             )}
                           </div>
@@ -361,7 +366,14 @@ export default function Workforce() {
                                 {worker.firstName[0]}{worker.lastName[0]}
                               </span>
                             </div>
-                            <span className="font-medium">{worker.firstName} {worker.lastName}</span>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-medium truncate">{worker.firstName} {worker.lastName}</span>
+                              {worker.isSharedFromSdp && (
+                                <Badge variant="outline" className="border-blue-300 text-blue-700 flex-shrink-0" title="Employed by SDP; shared into your business.">
+                                  SDP-employed
+                                </Badge>
+                              )}
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell>{worker.email}</TableCell>

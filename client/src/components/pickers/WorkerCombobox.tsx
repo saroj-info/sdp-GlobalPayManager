@@ -147,7 +147,14 @@ export function WorkerCombobox({
                     >
                       <Check className={cn('mr-2 h-4 w-4', value === w.id ? 'opacity-100' : 'opacity-0')} />
                       <div className="flex flex-col">
-                        <span>{w.firstName} {w.lastName}</span>
+                        <span className="flex items-center gap-2">
+                          {w.firstName} {w.lastName}
+                          {w.business?.isSdpOwned && (
+                            <span className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded border border-primary-300 text-primary-700">
+                              SDP
+                            </span>
+                          )}
+                        </span>
                         {w.email && (
                           <span className="text-xs text-muted-foreground">{w.email}</span>
                         )}
