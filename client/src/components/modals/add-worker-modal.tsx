@@ -36,8 +36,9 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
     thirdPartyEmail: '',
     thirdPartyPhone: '',
     thirdPartyCountryId: '',
-    // On-behalf fields for SDP internal users
-    onBehalf: isSDPInternal, // SDP users always create on behalf of business
+    // On-behalf fields for SDP internal users. Default off so admins land on
+    // the "SDP-employed worker" path; ticking the box switches to on-behalf.
+    onBehalf: false,
     selectedBusinessId: '',
   });
 
@@ -107,8 +108,10 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
   const handleSubmit = (e: React.FormEvent, sendInvitation: boolean = true) => {
     e.preventDefault();
     
-    // Validate business selection for SDP internal users (always required)
-    if (isSDPInternal && !formData.selectedBusinessId) {
+    // Only require a business when the SDP admin has explicitly opted into
+    // on-behalf. With the toggle off the worker is employed by SDP itself and
+    // the server routes them to the SDP-owned business row.
+    if (isSDPInternal && formData.onBehalf && !formData.selectedBusinessId) {
       toast({
         title: "Error",
         description: "Please select a business to create this worker for.",
@@ -216,7 +219,12 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
                   Creating worker on behalf of a business
                 </Label>
               </div>
-              
+              {!formData.onBehalf && (
+                <p className="text-xs text-primary-800 -mt-2 ml-6">
+                  Off = worker is employed directly by SDP.
+                </p>
+              )}
+
               {formData.onBehalf && (
                 <div>
                   <Label htmlFor="selectedBusiness" className="text-sm font-medium text-secondary-900">

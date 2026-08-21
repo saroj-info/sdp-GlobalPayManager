@@ -256,6 +256,11 @@ export default function Workforce() {
                             <Badge variant={worker.workerType === 'employee' ? 'default' : 'secondary'} className="capitalize flex-shrink-0">
                               {worker.workerType === 'third_party_worker' ? 'Third Party' : worker.workerType}
                             </Badge>
+                            {worker.business?.isSdpOwned && (
+                              <Badge variant="outline" className="border-primary-300 text-primary-700 flex-shrink-0">
+                                SDP (direct)
+                              </Badge>
+                            )}
                           </div>
                           <p className="text-sm text-secondary-600 truncate">{worker.email}</p>
                         </div>
@@ -373,7 +378,15 @@ export default function Workforce() {
                         </TableCell>
                         {(user as any)?.userType === 'sdp_internal' && (
                           <TableCell>
-                            {(businesses as any[]).find(b => b.id === worker.businessId)?.name || '-'}
+                            {worker.business?.isSdpOwned ? (
+                              <Badge variant="outline" className="border-primary-300 text-primary-700">
+                                SDP (direct)
+                              </Badge>
+                            ) : (
+                              worker.business?.name
+                                ?? (businesses as any[]).find(b => b.id === worker.businessId)?.name
+                                ?? '-'
+                            )}
                           </TableCell>
                         )}
                         <TableCell>

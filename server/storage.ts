@@ -467,6 +467,10 @@ export interface IStorage {
   getBusinessById(id: string): Promise<Business | undefined>;
   getAllUsers(): Promise<User[]>;
   getBusinesses(): Promise<Business[]>;
+  // Returns the single "SDP as employer" business row, creating it on first call.
+  // Workers hired directly by SDP (no customer business) point their businessId
+  // at this row so every downstream join / tenant guard keeps working unchanged.
+  ensureSdpOwnedBusiness(): Promise<Business>;
 
   // Email Template Management Operations
   // Template Definitions
@@ -4242,6 +4246,56 @@ ${variables.remunerationLines ? `**Remuneration Breakdown:**\n${variables.remune
 
   async getBusinesses(): Promise<Business[]> {
     return await db.select().from(businesses);
+  }
+
+  async ensureSdpOwnedBusiness(): Promise<Business> {
+    const [existing] = await db
+      .select()
+      .from(businesses)
+      .where(eq(businesses.isSdpOwned, true))
+      .limit(1);
+    if (existing) return existing;
+
+    // Owner has to be a real user for the FK. Prefer a super_admin; fall back
+    // to any sdp_internal user (covers seed setups where the super_admin row
+    // hasn't been promoted yet).
+    let [owner] = await db
+      .select()
+      .from(users)
+      .where(eq(users.sdpRole, 'sdp_super_admin'))
+      .limit(1);
+    if (!owner) {
+      [owner] = await db
+        .select()
+        .from(users)
+        .where(eq(users.userType, 'sdp_internal'))
+        .limit(1);
+    }
+    if (!owner) {
+      throw new Error('Cannot ensure SDP-owned business: no sdp_internal user exists to own the row');
+    }
+
+    try {
+      const [created] = await db
+        .insert(businesses)
+        .values({
+          name: 'SDP Global Pay',
+          ownerId: owner.id,
+          isRegistered: true,
+          isSdpOwned: true,
+        } as any)
+        .returning();
+      return created;
+    } catch {
+      // Race: the partial unique index rejected a concurrent insert. Re-select.
+      const [row] = await db
+        .select()
+        .from(businesses)
+        .where(eq(businesses.isSdpOwned, true))
+        .limit(1);
+      if (!row) throw new Error('SDP-owned business insert failed and re-select found no row');
+      return row;
+    }
   }
 
   // Email Template Management Implementation

@@ -3284,6 +3284,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!business) {
         return res.status(404).json({ message: "Business not found for user" });
       }
+      // Refuse to grant login access to the SDP-owned employer row — it's
+      // an internal SDP construct, not a real customer business.
+      if ((business as any).isSdpOwned) {
+        return res.status(403).json({ message: "Cannot invite users into the SDP-owned business" });
+      }
 
       // Validate ONLY the client-supplied fields here. `businessId`,
       // `invitedByUserId`, `token`, `expiresAt` are server-derived below and
@@ -4936,11 +4941,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/businesses', authMiddleware, async (req: any, res) => {
     try {
       const userId = req.user?.id;
+      // Strip the SDP-owned flag — only the server-side seed helper is
+      // allowed to mint that row. A body-injected value would let a caller
+      // create a second "SDP" business (blocked by the partial unique index)
+      // or, worse, promote their own business into a privileged one.
+      const { isSdpOwned: _stripIsSdpOwned, ...safeBody } = req.body ?? {};
       const data = insertBusinessSchema.parse({
-        ...req.body,
+        ...safeBody,
         ownerId: userId,
       });
-      
+
       const business = await storage.createBusiness(data);
       res.json(business);
     } catch (error: any) {
@@ -4954,26 +4964,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userType = req.user?.userType;
       const userId = req.user?.id;
       const accessibleBusinessIds = req.user?.accessibleBusinessIds;
-      
+      // The SDP-owned "employer of record" row is filtered out by default —
+      // it's not a customer business and shouldn't show up in on-behalf
+      // pickers, contract wizard business selects, or the &Business
+      // mention popover. Admin-only management surfaces that legitimately
+      // need it can opt in with ?includeSdp=true.
+      const includeSdp = req.query?.includeSdp === 'true';
+
       // SDP internal users can fetch all businesses, business users can fetch their own
       if (userType === 'sdp_internal') {
         const allBusinesses = await storage.getBusinesses();
-      
+
         // Filter businesses based on user's accessible business IDs
         // Super admins (no restrictions) can see all businesses
         let accessibleBusinesses = allBusinesses;
-        
+
         if (accessibleBusinessIds && accessibleBusinessIds.length > 0) {
-          accessibleBusinesses = allBusinesses.filter(business => 
+          accessibleBusinesses = allBusinesses.filter(business =>
             accessibleBusinessIds.includes(business.id)
           );
         }
-        
+
+        if (!includeSdp) {
+          accessibleBusinesses = accessibleBusinesses.filter(b => !(b as any).isSdpOwned);
+        }
+
         return res.json(accessibleBusinesses);
       } else if (userType === 'business_user') {
         // Business users can only fetch their own businesses
         const userBusinesses = await storage.getBusinessesForUser(userId);
-        return res.json(userBusinesses);
+        const filtered = includeSdp
+          ? userBusinesses
+          : userBusinesses.filter(b => !(b as any).isSdpOwned);
+        return res.json(filtered);
       } else {
         return res.status(403).json({ message: "Access denied" });
       }
@@ -5306,10 +5329,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         auditFields.createdOnBehalfOfBusinessId = business.id;
         
       } else {
-        // Standard creation - get business by owner
-        business = await storage.getPrimaryBusinessForUser(userId);
-        if (!business) {
-          return res.status(404).json({ message: "Business not found" });
+        if (userType === 'sdp_internal') {
+          // SDP admin creating a worker without on-behalf → worker is
+          // employed directly by SDP. Route them to the single SDP-owned
+          // business row so every downstream join keeps working.
+          business = await storage.ensureSdpOwnedBusiness();
+        } else {
+          // Standard creation - get business by owner
+          business = await storage.getPrimaryBusinessForUser(userId);
+          if (!business) {
+            return res.status(404).json({ message: "Business not found" });
+          }
         }
         targetBusinessId = business.id;
       }

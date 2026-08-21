@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { storage } from "./storage";
 
 const app = express();
 
@@ -73,6 +74,16 @@ app.use((req, res, next) => {
     await setupVite(app, server);
   } else {
     serveStatic(app);
+  }
+
+  // Seed the "SDP as employer" business row so admins can hire workers
+  // directly under SDP. Best-effort — on a fresh DB with no sdp_internal
+  // users yet the throw is expected; the POST /api/workers fallback will
+  // lazily retry once a user exists.
+  try {
+    await storage.ensureSdpOwnedBusiness();
+  } catch (err: any) {
+    log(`SDP-owned business seed skipped: ${err?.message ?? err}`);
   }
 
   // ALWAYS serve the app on the port specified in the environment variable PORT

@@ -101,11 +101,16 @@ export const businesses = pgTable("businesses", {
   contactEmail: varchar("contact_email"),
   contactName: varchar("contact_name"),
   address: text("address"), // optional postal/business address — shown on contract preview/signing pages for host clients
+  // Marks the single "SDP as employer" row. Workers hired directly by SDP
+  // (no customer business) point their businessId at this row so every
+  // downstream join / tenant guard keeps working unchanged.
+  isSdpOwned: boolean("is_sdp_owned").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
   index("idx_businesses_owner").on(table.ownerId),
   index("idx_businesses_parent").on(table.parentBusinessId),
+  uniqueIndex("uniq_businesses_sdp_owned").on(table.isSdpOwned).where(sql`is_sdp_owned = true`),
 ]);
 
 // Countries and their SDP entities
