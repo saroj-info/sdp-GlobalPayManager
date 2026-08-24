@@ -33,6 +33,7 @@ function parseQuery(req: any): WorkerListQuery {
     workerType: q.workerType ? String(q.workerType) : undefined,
     businessId: q.businessId ? String(q.businessId) : undefined,
     sortBy,
+    includeSdpCandidates: q.includeSdpCandidates === "true" || q.includeSdpCandidates === true,
   };
 }
 

@@ -33,6 +33,14 @@ interface WorkerComboboxProps {
    * name without forcing the workers list to fetch on mount.
    */
   initialWorker?: { id: string; firstName?: string; lastName?: string; email?: string } | null;
+  /**
+   * When true (and combined with `businessId`), the picker also surfaces
+   * SDP-direct workers as sharing candidates. Use in flows where the caller
+   * is drafting an on-behalf contract that can share an SDP employee into
+   * the picked business. Default false — payslips / leave-requests / any
+   * "workers already on this business" flow keeps it off.
+   */
+  includeSdpCandidates?: boolean;
 }
 
 /**
@@ -49,6 +57,7 @@ export function WorkerCombobox({
   placeholder = 'Select worker…',
   testId,
   initialWorker,
+  includeSdpCandidates,
 }: WorkerComboboxProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -64,13 +73,14 @@ export function WorkerCombobox({
 
   const enabled = open;
   const { data, isFetching } = useQuery<{ items: any[]; total: number; page: number; pageSize: number }>({
-    queryKey: ['/api/workers/list', { search: debouncedSearch, businessId, page, pageSize: 20 }],
+    queryKey: ['/api/workers/list', { search: debouncedSearch, businessId, page, pageSize: 20, includeSdpCandidates: !!includeSdpCandidates }],
     queryFn: async () => {
       const qs = new URLSearchParams();
       qs.set('page', String(page));
       qs.set('pageSize', '20');
       if (debouncedSearch) qs.set('search', debouncedSearch);
       if (businessId) qs.set('businessId', businessId);
+      if (includeSdpCandidates) qs.set('includeSdpCandidates', 'true');
       return (await apiRequest('GET', `/api/workers/list?${qs.toString()}`)).json();
     },
     enabled,

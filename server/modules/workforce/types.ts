@@ -23,6 +23,12 @@ export interface WorkerListQuery {
   workerType?: string;
   businessId?: string;
   sortBy: SortKey;
+  // Opt-in for the "worker picker for sharing" flow: when true AND
+  // scope='all' AND businessId is set, the result also includes SDP-direct
+  // workers that could be shared into that business. Default false — for
+  // browsing an existing business's workforce, SDP-direct workers only
+  // appear if they've been actively shared in via an association row.
+  includeSdpCandidates?: boolean;
 }
 
 /** Paginated envelope returned to the client. */

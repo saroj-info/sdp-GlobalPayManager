@@ -25,6 +25,7 @@ import Admin from "@/pages/admin";
 import PayItems from "@/pages/pay-items";
 import UserManagement from "@/pages/user-management";
 import BusinessUsers from "@/pages/business-users";
+import SdpBusinesses from "@/pages/sdp-businesses";
 import CountryManagement from "@/pages/country-management";
 import Resources from "@/pages/resources";
 import CountryGuides from "@/pages/country-guides";
@@ -183,6 +184,10 @@ function Router() {
       <Route path="/business-users" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;
         return <AuthenticatedLayout><BusinessUsers /></AuthenticatedLayout>;
+      }} />
+      <Route path="/sdp-businesses" component={() => {
+        if (!authReady) return <AuthLoadingSkeleton />;
+        return <AuthenticatedLayout><SdpBusinesses /></AuthenticatedLayout>;
       }} />
       <Route path="/country-management" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;

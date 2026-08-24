@@ -110,6 +110,11 @@ export function Sidebar() {
     if (userSdpRole && ['sdp_super_admin', 'sdp_admin', 'sdp_agent'].includes(userSdpRole)) {
       navigation.push({ name: 'User Management', href: '/user-management', icon: 'fas fa-users-cog' });
     }
+
+    // Browse-by-business drill-down for all SDP admin roles.
+    if (userSdpRole && ['sdp_super_admin', 'sdp_admin', 'sdp_agent'].includes(userSdpRole)) {
+      navigation.push({ name: 'Businesses', href: '/sdp-businesses', icon: 'fas fa-building' });
+    }
     
     // Country Management for super admin and admin
     if (userSdpRole && ['sdp_super_admin', 'sdp_admin'].includes(userSdpRole)) {

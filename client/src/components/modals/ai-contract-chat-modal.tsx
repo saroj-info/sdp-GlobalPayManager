@@ -1687,6 +1687,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
             <WorkerCombobox
               value={typeof editValue === "string" ? editValue : ""}
               businessId={typeof draft.selectedBusinessId === "string" ? draft.selectedBusinessId : undefined}
+              includeSdpCandidates={true}
               onChange={(id, worker) => {
                 const label = `${worker?.firstName ?? ""} ${worker?.lastName ?? ""}`.trim();
                 if (label) setResolvedRefs((p) => ({ ...p, workerId: label }));
