@@ -21,7 +21,7 @@ import {
   maskSensitive,
   TRACKED_WORKER_FIELDS,
 } from "./modules/workforce/changeLog";
-import { contractChangeLog, workerChangeLog, users as usersTable } from "@shared/schema";
+import { contractChangeLog, workerChangeLog, users as usersTable, workers as workersTable } from "@shared/schema";
 import { desc, eq as drizzleEq } from "drizzle-orm";
 import { db as drizzleDb } from "./db";
 import { registerTimesheetsListRoutes } from "./modules/timesheets";
@@ -2210,9 +2210,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         req.session.user = { ...req.session.user, ...updatedUser };
       }
 
-      res.json({ 
+      // If the user's display name changed, propagate it to two other places
+      // that hold a snapshot of it:
+      //   1) every workers row this user owns — the wizard picker + AI @-picker
+      //      read firstName/lastName off `workers`, not `users`, so without this
+      //      the current user shows their old name in every contract-creation UI.
+      //   2) the JWT itself — GET /api/auth/user parses `name` out of the JWT
+      //      payload, so the navbar keeps the old name until re-login otherwise.
+      const jwtName = ((user as any).name ?? '').trim();
+      const newName = `${updatedUser?.firstName ?? ''} ${updatedUser?.lastName ?? ''}`.trim();
+      const nameChanged = !!updatedUser && jwtName !== newName;
+
+      let newToken: string | undefined;
+      if (nameChanged) {
+        await drizzleDb
+          .update(workersTable)
+          .set({
+            firstName: updatedUser!.firstName ?? '',
+            lastName: updatedUser!.lastName ?? '',
+            updatedAt: new Date(),
+          })
+          .where(drizzleEq(workersTable.userId, user.id));
+
+        const { createAuthToken, computeAvailableRoles } = await import('./jwtAuth');
+        const availableRoles = computeAvailableRoles(updatedUser as any);
+        const { token } = createAuthToken({
+          id: updatedUser!.id,
+          email: updatedUser!.email ?? '',
+          userType: updatedUser!.userType ?? '',
+          name: newName,
+          sdpRole: updatedUser!.sdpRole,
+          accessibleCountries: updatedUser!.accessibleCountries ?? undefined,
+          accessibleBusinessIds: updatedUser!.accessibleBusinessIds ?? undefined,
+          activeRole: (user as any).activeRole ?? updatedUser!.userType ?? undefined,
+          availableRoles,
+        });
+        newToken = token;
+      }
+
+      res.json({
         message: "Profile updated successfully",
-        user: updatedUser
+        user: updatedUser,
+        ...(newToken ? { token: newToken } : {}),
       });
     } catch (error: any) {
       console.error("Error updating profile:", error);

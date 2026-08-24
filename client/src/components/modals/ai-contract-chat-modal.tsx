@@ -66,6 +66,55 @@ interface ChatResponse {
   nextSteps?: ChecklistState;
 }
 
+// Deferred effect of an `@` / `#` / `&` pick. Held in local state until the
+// user actually sends a message, at which point `applyMentionStage` folds it
+// into the committed draft / pins / refs / checklist. See `stagedMentions`.
+type MentionStage = {
+  merge: Record<string, any>;               // draft fields to merge in
+  clearFromDraft?: string[];                // draft keys to delete first
+  refsMerge: Record<string, string>;        // resolvedRefs to merge in
+  clearFromRefs?: string[];                 // resolvedRefs keys to delete first
+  addToPins: string[];                      // userEditedFieldPaths to add
+  removeFromPins?: string[];                // userEditedFieldPaths to delete
+  removeFromAiFilled: string[];             // aiFilledFields keys to delete
+  removeFromNextSteps: string[];            // nextSteps keys to filter out of every list
+};
+
+function applyMentionStage(
+  prev: {
+    draft: Record<string, any>;
+    refs: Record<string, string>;
+    pins: Set<string>;
+    aiFilled: Set<string>;
+    checklist: ChecklistState;
+  },
+  stage: MentionStage,
+) {
+  const draft = { ...prev.draft };
+  if (stage.clearFromDraft) for (const k of stage.clearFromDraft) delete draft[k];
+  Object.assign(draft, stage.merge);
+
+  const refs = { ...prev.refs };
+  if (stage.clearFromRefs) for (const k of stage.clearFromRefs) delete refs[k];
+  Object.assign(refs, stage.refsMerge);
+
+  const pins = new Set(prev.pins);
+  if (stage.removeFromPins) for (const k of stage.removeFromPins) pins.delete(k);
+  for (const k of stage.addToPins) pins.add(k);
+
+  const aiFilled = new Set(prev.aiFilled);
+  for (const k of stage.removeFromAiFilled) aiFilled.delete(k);
+
+  const removeSet = new Set(stage.removeFromNextSteps);
+  const checklist: ChecklistState = {
+    required: prev.checklist.required.filter((k) => !removeSet.has(k)),
+    conditional: prev.checklist.conditional.filter((k) => !removeSet.has(k)),
+    optionalRecommended: prev.checklist.optionalRecommended.filter((k) => !removeSet.has(k)),
+  };
+
+  return { draft, refs, pins, aiFilled, checklist };
+}
+
 // Human labels for every wizard-tracked field the AI can fill. Used both by
 // the draft preview and the "Still needed" checklist. Labels match the manual
 // wizard's UI verbatim (contract-wizard-modal.tsx) so the chat question
@@ -612,6 +661,20 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
   // sourced from react-query below.
   const [resolvedRefs, setResolvedRefs] = useState<Record<string, string>>({});
 
+  // Staged @/#/& picks — a mention chosen from a popover writes its intended
+  // effect here, NOT directly into `draft` / `resolvedRefs` / `userEditedFieldPaths`.
+  // The staged effect is committed only when the user actually sends a message
+  // (see `handleSend`). This prevents the "pick @Bob without sending →
+  // preview already shows Bob" class of bugs — the draft only advances when
+  // the AI has been told about it. Re-picking the same symbol replaces its
+  // prior stage. `pickMentionCreateNewHostClient` deliberately bypasses this
+  // (it's an explicit create action, not a resolve).
+  const [stagedMentions, setStagedMentions] = useState<{
+    worker: MentionStage | null;
+    hostClient: MentionStage | null;
+    business: MentionStage | null;
+  }>({ worker: null, hostClient: null, business: null });
+
   // Preview modal state — structured 4-step summary built locally from the
   // draft. No API round-trip; safe to open any time the draft has content.
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -689,6 +752,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       setActiveStep(1);
       setManuallyNavigated(false);
       setMention(null);
+      setStagedMentions({ worker: null, hostClient: null, business: null });
       setPreviewOpen(false);
       setPreviewSections([]);
       setPreviewHeaderSubtitle(undefined);
@@ -723,12 +787,20 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
   }, [activeStep, draft, nextSteps, activeRole, manuallyNavigated]);
 
   const sendMutation = useMutation({
-    mutationFn: async ({ historySnapshot }: { historySnapshot: ChatMessage[] }) => {
+    mutationFn: async ({
+      historySnapshot,
+      currentDraft,
+      editedPaths,
+    }: {
+      historySnapshot: ChatMessage[];
+      currentDraft: Record<string, any>;
+      editedPaths: string[];
+    }) => {
       const resp = await apiRequest("POST", "/api/ai/contract-draft", {
         messages: historySnapshot,
-        currentDraft: draft,
+        currentDraft,
         currentStep: activeStep,
-        userEditedFieldPaths: Array.from(userEditedFieldPaths),
+        userEditedFieldPaths: editedPaths,
       });
       const data: ChatResponse = await resp.json();
       return data;
@@ -1201,12 +1273,52 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
   const handleSend = () => {
     const text = input.trim();
     if (!text || sendMutation.isPending) return;
+
+    // Flush staged mentions into committed state. Order matters:
+    //   business (&) first — its "switching business" clears may drop worker /
+    //   client fields; running it before the @ / # stages means a fresh @ or #
+    //   picked in this same turn still lands. Within a single flush, the last
+    //   pick per symbol wins (we replace stages on re-pick).
+    const stageOrder: Array<"business" | "worker" | "hostClient"> = [
+      "business",
+      "worker",
+      "hostClient",
+    ];
+    let acc = {
+      draft,
+      refs: resolvedRefs,
+      pins: userEditedFieldPaths,
+      aiFilled: aiFilledFields,
+      checklist: nextSteps,
+    };
+    let hadStages = false;
+    for (const key of stageOrder) {
+      const stage = stagedMentions[key];
+      if (!stage) continue;
+      hadStages = true;
+      acc = applyMentionStage(acc, stage);
+    }
+    if (hadStages) {
+      setDraft(acc.draft);
+      setResolvedRefs(acc.refs);
+      setUserEditedFieldPaths(acc.pins);
+      setAiFilledFields(acc.aiFilled);
+      setNextSteps(acc.checklist);
+      setStagedMentions({ worker: null, hostClient: null, business: null });
+    }
+
     const userTurn: ChatMessage = { role: "user", content: text };
     const historySnapshot = [...messages, userTurn];
     setMessages(historySnapshot);
     setInput("");
     requestAnimationFrame(() => textareaRef.current?.focus());
-    sendMutation.mutate({ historySnapshot });
+    // Send with the merged view; React setters above have not yet flushed,
+    // so passing `acc.draft` / `acc.pins` explicitly avoids stale closure reads.
+    sendMutation.mutate({
+      historySnapshot,
+      currentDraft: acc.draft,
+      editedPaths: Array.from(acc.pins),
+    });
   };
 
   const detectMention = (value: string, cursor: number) => {
@@ -1259,23 +1371,19 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     const insert = `@${fullName} `;
     const caretPos = before.length + insert.length;
     setInput(before + insert + after);
-    setDraft((d) => ({ ...d, workerId: worker.id }));
-    setResolvedRefs((r) => ({ ...r, workerId: fullName }));
-    setNextSteps((prev) => ({
-      required: prev.required.filter((k) => k !== "workerId"),
-      conditional: prev.conditional.filter((k) => k !== "workerId"),
-      optionalRecommended: prev.optionalRecommended.filter((k) => k !== "workerId"),
+    // Stage the pick. It only takes effect on the next Send — until then the
+    // committed draft (what Preview and the AI both see) still holds the
+    // previous worker. Re-picking @ replaces this stage.
+    setStagedMentions((s) => ({
+      ...s,
+      worker: {
+        merge: { workerId: worker.id },
+        refsMerge: { workerId: fullName },
+        addToPins: ["workerId"],
+        removeFromAiFilled: ["workerId"],
+        removeFromNextSteps: ["workerId"],
+      },
     }));
-    setAiFilledFields((prev) => {
-      const next = new Set(prev);
-      next.delete("workerId");
-      return next;
-    });
-    setUserEditedFieldPaths((prev) => {
-      const next = new Set(prev);
-      next.add("workerId");
-      return next;
-    });
     setMention(null);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -1296,40 +1404,31 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     const insert = `#${name} `;
     const caretPos = before.length + insert.length;
     setInput(before + insert + after);
-    // Mirror the host-client's snapshot fields into the draft — the contract
-    // row has clientName / clientContactEmail / clientAddress snapshot columns
-    // that the wizard's edit view reads directly (no join fallback there).
-    setDraft((d) => ({
-      ...d,
-      customerBusinessId: client.id,
-      isForClient: true,
-      clientName: client.name ?? d.clientName ?? "",
-      ...(client.contactEmail ? { clientContactEmail: client.contactEmail } : {}),
-      ...(client.address ? { clientAddress: client.address } : {}),
-      ...(client.contactName ? { clientContactName: client.contactName } : {}),
+    // Stage the host-client pick. Committed on Send. Mirrors the host-client's
+    // snapshot fields into the draft (clientName / clientContactEmail /
+    // clientAddress are snapshot columns the wizard reads directly).
+    const addToPins = ["customerBusinessId", "isForClient"];
+    if (client?.name) addToPins.push("clientName");
+    if (client?.contactEmail) addToPins.push("clientContactEmail");
+    if (client?.address) addToPins.push("clientAddress");
+    if (client?.contactName) addToPins.push("clientContactName");
+    setStagedMentions((s) => ({
+      ...s,
+      hostClient: {
+        merge: {
+          customerBusinessId: client.id,
+          isForClient: true,
+          clientName: client.name ?? "",
+          ...(client.contactEmail ? { clientContactEmail: client.contactEmail } : {}),
+          ...(client.address ? { clientAddress: client.address } : {}),
+          ...(client.contactName ? { clientContactName: client.contactName } : {}),
+        },
+        refsMerge: { customerBusinessId: name },
+        addToPins,
+        removeFromAiFilled: ["customerBusinessId", "isForClient"],
+        removeFromNextSteps: ["customerBusinessId", "isForClient"],
+      },
     }));
-    setResolvedRefs((r) => ({ ...r, customerBusinessId: name }));
-    setNextSteps((prev) => ({
-      required: prev.required.filter((k) => k !== "customerBusinessId" && k !== "isForClient"),
-      conditional: prev.conditional.filter((k) => k !== "customerBusinessId" && k !== "isForClient"),
-      optionalRecommended: prev.optionalRecommended.filter((k) => k !== "customerBusinessId" && k !== "isForClient"),
-    }));
-    setAiFilledFields((prev) => {
-      const next = new Set(prev);
-      next.delete("customerBusinessId");
-      next.delete("isForClient");
-      return next;
-    });
-    setUserEditedFieldPaths((prev) => {
-      const next = new Set(prev);
-      next.add("customerBusinessId");
-      next.add("isForClient");
-      if (client?.name) next.add("clientName");
-      if (client?.contactEmail) next.add("clientContactEmail");
-      if (client?.address) next.add("clientAddress");
-      if (client?.contactName) next.add("clientContactName");
-      return next;
-    });
     setMention(null);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -1343,6 +1442,11 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
   // fields the server contract requires (selectedBusinessId + onBehalf) and
   // clears any worker/host-client from a previous business so a stale pick
   // from one tenant can't leak into another.
+  //
+  // Like the other pickers, this now stages the effect until the next Send.
+  // The "switching business" decision is evaluated against the COMMITTED
+  // `draft.selectedBusinessId` at pick time — because between picks the
+  // committed draft doesn't change, so re-picking `&` recomputes correctly.
   const pickMentionBusiness = (biz: any) => {
     const name = biz?.name ?? "";
     if (!mention || !name) {
@@ -1359,60 +1463,30 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       typeof draft.selectedBusinessId === "string" &&
       draft.selectedBusinessId !== biz.id;
 
-    setDraft((d) => {
-      const next: Record<string, any> = {
-        ...d,
-        selectedBusinessId: biz.id,
-        onBehalf: true,
-      };
-      if (switchingBusiness) {
-        // A worker or host client from the previous business must not persist —
-        // they belong to a different tenant.
-        delete next.workerId;
-        delete next.customerBusinessId;
-        delete next.clientName;
-        delete next.clientContactName;
-        delete next.clientContactEmail;
-        delete next.clientAddress;
-      }
-      return next;
-    });
-    setResolvedRefs((r) => {
-      const next: Record<string, string> = { ...r, selectedBusinessId: name };
-      if (switchingBusiness) {
-        delete next.workerId;
-        delete next.customerBusinessId;
-      }
-      return next;
-    });
-    setNextSteps((prev) => ({
-      required: prev.required.filter((k) => k !== "selectedBusinessId"),
-      conditional: prev.conditional.filter((k) => k !== "selectedBusinessId"),
-      optionalRecommended: prev.optionalRecommended.filter((k) => k !== "selectedBusinessId"),
+    const tenantScopedFields = [
+      "workerId",
+      "customerBusinessId",
+      "clientName",
+      "clientContactName",
+      "clientContactEmail",
+      "clientAddress",
+    ];
+
+    setStagedMentions((s) => ({
+      ...s,
+      business: {
+        merge: { selectedBusinessId: biz.id, onBehalf: true },
+        clearFromDraft: switchingBusiness ? tenantScopedFields : undefined,
+        refsMerge: { selectedBusinessId: name },
+        clearFromRefs: switchingBusiness ? ["workerId", "customerBusinessId"] : undefined,
+        addToPins: ["selectedBusinessId", "onBehalf"],
+        removeFromPins: switchingBusiness ? tenantScopedFields : undefined,
+        removeFromAiFilled: switchingBusiness
+          ? ["selectedBusinessId", "workerId", "customerBusinessId"]
+          : ["selectedBusinessId"],
+        removeFromNextSteps: ["selectedBusinessId"],
+      },
     }));
-    setAiFilledFields((prev) => {
-      const next = new Set(prev);
-      next.delete("selectedBusinessId");
-      if (switchingBusiness) {
-        next.delete("workerId");
-        next.delete("customerBusinessId");
-      }
-      return next;
-    });
-    setUserEditedFieldPaths((prev) => {
-      const next = new Set(prev);
-      next.add("selectedBusinessId");
-      next.add("onBehalf");
-      if (switchingBusiness) {
-        next.delete("workerId");
-        next.delete("customerBusinessId");
-        next.delete("clientName");
-        next.delete("clientContactName");
-        next.delete("clientContactEmail");
-        next.delete("clientAddress");
-      }
-      return next;
-    });
     setMention(null);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -2018,6 +2092,14 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                       )}
                     </Button>
                   </div>
+                  {(stagedMentions.worker || stagedMentions.hostClient || stagedMentions.business) && (
+                    <div
+                      className="mt-1 text-[11px] text-muted-foreground"
+                      data-testid="pending-mentions-hint"
+                    >
+                      Pending mention{[stagedMentions.worker, stagedMentions.hostClient, stagedMentions.business].filter(Boolean).length > 1 ? "s" : ""} — will apply when you send.
+                    </div>
+                  )}
                 </div>
               </PopoverTrigger>
               <PopoverContent

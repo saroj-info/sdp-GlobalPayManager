@@ -67,15 +67,26 @@ export default function Settings() {
       const response = await apiRequest("PUT", "/api/profile", data);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       toast({
         title: "Profile Updated",
         description: "Your profile information has been successfully updated.",
       });
+      // If the server re-issued the JWT (name changed), swap it in so the
+      // navbar and every downstream /api/auth/user read pick up the new name.
+      if (data?.token) {
+        localStorage.setItem("authToken", data.token);
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
       queryClient.refetchQueries({ queryKey: ["/api/profile"] });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       queryClient.refetchQueries({ queryKey: ["/api/auth/user"] });
+      // Workers list holds a per-row snapshot of the user's name for the
+      // self-worker row — refresh every workers query family so contract
+      // pickers show the new name immediately.
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === 'string' && q.queryKey[0].startsWith('/api/workers'),
+      });
     },
     onError: (error: any) => {
       toast({
