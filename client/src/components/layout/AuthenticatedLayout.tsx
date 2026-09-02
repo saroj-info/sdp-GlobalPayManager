@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
 import { AuthenticatedLayoutProvider, useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
+import { useAuth } from "@/hooks/useAuth";
+import { AiSearchModal } from "@/components/modals/ai-search-modal";
 
 interface Country {
   id: number;
@@ -11,7 +13,9 @@ interface Country {
 }
 
 function AuthenticatedLayoutContent({ children }: { children: ReactNode }) {
-  const { headerMetadata, setCountries } = useAuthenticatedLayout();
+  const { headerMetadata, setCountries, commandBarOpen, setCommandBarOpen } = useAuthenticatedLayout();
+  const { user } = useAuth();
+  const searchEnabled = (user as any)?.featureFlags?.aiSearchEnabled === true;
 
   const { data: countries = [] } = useQuery<Country[]>({
     queryKey: ['/api/countries'],
@@ -29,6 +33,20 @@ function AuthenticatedLayoutContent({ children }: { children: ReactNode }) {
     return () => { document.body.classList.remove('app-shell'); };
   }, []);
 
+  // Global ⌘K / Ctrl+K to open the AI search command bar.
+  // Only attached when the feature is enabled — otherwise the key remains free.
+  useEffect(() => {
+    if (!searchEnabled) return;
+    const onKeydown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandBarOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKeydown);
+    return () => window.removeEventListener('keydown', onKeydown);
+  }, [searchEnabled, setCommandBarOpen]);
+
   return (
     // `overflow-hidden` on the outer container + `min-h-0` on <main> are the
     // standard Tailwind pattern for "fixed sidebar, content scrolls inside
@@ -45,6 +63,9 @@ function AuthenticatedLayoutContent({ children }: { children: ReactNode }) {
         />
         {children}
       </main>
+      {searchEnabled && (
+        <AiSearchModal open={commandBarOpen} onOpenChange={setCommandBarOpen} />
+      )}
     </div>
   );
 }

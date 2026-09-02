@@ -828,6 +828,42 @@ export const aiPromptLog = pgTable("ai_prompt_log", {
 export type AiPromptLog = typeof aiPromptLog.$inferSelect;
 export type InsertAiPromptLog = typeof aiPromptLog.$inferInsert;
 
+// Persistent chat sessions for the AI search + Q&A command bar.
+// One row per "chat" (like a Claude conversation). Ordered by lastMessageAt
+// so the sidebar renders newest-first.
+export const aiSearchSessions = pgTable("ai_search_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  businessId: varchar("business_id").references(() => businesses.id),
+  role: varchar("role").notNull(),
+  title: varchar("title").notNull().default("New chat"),
+  lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  archivedAt: timestamp("archived_at"),
+}, (table) => [
+  index("idx_ai_search_sessions_user").on(table.userId, table.lastMessageAt),
+]);
+
+export type AiSearchSession = typeof aiSearchSessions.$inferSelect;
+export type InsertAiSearchSession = typeof aiSearchSessions.$inferInsert;
+
+// One row per user or assistant turn inside a session. Assistant turns carry
+// the full structured payload (rows / citations / toolCalls / followUp / mode)
+// so a resumed session re-renders instantly without replaying tool calls.
+export const aiSearchMessages = pgTable("ai_search_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").notNull().references(() => aiSearchSessions.id, { onDelete: "cascade" }),
+  role: varchar("role").notNull(),
+  content: text("content").notNull(),
+  payload: jsonb("payload"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_ai_search_messages_session").on(table.sessionId, table.createdAt),
+]);
+
+export type AiSearchMessage = typeof aiSearchMessages.$inferSelect;
+export type InsertAiSearchMessage = typeof aiSearchMessages.$inferInsert;
+
 // Timesheets for tracking worker hours
 export const timesheets = pgTable("timesheets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

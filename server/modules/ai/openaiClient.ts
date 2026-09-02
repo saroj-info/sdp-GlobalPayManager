@@ -103,3 +103,7 @@ async function runChat(model: string, params: ChatExtractParams): Promise<ChatCa
 export function isAiEnabled(): boolean {
   return process.env.AI_CONTRACT_DRAFT_ENABLED === "true";
 }
+
+export function isAiSearchEnabled(): boolean {
+  return process.env.AI_SEARCH_ENABLED === "true";
+}

@@ -10,6 +10,9 @@ interface AuthenticatedLayoutContextType {
   setHeaderMetadata: (metadata: HeaderMetadata) => void;
   countries: any[];
   setCountries: (countries: any[]) => void;
+  // AI search command bar — one instance shared across the app.
+  commandBarOpen: boolean;
+  setCommandBarOpen: (next: boolean) => void;
 }
 
 const AuthenticatedLayoutContext = createContext<AuthenticatedLayoutContextType | undefined>(undefined);
@@ -20,6 +23,7 @@ export function AuthenticatedLayoutProvider({ children }: { children: ReactNode 
     description: "",
   });
   const [countries, setCountriesState] = useState<any[]>([]);
+  const [commandBarOpen, setCommandBarOpenState] = useState(false);
 
   const setHeaderMetadata = useCallback((metadata: HeaderMetadata) => {
     setHeaderMetadataState(metadata);
@@ -29,9 +33,20 @@ export function AuthenticatedLayoutProvider({ children }: { children: ReactNode 
     setCountriesState(newCountries);
   }, []);
 
+  const setCommandBarOpen = useCallback((next: boolean) => {
+    setCommandBarOpenState(next);
+  }, []);
+
   const contextValue = useMemo(
-    () => ({ headerMetadata, setHeaderMetadata, countries, setCountries }),
-    [headerMetadata, countries, setHeaderMetadata, setCountries]
+    () => ({
+      headerMetadata,
+      setHeaderMetadata,
+      countries,
+      setCountries,
+      commandBarOpen,
+      setCommandBarOpen,
+    }),
+    [headerMetadata, countries, setHeaderMetadata, setCountries, commandBarOpen, setCommandBarOpen]
   );
 
   return (
@@ -52,7 +67,7 @@ export function useAuthenticatedLayout() {
 // Hook for pages to set their header metadata
 export function usePageHeader(title: string, description?: string) {
   const { setHeaderMetadata } = useAuthenticatedLayout();
-  
+
   useEffect(() => {
     setHeaderMetadata({ title, description });
   }, [title, description]);

@@ -106,6 +106,10 @@ export interface AuthUser extends Omit<User, 'country'> {
   primaryRole?: string;        // immutable account type
   activeRole?: string;         // currently-active role (= userType)
   availableRoles?: string[];   // roles this user may switch between
+  featureFlags?: {
+    aiContractDraftEnabled?: boolean;
+    aiSearchEnabled?: boolean;
+  };
 }
 
 export interface DashboardStats {

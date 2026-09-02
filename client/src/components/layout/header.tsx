@@ -4,13 +4,14 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { User, Settings, LogOut, Building2, Key, ChevronDown, Shield, Eye, EyeOff } from "lucide-react";
+import { User, Settings, LogOut, Building2, Key, ChevronDown, Shield, Eye, EyeOff, Search } from "lucide-react";
 import sampleUserPhoto from "@assets/generated_images/Professional_business_headshot_8ca64f96.png";
 import { useAuth } from "@/hooks/useAuth";
 import { useLocation } from "wouter";
 import { handleLogout, apiRequest } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
 
 interface HeaderProps {
   title: string;
@@ -22,6 +23,9 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { setCommandBarOpen } = useAuthenticatedLayout();
+  const searchEnabled = (user as any)?.featureFlags?.aiSearchEnabled === true;
+  const shortcutHint = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl+K';
 
   // Change Password dialog state
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -137,9 +141,23 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
           <p className="text-sm text-secondary-600 mt-1">{description}</p>
         </div>
         <div className="flex items-center space-x-4">
+          {searchEnabled && (
+            <Button
+              variant="ghost"
+              className="flex items-center bg-secondary-50 hover:bg-secondary-100 px-3 py-1 rounded-full transition-colors duration-200 gap-2"
+              onClick={() => setCommandBarOpen(true)}
+              data-testid="button-ai-search"
+            >
+              <Search className="h-4 w-4 text-secondary-500" />
+              <span className="text-sm font-medium text-secondary-700">Search</span>
+              <kbd className="hidden sm:inline-flex items-center rounded border border-secondary-200 bg-white px-1.5 text-[10px] font-mono text-secondary-500">
+                {shortcutHint}
+              </kbd>
+            </Button>
+          )}
           {/* Country Access Indicator - Clickable */}
-          <Button 
-            variant="ghost" 
+          <Button
+            variant="ghost"
             className="flex items-center bg-primary-50 hover:bg-primary-100 px-3 py-1 rounded-full transition-colors duration-200"
             onClick={() => setLocation('/country-management')}
             data-testid="button-countries-chip"

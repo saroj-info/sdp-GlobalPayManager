@@ -26,6 +26,7 @@ import { desc, eq as drizzleEq } from "drizzle-orm";
 import { db as drizzleDb } from "./db";
 import { registerTimesheetsListRoutes } from "./modules/timesheets";
 import { registerAiContractRoutes, isAiEnabled } from "./modules/ai";
+import { registerAiSearchRoutes, isAiSearchEnabled } from "./modules/ai/search";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -258,7 +259,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({
           ...userData,
           business,
-          featureFlags: { aiContractDraftEnabled: isAiEnabled() },
+          featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled() },
         });
       }
     }
@@ -291,7 +292,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({
         ...userData,
         business,
-        featureFlags: { aiContractDraftEnabled: isAiEnabled() },
+        featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled() },
       });
     }
     
@@ -7837,6 +7838,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AI-drafted contract creation — owned by the ai module. Endpoint is
   // env-gated (AI_CONTRACT_DRAFT_ENABLED); the controller 404s when disabled.
   registerAiContractRoutes(app, authMiddleware);
+
+  // AI search + Q&A — env-gated (AI_SEARCH_ENABLED); the controller 404s when disabled.
+  registerAiSearchRoutes(app, authMiddleware);
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {
