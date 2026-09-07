@@ -111,11 +111,6 @@ export function Sidebar() {
       navigation.push({ name: 'User Management', href: '/user-management', icon: 'fas fa-users-cog' });
     }
 
-    // Browse-by-business drill-down for all SDP admin roles.
-    if (userSdpRole && ['sdp_super_admin', 'sdp_admin', 'sdp_agent'].includes(userSdpRole)) {
-      navigation.push({ name: 'Businesses', href: '/sdp-businesses', icon: 'fas fa-building' });
-    }
-    
     // Country Management for super admin and admin
     if (userSdpRole && ['sdp_super_admin', 'sdp_admin'].includes(userSdpRole)) {
       navigation.push({ name: 'Country Management', href: '/country-management', icon: 'fas fa-globe' });
@@ -145,8 +140,18 @@ export function Sidebar() {
         )
       : businessNavigation;
 
+    // Businesses (browse-by-business drill-down) sits right after Contracts
+    // for SDP admin roles.
+    const nav = [...baseNav];
+    const userSdpRole = (user as any)?.sdpRole;
+    if (userType === 'sdp_internal'
+        && userSdpRole && ['sdp_super_admin', 'sdp_admin', 'sdp_agent'].includes(userSdpRole)) {
+      const contractsIdx = nav.findIndex((item) => item.href === '/contracts');
+      nav.splice(contractsIdx + 1, 0, { name: 'Businesses', href: '/sdp-businesses', icon: 'fas fa-building' });
+    }
+
     return [
-      ...baseNav,
+      ...nav,
       ...(userType === 'sdp_internal' ? sdpInternalNavigation : []),
       ...(userType === 'sdp_internal' ? getSdpAdminNavigation() : []),
     ];

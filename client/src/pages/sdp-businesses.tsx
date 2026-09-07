@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { usePageHeader, useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
 import { ArrowLeft, Building2, Mail, Search, Users } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { ViewWorkerModal } from "@/components/modals/view-worker-modal";
@@ -22,6 +23,9 @@ interface BusinessRow {
   accessibleCountries?: string[] | null;
   contactEmail?: string | null;
   contactName?: string | null;
+  parentBusinessId?: string | null;
+  address?: string | null;
+  createdAt?: string | null;
 }
 
 function BusinessTag({ b }: { b: BusinessRow }) {
@@ -50,9 +54,12 @@ export default function SdpBusinessesPage() {
   const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null);
   const [selectedWorker, setSelectedWorker] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [filterCountry, setFilterCountry] = useState("all");
   const [workerPage, setWorkerPage] = useState(1);
 
   usePageHeader("Businesses", "Browse workers by business");
+
+  const { countries } = useAuthenticatedLayout();
 
   const { data: currentUser } = useQuery({
     queryKey: ["/api/auth/user"],
@@ -75,6 +82,25 @@ export default function SdpBusinessesPage() {
 
   const selectedBusiness = useMemo(
     () => businesses.find((b) => b.id === selectedBusinessId) ?? null,
+    [businesses, selectedBusinessId],
+  );
+
+  const countryNameById = useMemo(
+    () => new Map<string, string>((countries ?? []).map((c: any) => [c.id, c.name])),
+    [countries],
+  );
+
+  const businessById = useMemo(
+    () => new Map(businesses.map((b) => [b.id, b])),
+    [businesses],
+  );
+
+  // Host clients of the currently selected business — already present in the
+  // same /api/businesses payload (rows with isRegistered=false), no extra query.
+  const hostClientsOfSelected = useMemo(
+    () => selectedBusinessId
+      ? businesses.filter((b) => b.isRegistered === false && b.parentBusinessId === selectedBusinessId)
+      : [],
     [businesses, selectedBusinessId],
   );
 
@@ -113,14 +139,53 @@ export default function SdpBusinessesPage() {
   const totalWorkers = workerListData?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalWorkers / PAGE_SIZE));
 
+  // Lightweight stats for the details card — count-only pages (pageSize=1)
+  // against the modular list endpoints, fetched only while a business is open.
+  const { data: contractStats } = useQuery<{ total: number }>({
+    queryKey: ["/api/contracts/list", { businessId: selectedBusinessId, pageSize: 1 }],
+    queryFn: async () =>
+      (await apiRequest("GET", `/api/contracts/list?page=1&pageSize=1&businessId=${selectedBusinessId}`)).json(),
+    enabled: !!selectedBusinessId,
+  });
+
+  const { data: activeContractStats } = useQuery<{ total: number }>({
+    queryKey: ["/api/contracts/list", { businessId: selectedBusinessId, status: "active", pageSize: 1 }],
+    queryFn: async () =>
+      (await apiRequest("GET", `/api/contracts/list?page=1&pageSize=1&status=active&businessId=${selectedBusinessId}`)).json(),
+    enabled: !!selectedBusinessId,
+  });
+
+  const { data: timesheetStats } = useQuery<{
+    total: number;
+    statusCounts?: { all: number; draft: number; submitted: number; approved: number; rejected: number };
+  }>({
+    queryKey: ["/api/timesheets/list", { businessId: selectedBusinessId, pageSize: 1 }],
+    queryFn: async () =>
+      (await apiRequest("GET", `/api/timesheets/list?page=1&pageSize=1&businessId=${selectedBusinessId}`)).json(),
+    enabled: !!selectedBusinessId,
+  });
+
   const filteredBusinesses = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
-    if (!q) return businesses;
+    // A row matches the country filter on its own accessibleCountries; host
+    // clients are created with an empty array, so they fall back to their
+    // parent business's countries instead of vanishing under any filter.
+    const matchesCountry = (b: BusinessRow): boolean => {
+      if (filterCountry === "all") return true;
+      if (b.accessibleCountries?.includes(filterCountry)) return true;
+      if (b.isRegistered === false && b.parentBusinessId) {
+        const parent = businessById.get(b.parentBusinessId);
+        return !!parent?.accessibleCountries?.includes(filterCountry);
+      }
+      return false;
+    };
     return businesses.filter((b) =>
-      b.name.toLowerCase().includes(q)
-      || (b.contactEmail ?? "").toLowerCase().includes(q),
+      matchesCountry(b)
+      && (!q
+        || b.name.toLowerCase().includes(q)
+        || (b.contactEmail ?? "").toLowerCase().includes(q)),
     );
-  }, [businesses, searchTerm]);
+  }, [businesses, searchTerm, filterCountry, businessById]);
 
   if (!isAllowed) {
     return (
@@ -163,22 +228,132 @@ export default function SdpBusinessesPage() {
                   <CardTitle className="text-xl">{selectedBusiness.name}</CardTitle>
                   <BusinessTag b={selectedBusiness} />
                 </div>
-                <div className="mt-1 flex items-center flex-wrap gap-x-4 gap-y-1 text-sm text-secondary-600">
-                  {selectedBusiness.contactEmail && (
-                    <span className="flex items-center gap-1">
-                      <Mail className="h-3.5 w-3.5" />
-                      {selectedBusiness.contactEmail}
-                    </span>
-                  )}
-                  <span className="flex items-center gap-1">
-                    <Users className="h-3.5 w-3.5" />
-                    {totalWorkers} {totalWorkers === 1 ? 'worker' : 'workers'}
-                  </span>
-                </div>
               </div>
             </div>
           </CardHeader>
+          <CardContent className="pt-0">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+              {selectedBusiness.contactName && (
+                <div>
+                  <span className="text-secondary-500">Contact name: </span>
+                  <span className="text-secondary-900">{selectedBusiness.contactName}</span>
+                </div>
+              )}
+              {selectedBusiness.contactEmail && (
+                <div>
+                  <span className="text-secondary-500">Email: </span>
+                  <span className="text-secondary-900">{selectedBusiness.contactEmail}</span>
+                </div>
+              )}
+              {selectedBusiness.address && (
+                <div>
+                  <span className="text-secondary-500">Address: </span>
+                  <span className="text-secondary-900">{selectedBusiness.address}</span>
+                </div>
+              )}
+              <div>
+                <span className="text-secondary-500">Workers: </span>
+                <span className="text-secondary-900">{totalWorkers}</span>
+              </div>
+              {selectedBusiness.isRegistered !== false && (
+                <div>
+                  <span className="text-secondary-500">Host clients: </span>
+                  <span className="text-secondary-900">{hostClientsOfSelected.length}</span>
+                </div>
+              )}
+              <div>
+                <span className="text-secondary-500">Contracts: </span>
+                <span className="text-secondary-900">
+                  {contractStats ? contractStats.total : '…'}
+                  {activeContractStats ? ` (${activeContractStats.total} active)` : ''}
+                </span>
+              </div>
+              <div>
+                <span className="text-secondary-500">Timesheets: </span>
+                <span className="text-secondary-900">
+                  {timesheetStats ? timesheetStats.total : '…'}
+                  {timesheetStats?.statusCounts && timesheetStats.statusCounts.submitted > 0
+                    ? ` (${timesheetStats.statusCounts.submitted} awaiting approval)`
+                    : ''}
+                </span>
+              </div>
+              {selectedBusiness.createdAt && (
+                <div>
+                  <span className="text-secondary-500">Created: </span>
+                  <span className="text-secondary-900">
+                    {new Date(selectedBusiness.createdAt).toLocaleDateString(undefined, {
+                      year: 'numeric', month: 'short', day: 'numeric',
+                    })}
+                  </span>
+                </div>
+              )}
+              {Array.isArray(selectedBusiness.accessibleCountries) && selectedBusiness.accessibleCountries.length > 0 && (
+                <div className="sm:col-span-2">
+                  <span className="text-secondary-500">Countries: </span>
+                  <span className="text-secondary-900">
+                    {selectedBusiness.accessibleCountries.map((id) => countryNameById.get(id) ?? id).join(', ')}
+                  </span>
+                </div>
+              )}
+              {selectedBusiness.isRegistered === false && selectedBusiness.parentBusinessId
+                && businessById.get(selectedBusiness.parentBusinessId) && (
+                <div className="sm:col-span-2">
+                  <span className="text-secondary-500">Belongs to: </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBusinessId(selectedBusiness.parentBusinessId!)}
+                    className="text-primary-600 hover:underline font-medium"
+                    data-testid="link-parent-business"
+                  >
+                    {businessById.get(selectedBusiness.parentBusinessId)!.name}
+                  </button>
+                </div>
+              )}
+            </div>
+          </CardContent>
         </Card>
+
+        {selectedBusiness.isRegistered !== false && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">
+                Host Clients ({hostClientsOfSelected.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {hostClientsOfSelected.length === 0 ? (
+                <p className="text-sm text-secondary-500">No host clients for this business.</p>
+              ) : (
+                <div className="divide-y divide-secondary-100">
+                  {hostClientsOfSelected.map((hc) => (
+                    <button
+                      key={hc.id}
+                      type="button"
+                      onClick={() => setSelectedBusinessId(hc.id)}
+                      className="w-full text-left py-2.5 px-2 -mx-2 rounded-md hover:bg-secondary-50 transition-colors flex items-center gap-3"
+                      data-testid={`row-host-client-${hc.id}`}
+                    >
+                      <div className="flex items-center justify-center h-8 w-8 rounded-md bg-amber-50 text-amber-600 flex-shrink-0">
+                        <Building2 className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-secondary-900 truncate">{hc.name}</div>
+                        {(hc.contactName || hc.contactEmail) && (
+                          <div className="text-xs text-secondary-500 truncate">
+                            {[hc.contactName, hc.contactEmail].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
+                      </div>
+                      <BusinessTag b={hc} />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        <h3 className="text-sm font-semibold text-secondary-700">Workers</h3>
 
         {workersLoading && !workerListData ? (
           <PageLoader label="Loading workers" />
@@ -279,8 +454,8 @@ export default function SdpBusinessesPage() {
   // Grid view: all businesses
   return (
     <div className="p-6 space-y-6">
-      <div className="max-w-md">
-        <div className="relative">
+      <div className="flex flex-col md:flex-row gap-4">
+        <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary-400" />
           <Input
             value={searchTerm}
@@ -290,6 +465,19 @@ export default function SdpBusinessesPage() {
             data-testid="input-search-businesses"
           />
         </div>
+        <Select value={filterCountry} onValueChange={setFilterCountry}>
+          <SelectTrigger className="w-48" data-testid="select-filter-country">
+            <SelectValue placeholder="Filter by country" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Countries</SelectItem>
+            {(countries ?? []).map((country: any) => (
+              <SelectItem key={country.id} value={country.id}>
+                {country.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {businessesLoading ? (
@@ -299,7 +487,7 @@ export default function SdpBusinessesPage() {
           <CardContent className="text-center py-12">
             <Building2 className="mx-auto h-10 w-10 text-secondary-300 mb-3" />
             <p className="text-secondary-600">
-              {searchTerm ? 'No businesses match your search.' : 'No businesses to display.'}
+              {searchTerm || filterCountry !== 'all' ? 'No businesses match your filters.' : 'No businesses to display.'}
             </p>
           </CardContent>
         </Card>
