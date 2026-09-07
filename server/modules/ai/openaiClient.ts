@@ -105,5 +105,6 @@ export function isAiEnabled(): boolean {
 }
 
 export function isAiSearchEnabled(): boolean {
-  return process.env.AI_SEARCH_ENABLED === "true";
+  // Always on — no env kill-switch. Set AI_SEARCH_ENABLED=false to opt OUT.
+  return process.env.AI_SEARCH_ENABLED !== "false";
 }
