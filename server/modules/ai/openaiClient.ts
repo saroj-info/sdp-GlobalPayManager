@@ -70,7 +70,9 @@ async function runChat(model: string, params: ChatExtractParams): Promise<ChatCa
     model,
     messages: params.messages,
     tools: params.tools,
-    tool_choice: params.toolChoice ?? (params.tools ? "auto" : undefined),
+    // tool_choice is only legal when tools are present — sending it alone
+    // (e.g. toolChoice:"none" on a no-tool call) is a 400 upstream.
+    tool_choice: params.tools ? params.toolChoice ?? "auto" : undefined,
     temperature: params.temperature ?? 0.2,
     max_tokens: params.maxTokens,
     response_format: params.jsonMode ? { type: "json_object" } : undefined,
@@ -107,4 +109,9 @@ export function isAiEnabled(): boolean {
 export function isAiSearchEnabled(): boolean {
   // Always on — no env kill-switch. Set AI_SEARCH_ENABLED=false to opt OUT.
   return process.env.AI_SEARCH_ENABLED !== "false";
+}
+
+export function isAiCountryIntelEnabled(): boolean {
+  // Always on — set AI_COUNTRY_INTEL_ENABLED=false to opt OUT.
+  return process.env.AI_COUNTRY_INTEL_ENABLED !== "false";
 }

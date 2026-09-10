@@ -174,6 +174,7 @@ export function registerAiSearchRoutes(app: Express, authMiddleware: RequestHand
     const items = await listSessionsForUser(user.id, {
       role: scope.role,
       includeArchived,
+      feature: "search",
     });
     return res.json({ items });
   });

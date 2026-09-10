@@ -4,7 +4,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { User, Settings, LogOut, Building2, Key, ChevronDown, Shield, Eye, EyeOff, Search } from "lucide-react";
+import { User, Settings, LogOut, Building2, Key, ChevronDown, Shield, Eye, EyeOff, Search, Globe } from "lucide-react";
+import { CountryIntelModal } from "@/components/modals/country-intel-modal";
 import sampleUserPhoto from "@assets/generated_images/Professional_business_headshot_8ca64f96.png";
 import { useAuth } from "@/hooks/useAuth";
 import { useLocation } from "wouter";
@@ -26,6 +27,9 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
   const { setCommandBarOpen } = useAuthenticatedLayout();
   const searchEnabled = (user as any)?.featureFlags?.aiSearchEnabled === true;
   const shortcutHint = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl+K';
+
+  // Country Intelligence modal state
+  const [showCountryIntel, setShowCountryIntel] = useState(false);
 
   // Change Password dialog state
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -155,6 +159,16 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
               </kbd>
             </Button>
           )}
+          {/* Country Intelligence — same panel + Ask AI chat as the contract wizard */}
+          <Button
+            variant="ghost"
+            className="flex items-center bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-full transition-colors duration-200 gap-2"
+            onClick={() => setShowCountryIntel(true)}
+            data-testid="button-country-intel"
+          >
+            <Globe className="h-4 w-4 text-blue-600" />
+            <span className="text-sm font-medium text-blue-700">Country Intel</span>
+          </Button>
           {/* Country Access Indicator - Clickable */}
           <Button
             variant="ghost"
@@ -271,6 +285,8 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
           </DropdownMenu>
         </div>
       </div>
+
+      <CountryIntelModal open={showCountryIntel} onOpenChange={setShowCountryIntel} />
 
       {/* Change Password Dialog */}
       <Dialog open={showChangePassword} onOpenChange={(o) => { setShowChangePassword(o); if (!o) setPwForm({ currentPassword: "", newPassword: "", confirmPassword: "" }); }}>

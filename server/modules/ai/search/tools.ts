@@ -19,15 +19,9 @@ import { listTimesheets } from "../../timesheets";
 import { getPrimer, listPrimersForRole } from "./primerRegistry";
 import {
   COUNTRY_LIST,
-  COUNTRY_CODE_BY_NAME,
-  COUNTRY_EMPLOYMENT_NOTES,
-  DEFAULT_EMPLOYER_ONCOSTS,
-  DEFAULT_CONTRACTOR_ONCOSTS,
-  DEFAULT_JURISDICTIONS_OVERLAY,
-  COUNTRY_CURRENCIES,
-  canonicaliseCountry,
   estimateEmploymentCost as estimateEmploymentCostShared,
 } from "@shared/countryEmploymentData";
+import { buildCountryEmploymentContext } from "../countryEmploymentContext";
 import type { AuthUser, CallerRole, ToolCallRecord } from "./types";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -696,63 +690,11 @@ export async function runTool(
     }
 
     case "getCountryEmploymentRules": {
-      const canonical = canonicaliseCountry(args.country ? String(args.country) : "");
-      if (!canonical) {
-        const payload = {
-          error: "unknown_country",
-          input: args.country ?? null,
-          supported: COUNTRY_LIST,
-        };
-        return { result: payload, record: record(name, args, payload) };
-      }
-      const jurisdictionInput = args.jurisdiction ? String(args.jurisdiction).trim() : "";
-      const jurisdictionRows = jurisdictionInput
-        ? DEFAULT_JURISDICTIONS_OVERLAY[canonical]?.[jurisdictionInput] ?? null
-        : null;
-
-      // Cross-reference the DB jurisdictions table so answers can quote the
-      // exact rows admins see under /country-management too. Best-effort.
-      let dbJurisdictionRows: Array<Record<string, any>> = [];
-      try {
-        const countries = await storage.getCountries().catch(() => []);
-        const iso = COUNTRY_CODE_BY_NAME[canonical];
-        const match = countries.find(
-          (c: any) =>
-            (iso && String(c.code ?? "").toUpperCase() === iso) ||
-            String(c.name ?? "").toLowerCase() === canonical.toLowerCase(),
-        );
-        if (match?.id) {
-          const rows = await storage.getJurisdictionsByCountry(match.id).catch(() => []);
-          dbJurisdictionRows = (rows ?? []).map((r: any) => ({
-            stateProvince: r.stateProvince,
-            name: r.name,
-            calculationType: r.calculationType,
-            value: r.value,
-            capAmount: r.capAmount,
-            thresholdAmount: r.thresholdAmount,
-            note: r.note,
-          }));
-        }
-      } catch {
-        // ignore
-      }
-
-      const payload = {
-        country: {
-          name: canonical,
-          code: COUNTRY_CODE_BY_NAME[canonical] ?? null,
-          currency: COUNTRY_CURRENCIES[canonical] ?? null,
-        },
-        narrative: COUNTRY_EMPLOYMENT_NOTES[canonical] ?? null,
-        employerOnCosts: DEFAULT_EMPLOYER_ONCOSTS[canonical] ?? [],
-        contractorOnCosts: DEFAULT_CONTRACTOR_ONCOSTS[canonical] ?? [],
-        availableJurisdictions: Object.keys(DEFAULT_JURISDICTIONS_OVERLAY[canonical] ?? {}),
-        jurisdictionRequested: jurisdictionInput || null,
-        jurisdictionOverlayRows: jurisdictionRows,
-        dbJurisdictionRows,
-        sourceNote:
-          "SDP-maintained defaults from /resources (Employment Cost Calculator). Illustrative — validate against current statutory rules.",
-      };
+      // Shared with the country-intel Q&A service — payload built in one place.
+      const payload = await buildCountryEmploymentContext({
+        country: args.country ? String(args.country) : "",
+        jurisdiction: args.jurisdiction ? String(args.jurisdiction) : undefined,
+      });
       return { result: payload, record: record(name, args, payload) };
     }
 

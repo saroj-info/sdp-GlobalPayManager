@@ -828,14 +828,16 @@ export const aiPromptLog = pgTable("ai_prompt_log", {
 export type AiPromptLog = typeof aiPromptLog.$inferSelect;
 export type InsertAiPromptLog = typeof aiPromptLog.$inferInsert;
 
-// Persistent chat sessions for the AI search + Q&A command bar.
-// One row per "chat" (like a Claude conversation). Ordered by lastMessageAt
-// so the sidebar renders newest-first.
+// Persistent chat sessions for AI conversation features. One row per "chat"
+// (like a Claude conversation), ordered by lastMessageAt so sidebars render
+// newest-first. `feature` scopes rows to the surface that owns them:
+// 'search' (⌘K AI search) or 'country-intel' (wizard country Q&A).
 export const aiSearchSessions = pgTable("ai_search_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id),
   businessId: varchar("business_id").references(() => businesses.id),
   role: varchar("role").notNull(),
+  feature: varchar("feature").notNull().default("search"), // 'search' | 'country-intel'
   title: varchar("title").notNull().default("New chat"),
   lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

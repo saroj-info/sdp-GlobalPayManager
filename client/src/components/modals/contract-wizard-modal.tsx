@@ -18,6 +18,7 @@ import { useLocation } from "wouter";
 import { calculatePeriod } from '@shared/timesheetPeriodCalculator';
 import type { TimesheetPeriodConfig } from '@shared/timesheetPeriodCalculator';
 import { calculateFirstTimesheetStartDate } from '@shared/contractHelpers';
+import { CountryIntelPanel } from '@/components/contract-wizard/country-intel-panel';
 import { HelpCircle, InfoIcon, Building2, DollarSign, CheckCircle, FileText, Clock, Plus, Trash2, Search, LayoutGrid, List as ListIcon, UserCheck, UserX, MapPin, ExternalLink, ChevronDown, ChevronUp } from "lucide-react";
 
 interface ContractWizardModalProps {
@@ -1320,6 +1321,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   ))}
                 </RadioGroup>
               </div>
+
+              {/* Curated country intelligence — auto-expands on country pick via
+                  the key remount; collapsed in edit mode when country is unchanged. */}
+              <CountryIntelPanel
+                key={formData.countryId}
+                country={selectedCountry}
+                employmentType={formData.employmentType}
+                defaultOpen={!editMode || formData.countryId !== existingContract?.countryId}
+              />
 
               {/* Engagement Type */}
               <div>

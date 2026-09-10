@@ -27,6 +27,7 @@ import { db as drizzleDb } from "./db";
 import { registerTimesheetsListRoutes } from "./modules/timesheets";
 import { registerAiContractRoutes, isAiEnabled } from "./modules/ai";
 import { registerAiSearchRoutes, isAiSearchEnabled } from "./modules/ai/search";
+import { registerAiCountryIntelRoutes, isAiCountryIntelEnabled } from "./modules/ai/countryIntel";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -259,7 +260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({
           ...userData,
           business,
-          featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled() },
+          featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled(), aiCountryIntelEnabled: isAiCountryIntelEnabled() },
         });
       }
     }
@@ -292,7 +293,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({
         ...userData,
         business,
-        featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled() },
+        featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled(), aiCountryIntelEnabled: isAiCountryIntelEnabled() },
       });
     }
     
@@ -7841,6 +7842,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // AI search + Q&A — env-gated (AI_SEARCH_ENABLED); the controller 404s when disabled.
   registerAiSearchRoutes(app, authMiddleware);
+
+  // Country intelligence Q&A (wizard panel) — env-gated (AI_COUNTRY_INTEL_ENABLED,
+  // opt-out); the controller 404s when disabled.
+  registerAiCountryIntelRoutes(app, authMiddleware);
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {

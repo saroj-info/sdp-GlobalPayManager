@@ -1,5 +1,10 @@
 /**
- * Persistent chat sessions for the AI search + Q&A modal.
+ * Persistent chat sessions for AI conversation features.
+ *
+ * Shared by AI search (feature='search', the default everywhere so legacy
+ * call sites keep working) and country-intel Q&A (feature='country-intel').
+ * The feature predicate keeps each surface's sessions isolated: list, get
+ * and archive all refuse rows belonging to another feature.
  *
  * Ownership: every read/write is ownership-guarded on (sessionId, userId).
  * Cross-user access always returns null / boolean-false so the caller can
@@ -62,9 +67,10 @@ function toMessage(row: AiSearchMessage): StoredMessage {
 
 export async function listSessionsForUser(
   userId: string,
-  opts: { role?: CallerRole; limit?: number; includeArchived?: boolean } = {},
+  opts: { role?: CallerRole; limit?: number; includeArchived?: boolean; feature?: string } = {},
 ): Promise<SessionSummary[]> {
   const limit = Math.min(50, Math.max(1, Number(opts.limit) || 30));
+  const feature = opts.feature ?? "search";
   const rows = await db
     .select()
     .from(aiSearchSessions)
@@ -72,11 +78,13 @@ export async function listSessionsForUser(
       opts.role
         ? and(
             eq(aiSearchSessions.userId, userId),
+            eq(aiSearchSessions.feature, feature),
             eq(aiSearchSessions.role, opts.role),
             opts.includeArchived ? sql`true` : isNull(aiSearchSessions.archivedAt),
           )
         : and(
             eq(aiSearchSessions.userId, userId),
+            eq(aiSearchSessions.feature, feature),
             opts.includeArchived ? sql`true` : isNull(aiSearchSessions.archivedAt),
           ),
     )
@@ -90,6 +98,7 @@ export async function createSession(params: {
   businessId?: string | null;
   role: CallerRole;
   title?: string;
+  feature?: string;
 }): Promise<SessionSummary> {
   const [row] = await db
     .insert(aiSearchSessions)
@@ -97,6 +106,7 @@ export async function createSession(params: {
       userId: params.userId,
       businessId: params.businessId ?? null,
       role: params.role,
+      feature: params.feature ?? "search",
       title: (params.title ?? "New chat").slice(0, MAX_TITLE_CHARS),
     })
     .returning();
@@ -106,11 +116,18 @@ export async function createSession(params: {
 export async function getSessionOwned(
   sessionId: string,
   userId: string,
+  feature: string = "search",
 ): Promise<AiSearchSession | null> {
   const [row] = await db
     .select()
     .from(aiSearchSessions)
-    .where(and(eq(aiSearchSessions.id, sessionId), eq(aiSearchSessions.userId, userId)))
+    .where(
+      and(
+        eq(aiSearchSessions.id, sessionId),
+        eq(aiSearchSessions.userId, userId),
+        eq(aiSearchSessions.feature, feature),
+      ),
+    )
     .limit(1);
   if (!row) return null;
   if (row.archivedAt) return null;
@@ -120,8 +137,9 @@ export async function getSessionOwned(
 export async function getSessionWithMessages(
   sessionId: string,
   userId: string,
+  feature: string = "search",
 ): Promise<SessionWithMessages | null> {
-  const session = await getSessionOwned(sessionId, userId);
+  const session = await getSessionOwned(sessionId, userId, feature);
   if (!session) return null;
   const rows = await db
     .select()
@@ -181,7 +199,11 @@ export async function renameSession(
   return rows.length > 0;
 }
 
-export async function archiveSession(sessionId: string, userId: string): Promise<boolean> {
+export async function archiveSession(
+  sessionId: string,
+  userId: string,
+  feature: string = "search",
+): Promise<boolean> {
   const rows = await db
     .update(aiSearchSessions)
     .set({ archivedAt: new Date() })
@@ -189,6 +211,7 @@ export async function archiveSession(sessionId: string, userId: string): Promise
       and(
         eq(aiSearchSessions.id, sessionId),
         eq(aiSearchSessions.userId, userId),
+        eq(aiSearchSessions.feature, feature),
         isNull(aiSearchSessions.archivedAt),
       ),
     )

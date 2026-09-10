@@ -109,6 +109,7 @@ export interface AuthUser extends Omit<User, 'country'> {
   featureFlags?: {
     aiContractDraftEnabled?: boolean;
     aiSearchEnabled?: boolean;
+    aiCountryIntelEnabled?: boolean;
   };
 }
 
