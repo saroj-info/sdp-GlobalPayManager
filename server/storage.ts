@@ -391,23 +391,6 @@ export interface IStorage {
   updatePayslip(id: string, updates: Partial<InsertPayslip>): Promise<Payslip>;
   deletePayslip(id: string): Promise<void>;
 
-  // Analytics operations
-  getBusinessAnalytics(businessId: string): Promise<{
-    workersByCountry: { countryId: string; countryName: string; employees: number; contractors: number; total: number }[];
-    pendingTimesheets: number;
-    spendByCountryAndYear: { countryId: string; countryName: string; year: number; totalSpend: number }[];
-    totalActiveWorkers: number;
-    totalActiveContracts: number;
-  }>;
-  
-  // SDP internal user analytics
-  getSDPInternalAnalytics(countryIds: string[]): Promise<{
-    totalPayslipsProcessed: number;
-    totalWorkers: number;
-    totalBusinesses: number;
-    monthlyPayrollByCountry: { countryId: string; countryName: string; totalPayroll: number; currency: string }[];
-  }>;
-
   // Invoice operations
   getInvoicesByBusiness(businessId: string): Promise<(Invoice & { contractor: Worker & { country: Country }; business: Business })[]>;
   getInvoicesByContractor(contractorId: string): Promise<(Invoice & { contractor: Worker & { country: Country }; business: Business })[]>;
@@ -2615,103 +2598,6 @@ export class DatabaseStorage implements IStorage {
       })));
   }
 
-  // Analytics operations
-  async getBusinessAnalytics(businessId: string): Promise<{
-    workersByCountry: { countryId: string; countryName: string; employees: number; contractors: number; total: number }[];
-    pendingTimesheets: number;
-    spendByCountryAndYear: { countryId: string; countryName: string; year: number; totalSpend: number }[];
-    totalActiveWorkers: number;
-    totalActiveContracts: number;
-  }> {
-    // Get workers by country
-    const workersWithCountry = await db
-      .select()
-      .from(workers)
-      .leftJoin(countries, eq(workers.countryId, countries.id))
-      .where(eq(workers.businessId, businessId));
-
-    const workersByCountry = workersWithCountry.reduce((acc, row) => {
-      const countryId = row.workers.countryId;
-      const countryName = row.countries?.name || 'Unknown';
-      
-      // Skip workers without a countryId
-      if (!countryId) return acc;
-      
-      if (!acc[countryId]) {
-        acc[countryId] = { countryId, countryName, employees: 0, contractors: 0, total: 0 };
-      }
-      
-      if (row.workers.workerType === 'employee') {
-        acc[countryId].employees++;
-      } else if (row.workers.workerType === 'contractor') {
-        acc[countryId].contractors++;
-      }
-      acc[countryId].total++;
-      
-      return acc;
-    }, {} as Record<string, { countryId: string; countryName: string; employees: number; contractors: number; total: number }>);
-
-    // Get pending timesheets count
-    const pendingTimesheetsResult = await db
-      .select()
-      .from(timesheets)
-      .where(and(
-        eq(timesheets.businessId, businessId),
-        eq(timesheets.status, 'submitted')
-      ));
-
-    // Get contract instances with spend data by country and year
-    const contractsWithCountry = await db
-      .select()
-      .from(contractInstances)
-      .leftJoin(countries, eq(contractInstances.countryId, countries.id))
-      .where(and(
-        eq(contractInstances.businessId, businessId),
-        eq(contractInstances.signatureStatus, 'fully_signed')
-      ));
-
-    // Calculate spend by country and year (simplified calculation based on contract rates)
-    const spendByCountryAndYear = contractsWithCountry.reduce((acc, row) => {
-      const countryId = row.contract_instances.countryId;
-      const countryName = row.countries?.name || 'Unknown';
-      const currentYear = new Date().getFullYear();
-      const rate = parseFloat(row.contract_instances.salaryAmount || '0') || 0;
-      
-      // Simplified annual spend calculation based on salary amount
-      const annualSpend = rate;
-
-      const key = `${countryId}-${currentYear}`;
-      if (!acc[key]) {
-        acc[key] = { countryId, countryName, year: currentYear, totalSpend: 0 };
-      }
-      acc[key].totalSpend += annualSpend;
-      
-      return acc;
-    }, {} as Record<string, { countryId: string; countryName: string; year: number; totalSpend: number }>);
-
-    // Get active workers and contracts count
-    const activeWorkers = await db
-      .select()
-      .from(workers)
-      .where(eq(workers.businessId, businessId));
-
-    const activeContracts = await db
-      .select()
-      .from(contractInstances)
-      .where(and(
-        eq(contractInstances.businessId, businessId),
-        eq(contractInstances.signatureStatus, 'fully_signed')
-      ));
-
-    return {
-      workersByCountry: Object.values(workersByCountry),
-      pendingTimesheets: pendingTimesheetsResult.length,
-      spendByCountryAndYear: Object.values(spendByCountryAndYear),
-      totalActiveWorkers: activeWorkers.length,
-      totalActiveContracts: activeContracts.length,
-    };
-  }
-
   // Payslip operations for SDP internal users
   async getPayslipsByWorker(workerId: string): Promise<(Payslip & { worker: Worker & { country: Country }; business: Business; uploadedByUser: User })[]> {
     // Same enriched shape as `getPayslipsByCountries` / `getPayslipsByBusiness`
@@ -2791,81 +2677,6 @@ export class DatabaseStorage implements IStorage {
     await db.delete(payslips).where(eq(payslips.id, id));
   }
 
-  // SDP internal user analytics
-  async getSDPInternalAnalytics(countryIds: string[]): Promise<{
-    totalPayslipsProcessed: number;
-    totalWorkers: number;
-    totalBusinesses: number;
-    monthlyPayrollByCountry: { countryId: string; countryName: string; totalPayroll: number; currency: string }[];
-  }> {
-    // Get total payslips processed for accessible countries
-    const payslipsInCountries = await db
-      .select()
-      .from(payslips)
-      .leftJoin(workers, eq(payslips.workerId, workers.id))
-      .where(inArray(workers.countryId, countryIds));
-
-    // Get total workers in accessible countries
-    const workersInCountries = await db
-      .select()
-      .from(workers)
-      .where(inArray(workers.countryId, countryIds));
-
-    // Get total businesses with workers in accessible countries
-    const businessesInCountries = await db
-      .select()
-      .from(businesses)
-      .leftJoin(workers, eq(businesses.id, workers.businessId))
-      .where(inArray(workers.countryId, countryIds));
-
-    const uniqueBusinesses = new Set(businessesInCountries.map(row => row.businesses.id));
-
-    // Calculate monthly payroll by country
-    const currentMonth = new Date().getMonth();
-    const currentYear = new Date().getFullYear();
-    
-    const monthlyPayrollData = await db
-      .select()
-      .from(payslips)
-      .leftJoin(workers, eq(payslips.workerId, workers.id))
-      .leftJoin(countries, eq(workers.countryId, countries.id))
-      .where(inArray(workers.countryId, countryIds));
-
-    const monthlyPayrollByCountry = monthlyPayrollData
-      .filter(row => {
-        const payDate = new Date(row.payslips.payDate);
-        return payDate.getMonth() === currentMonth && payDate.getFullYear() === currentYear;
-      })
-      .reduce((acc, row) => {
-        const countryId = row.workers!.countryId;
-        const countryName = row.countries!.name;
-        const currency = row.countries!.currency;
-        const netPay = parseFloat(row.payslips.netPay) || 0;
-
-        // Skip if countryId is null
-        if (!countryId) return acc;
-
-        const existing = acc.find(item => item.countryId === countryId);
-        if (existing) {
-          existing.totalPayroll += netPay;
-        } else {
-          acc.push({
-            countryId,
-            countryName,
-            totalPayroll: netPay,
-            currency,
-          });
-        }
-        return acc;
-      }, [] as { countryId: string; countryName: string; totalPayroll: number; currency: string }[]);
-
-    return {
-      totalPayslipsProcessed: payslipsInCountries.length,
-      totalWorkers: workersInCountries.length,
-      totalBusinesses: uniqueBusinesses.size,
-      monthlyPayrollByCountry,
-    };
-  }
 
   // Invoice operations
   async getInvoicesByBusiness(businessId: string): Promise<(Invoice & { contractor: Worker & { country: Country }; business: Business })[]> {

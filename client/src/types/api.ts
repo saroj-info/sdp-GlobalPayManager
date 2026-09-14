@@ -112,18 +112,3 @@ export interface AuthUser extends Omit<User, 'country'> {
     aiCountryIntelEnabled?: boolean;
   };
 }
-
-export interface DashboardStats {
-  userType?: string;
-  totalActiveWorkers?: number;
-  totalActiveContracts?: number;
-  pendingTimesheets?: number;
-  totalContracts?: number;
-  activeContracts?: number;
-  pendingContracts?: number;
-  draftContracts?: number;
-  successRate?: number;
-  totalEarnings?: number;
-  monthlyTrends?: Array<{ month: string; value: number; [k: string]: any }>;
-  [key: string]: any;
-}

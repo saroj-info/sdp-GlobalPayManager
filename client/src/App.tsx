@@ -89,7 +89,14 @@ function Router() {
       <Route path="/signup" component={Signup} />
       <Route path="/solutions" component={Solutions} />
       <Route path="/country-guides" component={CountryGuides} />
-      <Route path="/resources" component={Resources} />
+      {/* Public for visitors; authenticated users get the standard app shell
+          (the page's Header needs AuthenticatedLayoutContext). */}
+      <Route path="/resources" component={() => {
+        if (!authReady) return <AuthLoadingSkeleton />;
+        return isAuthenticated
+          ? <AuthenticatedLayout><Resources /></AuthenticatedLayout>
+          : <Resources />;
+      }} />
       <Route path="/how-it-works" component={HowItWorks} />
       <Route path="/pricing" component={Pricing} />
       <Route path="/contact" component={Contact} />
