@@ -20,6 +20,7 @@ export interface ContractListQuery {
   search?: string;
   status?: string;
   businessId?: string;
+  hostClientId?: string;  // filter on contracts.customerBusinessId (the host client being billed)
   countryId?: string;
   sortBy: SortKey;
 }

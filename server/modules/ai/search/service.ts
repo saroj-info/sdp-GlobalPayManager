@@ -452,6 +452,8 @@ function sanitize(
       "listWorkers",
       "listLeaveRequests",
       "listBusinesses",
+      "searchBusinesses",
+      "searchWorkers",
       "getCountryEmploymentRules",
       "estimateEmploymentCost",
     ]);

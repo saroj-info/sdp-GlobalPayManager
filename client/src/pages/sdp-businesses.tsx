@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { usePageHeader, useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
-import { ArrowLeft, Building2, Mail, Search, Users } from "lucide-react";
+import { ArrowLeft, Building2, Mail, MapPin, Search, Users } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { ViewWorkerModal } from "@/components/modals/view-worker-modal";
 import { DataPagination } from "@/components/ui/data-pagination";
@@ -245,12 +245,14 @@ export default function SdpBusinessesPage() {
                   <span className="text-secondary-900">{selectedBusiness.contactEmail}</span>
                 </div>
               )}
-              {selectedBusiness.address && (
-                <div>
-                  <span className="text-secondary-500">Address: </span>
-                  <span className="text-secondary-900">{selectedBusiness.address}</span>
-                </div>
-              )}
+              <div className="sm:col-span-2">
+                <span className="text-secondary-500">Address: </span>
+                {selectedBusiness.address ? (
+                  <span className="text-secondary-900 whitespace-pre-wrap">{selectedBusiness.address}</span>
+                ) : (
+                  <span className="text-secondary-400 italic">Not on file</span>
+                )}
+              </div>
               <div>
                 <span className="text-secondary-500">Workers: </span>
                 <span className="text-secondary-900">{totalWorkers}</span>
@@ -342,6 +344,9 @@ export default function SdpBusinessesPage() {
                           <div className="text-xs text-secondary-500 truncate">
                             {[hc.contactName, hc.contactEmail].filter(Boolean).join(' · ')}
                           </div>
+                        )}
+                        {hc.address && (
+                          <div className="text-xs text-secondary-400 truncate">{hc.address}</div>
                         )}
                       </div>
                       <BusinessTag b={hc} />
@@ -520,6 +525,12 @@ export default function SdpBusinessesPage() {
                   </div>
                 ) : (
                   <div className="text-xs italic text-secondary-400">No contact on file</div>
+                )}
+                {b.address && (
+                  <div className="flex items-center gap-1.5 truncate text-xs text-secondary-500">
+                    <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
+                    <span className="truncate">{b.address}</span>
+                  </div>
                 )}
                 {Array.isArray(b.accessibleCountries) && b.accessibleCountries.length > 0 && (
                   <div className="text-xs text-secondary-500">

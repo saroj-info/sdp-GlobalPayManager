@@ -52,7 +52,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     function: {
       name: "listContracts",
       description:
-        "List contracts with filters. Extra derived filters: expiringBeforeDate / expiringAfterDate (ISO date) — applied in-memory to endDate.",
+        "List contracts with filters. search also matches the contract's snapshot client name. Extra derived filters: expiringBeforeDate / expiringAfterDate (ISO date) — applied in-memory to endDate.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -60,6 +60,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
           search: { type: "string" },
           status: { type: "string" },
           businessId: { type: "string" },
+          hostClientId: { type: "string", description: "Restrict to contracts where this business is the host client being billed. Resolve via searchBusinesses first." },
           countryId: { type: "string" },
           sortBy: { type: "string", enum: ["worker", "role", "country", "status", "date"] },
           expiringBeforeDate: { type: "string", description: "YYYY-MM-DD; contracts whose endDate is on/before this date" },
@@ -137,14 +138,14 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     function: {
       name: "listBusinesses",
       description:
-        "List businesses visible to the caller. Kind: 'customer' (isRegistered=true), 'host_client' (isRegistered=false), 'sdp_owned' (SDP employer-of-record row, admins only).",
+        "List businesses visible to the caller. Kind: 'customer' (isRegistered=true), 'host_client' (isRegistered=false), 'sdp_owned' (SDP employer-of-record row, admins only). With no kind filter the result blends registered businesses AND host clients — use that blended total when the user asks how many businesses/clients they have.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           search: { type: "string" },
           kind: { type: "string", enum: ["customer", "host_client", "sdp_owned"] },
-          countryId: { type: "string" },
+          countryId: { type: "string", description: "Country id — matches the business's accessible countries; host clients inherit their parent's." },
           limit: { type: "number", description: "1-50, default 10" },
         },
       },
@@ -172,13 +173,13 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     function: {
       name: "searchBusinesses",
       description:
-        "Fuzzy business lookup. Use to resolve a business name to an id BEFORE any list tool that takes businessId / hostClientId. Set isHostClient=true for unregistered billing-only clients.",
+        "Fuzzy business lookup across BOTH registered businesses and host clients (unregistered billing-only client records) by default. Use to resolve any business/client name to an id BEFORE list tools that take businessId / hostClientId. Rows include kind ('customer' | 'host_client' | 'sdp_owned'), address, and parentBusinessName (the business a host client belongs to). Pass kind only when the user explicitly wants one type.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           query: { type: "string" },
-          isHostClient: { type: "boolean" },
+          kind: { type: "string", enum: ["customer", "host_client", "sdp_owned"] },
           limit: { type: "number" },
         },
         required: ["query"],
@@ -314,6 +315,7 @@ function toWorkerRow(w: any) {
     email: w.email,
     workerType: w.workerType,
     countryCode: w.country?.code,
+    countryName: w.country?.name ?? null,
     businessName: w.business?.name,
   };
 }
@@ -384,7 +386,7 @@ function toLeaveRow(l: any) {
   };
 }
 
-function toBusinessRow(b: any) {
+function toBusinessRow(b: any, nameById?: Map<string, string>) {
   const kind = b.isSdpOwned
     ? "sdp_owned"
     : b.isRegistered === false
@@ -395,7 +397,11 @@ function toBusinessRow(b: any) {
     id: b.id,
     name: b.name,
     kind,
-    countryCode: b.country?.code ?? null,
+    isRegistered: b.isRegistered !== false,
+    address: b.address ?? null,
+    contactEmail: b.contactEmail ?? null,
+    parentBusinessId: b.parentBusinessId ?? null,
+    parentBusinessName: b.parentBusinessId ? (nameById?.get(b.parentBusinessId) ?? null) : null,
   };
 }
 
@@ -457,6 +463,7 @@ export async function runTool(
         search: args.search ? String(args.search) : undefined,
         status: args.status ? String(args.status) : undefined,
         businessId: args.businessId && UUID_RE.test(String(args.businessId)) ? String(args.businessId) : undefined,
+        hostClientId: args.hostClientId && UUID_RE.test(String(args.hostClientId)) ? String(args.hostClientId) : undefined,
         countryId: args.countryId ? String(args.countryId) : undefined,
         sortBy: (["worker", "role", "country", "status", "date"].includes(args.sortBy) ? args.sortBy : "date") as any,
       });
@@ -601,17 +608,26 @@ export async function runTool(
       const kind = args.kind ? String(args.kind) : undefined;
       const q = args.search ? String(args.search).toLowerCase() : undefined;
       const countryId = args.countryId && UUID_RE.test(String(args.countryId)) ? String(args.countryId) : undefined;
+      const byId = new Map<string, any>(candidates.map((b: any) => [b.id, b]));
+      const nameById = new Map<string, string>(candidates.map((b: any) => [b.id, b.name]));
       const filtered = candidates.filter((b: any) => {
         // Hide SDP-owned unless explicitly asked for by an admin.
         if (b.isSdpOwned && kind !== "sdp_owned") return false;
         if (kind === "customer" && b.isRegistered === false) return false;
         if (kind === "host_client" && b.isRegistered !== false) return false;
         if (kind === "sdp_owned" && !b.isSdpOwned) return false;
-        if (countryId && b.countryId !== countryId) return false;
+        if (countryId) {
+          // Businesses carry accessibleCountries (country ids); host clients
+          // usually have none and inherit their parent business's.
+          const own = Array.isArray(b.accessibleCountries) && b.accessibleCountries.includes(countryId);
+          const parent = b.isRegistered === false && b.parentBusinessId ? byId.get(b.parentBusinessId) : undefined;
+          const viaParent = Array.isArray(parent?.accessibleCountries) && parent.accessibleCountries.includes(countryId);
+          if (!own && !viaParent) return false;
+        }
         if (q && !(b.name ?? "").toLowerCase().includes(q)) return false;
         return true;
       });
-      const items = filtered.slice(0, limit).map(toBusinessRow);
+      const items = filtered.slice(0, limit).map((b: any) => toBusinessRow(b, nameById));
       const payload = { items, total: filtered.length };
       return { result: payload, record: record(name, args, payload) };
     }
@@ -633,6 +649,7 @@ export async function runTool(
         businessId: w.businessId,
         businessName: w.business?.name,
         countryCode: w.country?.code,
+        countryName: w.country?.name,
       }));
       const nameOf = (r: any) => r.name.toLowerCase();
       const nameCounts = new Map<string, number>();
@@ -649,25 +666,35 @@ export async function runTool(
 
     case "searchBusinesses": {
       const q = String(args.query ?? "").trim().toLowerCase();
-      const isHostClient = args.isHostClient === true;
+      const kind = ["customer", "host_client", "sdp_owned"].includes(args.kind) ? String(args.kind) : undefined;
       const limit = Math.min(20, Math.max(1, Number(args.limit) || 5));
 
+      // Default searches BOTH registered businesses and host clients — a plain
+      // company name in a user query could be either.
       let candidates: any[] = [];
       if (ctx.role === "sdp_internal") {
         candidates = await storage.getBusinesses().catch(() => []);
-      } else if (ctx.businessId) {
-        if (isHostClient) {
-          candidates = await storage.getHostClientsForBusiness(ctx.businessId).catch(() => []);
-        } else {
-          candidates = await storage.getBusinessesForUser(ctx.user.id).catch(() => []);
-        }
+      } else if (ctx.role === "business_user" && ctx.businessId) {
+        const [own, hosted] = await Promise.all([
+          storage.getBusinessesForUser(ctx.user.id).catch(() => []),
+          storage.getHostClientsForBusiness(ctx.businessId).catch(() => []),
+        ]);
+        const seen = new Set<string>();
+        candidates = [...own, ...hosted].filter((b: any) => (seen.has(b.id) ? false : (seen.add(b.id), true)));
       }
+      const nameById = new Map<string, string>(candidates.map((b: any) => [b.id, b.name]));
       const filtered = candidates
-        .filter((b: any) => (isHostClient ? b.isRegistered === false : b.isRegistered !== false))
-        .filter((b: any) => (b.isSdpOwned ? ctx.role === "sdp_internal" : true))
+        // Hide SDP-owned unless explicitly asked for by an admin.
+        .filter((b: any) => (b.isSdpOwned ? ctx.role === "sdp_internal" && kind === "sdp_owned" : true))
+        .filter((b: any) => {
+          if (kind === "customer") return b.isRegistered !== false;
+          if (kind === "host_client") return b.isRegistered === false;
+          if (kind === "sdp_owned") return b.isSdpOwned === true;
+          return true;
+        })
         .filter((b: any) => !q || (b.name ?? "").toLowerCase().includes(q))
         .slice(0, limit)
-        .map((b: any) => ({ id: b.id, name: b.name, isRegistered: b.isRegistered !== false, kind: b.isSdpOwned ? "sdp_owned" : (b.isRegistered === false ? "host_client" : "customer") }));
+        .map((b: any) => toBusinessRow(b, nameById));
       const payload = { items: filtered };
       return { result: payload, record: record(name, args, payload) };
     }

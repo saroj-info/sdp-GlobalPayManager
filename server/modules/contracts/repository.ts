@@ -39,6 +39,7 @@ function buildWhere(scope: ContractListScope, query: ContractListQuery): SQL | u
 
   // Filters
   if (query.businessId)  conditions.push(eq(contracts.businessId, query.businessId));
+  if (query.hostClientId) conditions.push(eq(contracts.customerBusinessId, query.hostClientId));
   if (query.countryId)   conditions.push(eq(contracts.countryId, query.countryId));
   if (query.status) {
     // 'signed' and 'pending_signature' are derived from signing audit columns,
@@ -64,6 +65,7 @@ function buildWhere(scope: ContractListScope, query: ContractListQuery): SQL | u
       ilike(workers.email, term),
       ilike(contracts.contractName, term),
       ilike(contracts.customRoleTitle, term),
+      ilike(contracts.clientName, term),
       ilike(roleTitles.title, term),
     );
     if (searchClause) conditions.push(searchClause);

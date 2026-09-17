@@ -25,6 +25,7 @@ function parseQuery(req: any): ContractListQuery {
     search: q.search ? String(q.search).trim() || undefined : undefined,
     status: q.status ? String(q.status) : undefined,
     businessId: q.businessId ? String(q.businessId) : undefined,
+    hostClientId: q.hostClientId ? String(q.hostClientId) : undefined,
     countryId: q.countryId ? String(q.countryId) : undefined,
     sortBy,
   };
