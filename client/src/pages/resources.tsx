@@ -2,8 +2,7 @@ import React, { useMemo, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Navigation } from "@/components/layout/navigation";
-import { Sidebar } from "@/components/layout/sidebar";
-import { Header } from "@/components/layout/header";
+import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -669,12 +668,6 @@ function EmploymentCostCalculator() {
 
 export default function Resources() {
   const { isAuthenticated } = useAuth();
-  
-  // Fetch countries for authenticated header
-  const { data: countries = [] } = useQuery({
-    queryKey: ["/api/countries"],
-    enabled: isAuthenticated,
-  });
 
   // Public layout for non-authenticated users
   if (!isAuthenticated) {
@@ -993,18 +986,21 @@ export default function Resources() {
     );
   }
 
-  // Authenticated layout with sidebar and header (resources is not in AuthenticatedLayout wrapper)
+  // Authenticated users render inside the standard <AuthenticatedLayout>
+  // (the route wraps this page in App.tsx) — no hand-rolled Sidebar/Header
+  // here: Header needs AuthenticatedLayoutContext (⌘K command bar) and
+  // crashes without the provider.
+  return <AuthenticatedResources />;
+}
+
+function AuthenticatedResources() {
+  usePageHeader(
+    "Resources",
+    "Powerful tools and resources to help you navigate global employment and contracting decisions with confidence.",
+  );
+
   return (
-    <div className="flex h-screen bg-gray-50">
-      <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <Header 
-          title="Resources" 
-          description="Powerful tools and resources to help you navigate global employment and contracting decisions with confidence."
-          accessibleCountries={countries as any[]}
-        />
-        <main className="flex-1 overflow-y-auto">
-          <div className="container mx-auto px-4 py-8">
+    <div className="container mx-auto px-4 py-8">
             {/* Resources Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
           {/* Cost Calculator - Featured */}
@@ -1300,8 +1296,5 @@ export default function Resources() {
               </div>
             </div>
           </div>
-        </main>
-      </div>
-    </div>
   );
 }

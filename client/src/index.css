@@ -23,11 +23,17 @@
   --border: hsl(214.3 31.8% 91.4%);
   --input: hsl(214.3 31.8% 91.4%);
   --ring: hsl(25 100% 55%);
-  --chart-1: hsl(25 100% 55%);
-  --chart-2: hsl(215 75% 45%);
-  --chart-3: hsl(30 80% 55%);
-  --chart-4: hsl(280 65% 60%);
-  --chart-5: hsl(340 75% 55%);
+  /* Categorical chart palette — validated for CVD-safe adjacency on the light
+     card surface (dataviz validator; fixed slot order, never cycled). Dark-mode
+     steps of the same hues live in the .dark block below. */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
   --sidebar: hsl(0 0% 100%);
   --sidebar-foreground: hsl(210 25% 7.8431%);
   --sidebar-primary: hsl(25 100% 55%);
@@ -88,6 +94,15 @@
   --sidebar-accent-foreground: hsl(0 0% 95%);
   --sidebar-border: hsl(240 3.7% 15.9%);
   --sidebar-ring: hsl(25 100% 55%);
+  /* Same categorical hues re-stepped for the dark card surface (validated). */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
 }
 
 @layer base {

@@ -96,7 +96,7 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
         default:
           return "SDP Internal";
       }
-    } else if (userData.userType === 'business') {
+    } else if (userData.userType === 'business_user') {
       return userData.business?.name || "Business User";
     } else if (userData.userType === 'worker') {
       return "Worker";
@@ -125,7 +125,7 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
         default:
           return "SI";
       }
-    } else if (userData.userType === 'business') {
+    } else if (userData.userType === 'business_user') {
       const businessName = userData.business?.name || "Business";
       return businessName.charAt(0).toUpperCase();
     }
@@ -252,7 +252,7 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
               <DropdownMenuSeparator />
 
               {/* Business Profile - Only for business users */}
-              {(user as any)?.userType === 'business' && (
+              {(user as any)?.userType === 'business_user' && (
                 <DropdownMenuItem data-testid="menu-business-profile" onClick={() => window.location.href = '/business-setup'}>
                   <Building2 className="mr-2 h-4 w-4" />
                   <span>Business Profile</span>
