@@ -15,6 +15,7 @@ import { createHash } from "crypto";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { storage } from "../../../storage";
 import { chatExtract, AiUpstreamError, isAiSearchEnabled } from "../openaiClient";
+import { checkAiTokenBudget, TOKEN_LIMIT_CODE, TOKEN_LIMIT_MESSAGE } from "../usage";
 import { resolveSearchScope } from "./authorize";
 import {
   SYSTEM_PRIMER,
@@ -98,6 +99,12 @@ export async function runSearch(user: AuthUser, req: SearchRequest): Promise<Sea
   const query = String(req?.query ?? "").trim().slice(0, MAX_QUERY_LEN);
   if (!query) {
     return { ok: false, status: 400, code: "QUERY_EMPTY", message: "A query is required" };
+  }
+
+  // Daily token budget — refuse before minting a session or firing auto-titling.
+  const budget = await checkAiTokenBudget(scope);
+  if (!budget.allowed) {
+    return { ok: false, status: 429, code: TOKEN_LIMIT_CODE, message: TOKEN_LIMIT_MESSAGE };
   }
 
   // Session handling.
@@ -243,7 +250,7 @@ export async function runSearch(user: AuthUser, req: SearchRequest): Promise<Sea
             status: 503,
             code: "AI_UPSTREAM_UNAVAILABLE",
             message: err.message,
-            audit: { model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "upstream_error" },
+            audit: { businessId: scope.businessId, model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "upstream_error" },
           };
         }
         throw err;
@@ -256,7 +263,7 @@ export async function runSearch(user: AuthUser, req: SearchRequest): Promise<Sea
         status: 503,
         code: "AI_UPSTREAM_UNAVAILABLE",
         message: err.message,
-        audit: { model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "upstream_error" },
+        audit: { businessId: scope.businessId, model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "upstream_error" },
       };
     }
     throw err;
@@ -291,18 +298,18 @@ export async function runSearch(user: AuthUser, req: SearchRequest): Promise<Sea
   // the sidebar shows a distinctive name once the summariser returns. The
   // heuristic title set at session creation stays if the summariser fails.
   if (priorMessageCount === 0 && !requestedSessionId) {
-    void autoTitleFromLLM(sessionId, user.id, query);
+    void autoTitleFromLLM(sessionId, user.id, query, scope.businessId ?? null);
   } else if (priorMessageCount === 0 && requestedSessionId) {
     // Session was pre-created via POST /api/ai/search/sessions and had no
     // messages yet — still worth titling now that we have the first turn.
     void renameSession(sessionId, user.id, heuristicTitle(query));
-    void autoTitleFromLLM(sessionId, user.id, query);
+    void autoTitleFromLLM(sessionId, user.id, query, scope.businessId ?? null);
   }
 
   return {
     ok: true,
     data: sanitized,
-    audit: { model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "ok" },
+    audit: { businessId: scope.businessId, model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "ok" },
   };
 }
 

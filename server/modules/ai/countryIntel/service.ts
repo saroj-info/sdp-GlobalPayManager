@@ -14,6 +14,7 @@
 import { createHash } from "crypto";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { chatExtract, AiUpstreamError, isAiCountryIntelEnabled } from "../openaiClient";
+import { checkAiTokenBudget, TOKEN_LIMIT_CODE, TOKEN_LIMIT_MESSAGE } from "../usage";
 import { resolveSearchScope } from "../search/authorize";
 import {
   appendMessage,
@@ -76,6 +77,12 @@ export async function runCountryIntel(
   }
 
   const isContractor = CONTRACTOR_ENGAGEMENT_TYPES.includes(req.employmentType ?? "");
+
+  // Daily token budget — refuse before minting a session.
+  const budget = await checkAiTokenBudget(scope);
+  if (!budget.allowed) {
+    return { ok: false, status: 429, code: TOKEN_LIMIT_CODE, message: TOKEN_LIMIT_MESSAGE };
+  }
 
   // Session handling — same contract as AI search: supplied id is loaded
   // ownership- and feature-guarded (404 on foreign/missing), otherwise a
@@ -148,7 +155,7 @@ export async function runCountryIntel(
         status: 503,
         code: "AI_UPSTREAM_UNAVAILABLE",
         message: err.message,
-        audit: { model, inputTokens, outputTokens, latencyMs, toolCalls: [], resultStatus: "upstream_error" },
+        audit: { businessId: scope.businessId, model, inputTokens, outputTokens, latencyMs, toolCalls: [], resultStatus: "upstream_error" },
       };
     }
     throw err;
@@ -197,7 +204,7 @@ export async function runCountryIntel(
   return {
     ok: true,
     data: { answer, grounded, followUp, sessionId },
-    audit: { model, inputTokens, outputTokens, latencyMs, toolCalls: [], resultStatus },
+    audit: { businessId: scope.businessId, model, inputTokens, outputTokens, latencyMs, toolCalls: [], resultStatus },
   };
 }
 

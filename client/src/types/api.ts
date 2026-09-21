@@ -110,5 +110,6 @@ export interface AuthUser extends Omit<User, 'country'> {
     aiContractDraftEnabled?: boolean;
     aiSearchEnabled?: boolean;
     aiCountryIntelEnabled?: boolean;
+    aiRoleSuggestEnabled?: boolean;
   };
 }

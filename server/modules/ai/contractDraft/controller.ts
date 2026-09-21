@@ -90,7 +90,7 @@ export function registerAiContractRoutes(app: Express, authMiddleware: RequestHa
 
       if (result.audit) {
         // Fire-and-forget — never let logging block the response.
-        void writeAudit({ userId: user.id, endpoint: "contract-draft", prompt: auditPreview, audit: result.audit });
+        void writeAudit({ userId: user.id, businessId: result.audit.businessId, endpoint: "contract-draft", prompt: auditPreview, audit: result.audit });
       }
 
       if (!result.ok) {

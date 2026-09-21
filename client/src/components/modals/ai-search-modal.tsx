@@ -31,7 +31,7 @@ import {
   Check,
   X,
 } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, extractApiErrorMessage } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -238,7 +238,7 @@ export function AiSearchModal({ open, onOpenChange }: AiSearchModalProps) {
       ]);
     },
     onError: (err: any) => {
-      const msg = err?.message ?? "Failed to reach the AI search service.";
+      const msg = extractApiErrorMessage(err, "Failed to reach the AI search service.");
       toast({ title: "Search failed", description: msg, variant: "destructive" });
     },
   });

@@ -16,6 +16,7 @@ import { createHash } from "crypto";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { storage } from "../../../storage";
 import { chatExtract, AiUpstreamError, isAiEnabled } from "../openaiClient";
+import { checkAiTokenBudget, TOKEN_LIMIT_CODE, TOKEN_LIMIT_MESSAGE } from "../usage";
 import { resolveDraftScope } from "./authorize";
 import {
   SYSTEM_PRIMER,
@@ -112,6 +113,12 @@ export async function draftContractFromPrompt(
   }
   if (history[history.length - 1].role !== "user") {
     return { ok: false, status: 400, code: "LAST_MESSAGE_NOT_USER", message: "The last message must be from the user" };
+  }
+
+  // Daily token budget — one check per request, before any model call.
+  const budget = await checkAiTokenBudget(scope);
+  if (!budget.allowed) {
+    return { ok: false, status: 429, code: TOKEN_LIMIT_CODE, message: TOKEN_LIMIT_MESSAGE };
   }
 
   const tenantContext = await loadTenantContext(user, scope.businessId, callerRole);
@@ -234,7 +241,7 @@ export async function draftContractFromPrompt(
             status: 503,
             code: "AI_UPSTREAM_UNAVAILABLE",
             message: err.message,
-            audit: { model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "upstream_error" },
+            audit: { businessId: scope.businessId, model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "upstream_error" },
           };
         }
         throw err;
@@ -247,7 +254,7 @@ export async function draftContractFromPrompt(
         status: 503,
         code: "AI_UPSTREAM_UNAVAILABLE",
         message: err.message,
-        audit: { model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "upstream_error" },
+        audit: { businessId: scope.businessId, model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "upstream_error" },
       };
     }
     throw err;
@@ -316,7 +323,7 @@ export async function draftContractFromPrompt(
       nextSteps,
       toolCallLog: toolCalls,
     },
-    audit: { model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "ok" },
+    audit: { businessId: scope.businessId, model, inputTokens, outputTokens, latencyMs, toolCalls, resultStatus: "ok" },
   };
 }
 

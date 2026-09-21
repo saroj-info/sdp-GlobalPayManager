@@ -116,6 +116,11 @@ export function Sidebar() {
       navigation.push({ name: 'Country Management', href: '/country-management', icon: 'fas fa-globe' });
     }
 
+    // AI Settings (daily token limit) for super admin and admin
+    if (userSdpRole && ['sdp_super_admin', 'sdp_admin'].includes(userSdpRole)) {
+      navigation.push({ name: 'AI Settings', href: '/ai-settings', icon: 'fas fa-robot' });
+    }
+
     // Templates — accessible to all SDP-internal users
     if (userSdpRole && ['sdp_super_admin', 'sdp_admin', 'sdp_agent'].includes(userSdpRole)) {
       navigation.push({ name: 'Templates', href: '/platform-config', icon: 'fas fa-file-contract' });

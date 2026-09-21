@@ -27,6 +27,7 @@ import UserManagement from "@/pages/user-management";
 import BusinessUsers from "@/pages/business-users";
 import SdpBusinesses from "@/pages/sdp-businesses";
 import CountryManagement from "@/pages/country-management";
+import AiSettings from "@/pages/ai-settings";
 import Resources from "@/pages/resources";
 import CountryGuides from "@/pages/country-guides";
 import Solutions from "@/pages/solutions";
@@ -199,6 +200,10 @@ function Router() {
       <Route path="/country-management" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;
         return <AuthenticatedLayout><CountryManagement /></AuthenticatedLayout>;
+      }} />
+      <Route path="/ai-settings" component={() => {
+        if (!authReady) return <AuthLoadingSkeleton />;
+        return <AuthenticatedLayout><AiSettings /></AuthenticatedLayout>;
       }} />
       <Route path="/settings" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;

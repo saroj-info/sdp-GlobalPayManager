@@ -19,7 +19,7 @@
 
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../../../db";
-import { aiSearchSessions, aiSearchMessages } from "@shared/schema";
+import { aiSearchSessions, aiSearchMessages, aiPromptLog } from "@shared/schema";
 import type { AiSearchSession, AiSearchMessage } from "@shared/schema";
 import { chatExtract, AiUpstreamError } from "../openaiClient";
 import type { CallerRole } from "./types";
@@ -234,12 +234,16 @@ export function heuristicTitle(firstUserMessage: string): string {
  * heuristic on any upstream failure. Fire-and-forget from the caller (don't
  * await if you don't need the value).
  */
-export async function generateSummaryTitle(firstUserMessage: string): Promise<string> {
+export async function generateSummaryTitle(firstUserMessage: string): Promise<{
+  title: string;
+  audit: { model: string; inputTokens: number; outputTokens: number; latencyMs: number } | null;
+}> {
   const fallback = heuristicTitle(firstUserMessage);
   const text = firstUserMessage.trim().slice(0, 500);
-  if (!text) return fallback;
+  if (!text) return { title: fallback, audit: null };
+  let audit: { model: string; inputTokens: number; outputTokens: number; latencyMs: number } | null = null;
   try {
-    const { completion } = await chatExtract({
+    const { completion, model, latencyMs, usage } = await chatExtract({
       messages: [
         {
           role: "system",
@@ -251,15 +255,17 @@ export async function generateSummaryTitle(firstUserMessage: string): Promise<st
       jsonMode: true,
       toolChoice: "none",
     });
+    // Tokens were burned even if the reply doesn't parse — keep the audit.
+    audit = { model, inputTokens: usage.promptTokens, outputTokens: usage.completionTokens, latencyMs };
     const content = completion.choices[0]?.message?.content ?? "";
-    if (!content) return fallback;
+    if (!content) return { title: fallback, audit };
     const parsed = JSON.parse(content);
     const title = typeof parsed?.title === "string" ? parsed.title.trim() : "";
-    if (!title) return fallback;
-    return title.slice(0, MAX_TITLE_CHARS);
+    if (!title) return { title: fallback, audit };
+    return { title: title.slice(0, MAX_TITLE_CHARS), audit };
   } catch (err) {
-    if (err instanceof AiUpstreamError) return fallback;
-    return fallback;
+    if (err instanceof AiUpstreamError) return { title: fallback, audit };
+    return { title: fallback, audit };
   }
 }
 
@@ -268,10 +274,26 @@ export async function autoTitleFromLLM(
   sessionId: string,
   userId: string,
   firstUserMessage: string,
+  businessId?: string | null,
 ): Promise<void> {
   try {
-    const title = await generateSummaryTitle(firstUserMessage);
+    const { title, audit } = await generateSummaryTitle(firstUserMessage);
     await renameSession(sessionId, userId, title);
+    if (audit) {
+      // Meter the titling call so daily-budget sums see every token spent.
+      await db.insert(aiPromptLog).values({
+        userId,
+        businessId: businessId ?? null,
+        endpoint: "search-title",
+        model: audit.model,
+        promptPreview: firstUserMessage.slice(0, 200),
+        inputTokens: audit.inputTokens,
+        outputTokens: audit.outputTokens,
+        toolCalls: [],
+        latencyMs: audit.latencyMs,
+        resultStatus: "ok",
+      });
+    }
   } catch {
     // Fire-and-forget — never surface titling errors to the caller.
   }

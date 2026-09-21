@@ -823,10 +823,26 @@ export const aiPromptLog = pgTable("ai_prompt_log", {
 }, (table) => [
   index("idx_ai_prompt_log_user").on(table.userId, table.createdAt),
   index("idx_ai_prompt_log_endpoint").on(table.endpoint, table.createdAt),
+  index("idx_ai_prompt_log_business").on(table.businessId, table.createdAt),
 ]);
 
 export type AiPromptLog = typeof aiPromptLog.$inferSelect;
 export type InsertAiPromptLog = typeof aiPromptLog.$inferInsert;
+
+// Global AI settings — singleton row (emailSettings idiom). dailyTokenLimit is
+// tokens (input+output) each business may spend per UTC day across ALL AI
+// features (search, contract draft, country intel, role suggest); null or 0 =
+// unlimited. sdp_internal callers are exempt from the limit.
+export const aiSettings = pgTable("ai_settings", {
+  id: varchar("id").primaryKey().default('singleton'), // Only one row allowed
+  dailyTokenLimit: integer("daily_token_limit"),
+  updatedByUserId: varchar("updated_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type AiSettings = typeof aiSettings.$inferSelect;
+export type InsertAiSettings = typeof aiSettings.$inferInsert;
 
 // Persistent chat sessions for AI conversation features. One row per "chat"
 // (like a Claude conversation), ordered by lastMessageAt so sidebars render

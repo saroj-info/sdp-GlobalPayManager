@@ -31,6 +31,7 @@ export interface CountryIntelResponse {
 }
 
 export interface CountryIntelAudit {
+  businessId?: string; // resolved scope's business — threads through to ai_prompt_log
   model: string;
   inputTokens: number;
   outputTokens: number;

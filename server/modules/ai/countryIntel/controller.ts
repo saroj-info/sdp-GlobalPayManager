@@ -80,7 +80,7 @@ export function registerAiCountryIntelRoutes(app: Express, authMiddleware: Reque
     try {
       const result = await runCountryIntel(user, body);
       if (result.audit) {
-        void writeAudit({ userId: user.id, prompt: body.query, audit: result.audit });
+        void writeAudit({ userId: user.id, businessId: result.audit.businessId, prompt: body.query, audit: result.audit });
       }
       if (!result.ok) {
         return res.status(result.status).json({ message: result.message, code: result.code });

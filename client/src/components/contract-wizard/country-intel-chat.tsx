@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { History, Loader2, Plus, Send, Sparkles, Trash2 } from "lucide-react";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, extractApiErrorMessage, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -83,7 +83,7 @@ export function CountryIntelChat({ countryName, employmentType }: CountryIntelCh
     onError: (err: any) => {
       toast({
         title: "Ask AI failed",
-        description: err?.message || "Please try again.",
+        description: extractApiErrorMessage(err, "Please try again."),
         variant: "destructive",
       });
     },

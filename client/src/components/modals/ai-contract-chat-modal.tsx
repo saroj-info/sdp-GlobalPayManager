@@ -27,7 +27,7 @@ import {
   Eye,
   FileText,
 } from "lucide-react";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, extractApiErrorMessage, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { WorkerCombobox } from "@/components/pickers/WorkerCombobox";
 import { BusinessCombobox } from "@/components/pickers/BusinessCombobox";
@@ -842,10 +842,13 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       requestAnimationFrame(() => textareaRef.current?.focus());
     },
     onError: (err: any) => {
-      const msg = err?.message || "Try again in a moment.";
+      const msg = extractApiErrorMessage(err, "Try again in a moment.");
+      // A daily-limit refusal is a complete sentence on its own; only prefix
+      // the "couldn't reach" framing for genuine transport/service errors.
+      const bubble = msg.includes("daily AI usage limit") ? msg : `I couldn't reach the AI service. ${msg}`;
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `I couldn't reach the AI service. ${msg}` },
+        { role: "assistant", content: bubble },
       ]);
       toast({ title: "Couldn't reach the AI", description: msg, variant: "destructive" });
       requestAnimationFrame(() => textareaRef.current?.focus());

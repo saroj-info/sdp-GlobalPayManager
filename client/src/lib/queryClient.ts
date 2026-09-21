@@ -7,6 +7,21 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+// throwIfResNotOk throws `"<status>: <raw body>"`. Recover the server's human
+// {message} when the body is JSON; fall back to the raw text.
+export function extractApiErrorMessage(err: unknown, fallback = "Something went wrong."): string {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  const match = raw.match(/^\d{3}:\s*([\s\S]*)$/);
+  const body = match ? match[1] : raw;
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed?.message === "string" && parsed.message) return parsed.message;
+  } catch {
+    // not JSON — fall through to the raw text
+  }
+  return body || fallback;
+}
+
 // Triggered whenever a request to a protected endpoint comes back 401.
 // Reasons this fires: JWT in localStorage expired, JWT was tampered with, or
 // the server returned 401 for any other reason. We clear the stale token and

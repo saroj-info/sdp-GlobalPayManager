@@ -87,6 +87,7 @@ export type DraftResult =
   | { ok: false; status: number; code: string; message: string; audit?: DraftAudit };
 
 export interface DraftAudit {
+  businessId?: string; // resolved scope's business — threads through to ai_prompt_log
   model: string;
   inputTokens: number;
   outputTokens: number;

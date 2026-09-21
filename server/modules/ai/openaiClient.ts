@@ -115,3 +115,8 @@ export function isAiCountryIntelEnabled(): boolean {
   // Always on — set AI_COUNTRY_INTEL_ENABLED=false to opt OUT.
   return process.env.AI_COUNTRY_INTEL_ENABLED !== "false";
 }
+
+export function isAiRoleSuggestEnabled(): boolean {
+  // Always on — set AI_ROLE_SUGGEST_ENABLED=false to opt OUT.
+  return process.env.AI_ROLE_SUGGEST_ENABLED !== "false";
+}

@@ -11,7 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, extractApiErrorMessage, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useLocation } from "wouter";
@@ -429,6 +429,27 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   }, [open, editMode]);
 
   const { toast } = useToast();
+
+  // Opt-out flag: undefined (stale cache / older server) counts as enabled.
+  const aiRoleSuggestEnabled = (user as any)?.featureFlags?.aiRoleSuggestEnabled !== false;
+
+  // AI suggestion for custom-role descriptions ("+ Add Custom Role" on Step 4).
+  const suggestRoleDescriptionMutation = useMutation({
+    mutationFn: async (roleTitle: string) => {
+      const res = await apiRequest("POST", "/api/ai/suggest-role-description", { roleTitle });
+      return (await res.json()) as { description: string };
+    },
+    onSuccess: (data) => {
+      setFormData((prev: any) => ({ ...prev, roleDescription: data.description }));
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Couldn't suggest a description",
+        description: extractApiErrorMessage(err, "Please try again."),
+        variant: "destructive",
+      });
+    },
+  });
 
   const { data: roleTitles = [] } = useQuery<any[]>({
     queryKey: ["/api/role-titles"],
@@ -2068,6 +2089,18 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                         }}
                       >
                         Use Suggested Description
+                      </Button>
+                    )}
+                    {formData.roleTitleId === 'custom' && formData.customRoleTitle.trim() !== '' && aiRoleSuggestEnabled && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs text-blue-600 hover:text-blue-800 p-1 h-auto"
+                        disabled={suggestRoleDescriptionMutation.isPending}
+                        onClick={() => suggestRoleDescriptionMutation.mutate(formData.customRoleTitle.trim())}
+                      >
+                        {suggestRoleDescriptionMutation.isPending ? "Suggesting…" : "Suggest with AI"}
                       </Button>
                     )}
                   </Label>

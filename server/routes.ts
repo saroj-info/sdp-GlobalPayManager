@@ -28,6 +28,8 @@ import { registerTimesheetsListRoutes } from "./modules/timesheets";
 import { registerAiContractRoutes, isAiEnabled } from "./modules/ai";
 import { registerAiSearchRoutes, isAiSearchEnabled } from "./modules/ai/search";
 import { registerAiCountryIntelRoutes, isAiCountryIntelEnabled } from "./modules/ai/countryIntel";
+import { registerAiRoleSuggestRoutes, isAiRoleSuggestEnabled } from "./modules/ai/roleSuggest";
+import { registerAiAdminSettingsRoutes } from "./modules/ai/adminSettings";
 import { registerDashboardRoutes } from "./modules/dashboard";
 
 // Simple in-memory rate limiting for login attempts
@@ -261,7 +263,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({
           ...userData,
           business,
-          featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled(), aiCountryIntelEnabled: isAiCountryIntelEnabled() },
+          featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled(), aiCountryIntelEnabled: isAiCountryIntelEnabled(), aiRoleSuggestEnabled: isAiRoleSuggestEnabled() },
         });
       }
     }
@@ -294,7 +296,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({
         ...userData,
         business,
-        featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled(), aiCountryIntelEnabled: isAiCountryIntelEnabled() },
+        featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled(), aiCountryIntelEnabled: isAiCountryIntelEnabled(), aiRoleSuggestEnabled: isAiRoleSuggestEnabled() },
       });
     }
     
@@ -7496,6 +7498,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Country intelligence Q&A (wizard panel) — env-gated (AI_COUNTRY_INTEL_ENABLED,
   // opt-out); the controller 404s when disabled.
   registerAiCountryIntelRoutes(app, authMiddleware);
+
+  // AI role-description suggester (wizard Step 4 custom roles) — env-gated
+  // (AI_ROLE_SUGGEST_ENABLED, opt-out); the controller 404s when disabled.
+  registerAiRoleSuggestRoutes(app, authMiddleware);
+
+  // SDP-admin AI settings + usage (daily token limit). No LLM calls here, so
+  // no env flag — the gate is the admin-role middleware.
+  registerAiAdminSettingsRoutes(app, authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin']));
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {

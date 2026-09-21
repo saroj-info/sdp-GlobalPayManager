@@ -86,6 +86,7 @@ export interface ToolCallRecord {
 }
 
 export interface SearchAudit {
+  businessId?: string; // resolved scope's business — threads through to ai_prompt_log
   model: string;
   inputTokens: number;
   outputTokens: number;
