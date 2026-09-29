@@ -139,22 +139,26 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
 
   return (
     <header className="bg-white border-b border-secondary-100 px-6 py-4">
-      <div className="flex justify-between items-center">
-        <div>
+      {/* Below xl (tablets, beside the 256px sidebar) the controls don't fit with
+          their text, so they show icons only. Labels return from xl up. */}
+      <div className="flex justify-between items-center gap-4">
+        <div className="min-w-0">
           <h2 className="text-2xl font-semibold text-secondary-900">{title}</h2>
           <p className="text-sm text-secondary-600 mt-1">{description}</p>
         </div>
-        <div className="flex items-center space-x-4">
+        <div className="flex shrink-0 items-center space-x-2 xl:space-x-4">
           {searchEnabled && (
             <Button
               variant="ghost"
               className="flex items-center bg-secondary-50 hover:bg-secondary-100 px-3 py-1 rounded-full transition-colors duration-200 gap-2"
               onClick={() => setCommandBarOpen(true)}
+              aria-label="Search"
+              title="Search"
               data-testid="button-ai-search"
             >
               <Search className="h-4 w-4 text-secondary-500" />
-              <span className="text-sm font-medium text-secondary-700">Search</span>
-              <kbd className="hidden sm:inline-flex items-center rounded border border-secondary-200 bg-white px-1.5 text-[10px] font-mono text-secondary-500">
+              <span className="hidden xl:inline text-sm font-medium text-secondary-700">Search</span>
+              <kbd className="hidden xl:inline-flex items-center rounded border border-secondary-200 bg-white px-1.5 text-[10px] font-mono text-secondary-500">
                 {shortcutHint}
               </kbd>
             </Button>
@@ -164,21 +168,25 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
             variant="ghost"
             className="flex items-center bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-full transition-colors duration-200 gap-2"
             onClick={() => setShowCountryIntel(true)}
+            aria-label="Country Intel"
+            title="Country Intel"
             data-testid="button-country-intel"
           >
             <Globe className="h-4 w-4 text-blue-600" />
-            <span className="text-sm font-medium text-blue-700">Country Intel</span>
+            <span className="hidden xl:inline text-sm font-medium text-blue-700">Country Intel</span>
           </Button>
           {/* Country Access Indicator - Clickable */}
           <Button
             variant="ghost"
             className="flex items-center bg-primary-50 hover:bg-primary-100 px-3 py-1 rounded-full transition-colors duration-200"
             onClick={() => setLocation('/country-management')}
+            aria-label={`${accessibleCountries.length} Countries`}
+            title={`${accessibleCountries.length} Countries`}
             data-testid="button-countries-chip"
           >
             <i className="fas fa-globe text-primary-500 text-sm mr-2"></i>
             <span className="text-sm font-medium text-primary-700">
-              {accessibleCountries.length} Countries
+              {accessibleCountries.length}<span className="hidden xl:inline"> Countries</span>
             </span>
           </Button>
           
@@ -199,7 +207,7 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
                     <span className="text-sm font-semibold text-primary-700">{getUserInitials()}</span>
                   </div>
                 )}
-                <div className="text-left hidden md:block">
+                <div className="text-left hidden xl:block">
                   <p className="text-sm font-semibold text-secondary-900">{getUserDisplayName()}</p>
                   <p className="text-xs text-primary-600">
                     {(() => {

@@ -896,8 +896,16 @@ function NewPayItemDialog({
   );
 }
 
+// Who may see a contract's billing rate, and what to call it. Customer work: the
+// client's rate, hidden from the worker. Internal work: what SDP charges the
+// business, which only SDP sees (same as billing lines).
+function getBilledRateLabel(contract: { isForClient?: boolean | null }, userType?: string): 'Client' | 'Business' | null {
+  if (contract.isForClient) return userType === 'worker' ? null : 'Client';
+  return userType === 'sdp_internal' ? 'Business' : null;
+}
+
 // Read-only display of project rate lines on a multi-rate contract
-function ContractRateLinesPanel({ contractId, currency, rateType }: { contractId: string; currency?: string; rateType?: string }) {
+function ContractRateLinesPanel({ contractId, currency, rateType, billedRateLabel }: { contractId: string; currency?: string; rateType?: string; billedRateLabel?: string | null }) {
   const { data: rateLines = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/contracts', contractId, 'rate-lines'],
     queryFn: async () => {
@@ -935,9 +943,9 @@ function ContractRateLinesPanel({ contractId, currency, rateType }: { contractId
             <div className="text-sm font-semibold text-primary-700 tabular-nums">
               {rl.currency || currency} {parseFloat(rl.rate || '0').toFixed(2)}{unit}
             </div>
-            {rl.clientRate && parseFloat(rl.clientRate) > 0 && (
+            {billedRateLabel && rl.clientRate && parseFloat(rl.clientRate) > 0 && (
               <div className="text-[11px] text-muted-foreground">
-                Client: {rl.currency || currency} {parseFloat(rl.clientRate).toFixed(2)}{unit}
+                {billedRateLabel}: {rl.currency || currency} {parseFloat(rl.clientRate).toFixed(2)}{unit}
               </div>
             )}
           </div>
@@ -1204,9 +1212,10 @@ export default function ContractsPage() {
     <div className="p-6 space-y-6">
           {/* Filters and Actions */}
           <div className="flex flex-col gap-4">
-            {/* Top Row: Filters and Create Button */}
-            <div className="flex justify-between items-center">
-              <div className="flex gap-4">
+            {/* Top Row: Filters and Create Button. Wraps on tablets, where the
+                filters and buttons don't fit on one line beside the sidebar. */}
+            <div className="flex flex-wrap justify-between items-center gap-3">
+              <div className="flex flex-wrap gap-4">
                 {(user as any)?.userType === 'sdp_internal' && (
                   <>
                     <Select value={filterBusiness} onValueChange={setFilterBusiness}>
@@ -1813,8 +1822,9 @@ export default function ContractsPage() {
                   const isHostClientView = (selectedContract as any)?.viewerRole === 'host_client';
                   // Worker Rate (worker pay) — only SDP & employing business should see this
                   const canSeeWorkerRate = !isWorkerView && !isHostClientView;
-                  // Client Billing Rate — SDP, employing business, AND host client (they're the one being billed)
-                  const canSeeClientBillingRate = !isWorkerView;
+                  // Client Billing Rate — SDP, employing business, AND host client (they're the one being billed).
+                  // On internal work the same column holds what SDP charges the business: SDP only.
+                  const billedRateLabel = getBilledRateLabel(selectedContract, (user as any)?.userType);
                   const rateUnit = selectedContract.rateType === 'daily' ? 'day' : selectedContract.rateType === 'hourly' ? 'hour' : selectedContract.rateType;
                   return (
                 <div className="border rounded-lg overflow-hidden">
@@ -1847,10 +1857,10 @@ export default function ContractsPage() {
                         <p className="font-medium capitalize">{String((selectedContract as any).clientBillingType).replace(/_/g, ' ')}</p>
                       </div>
                     )}
-                    {/* Client Billing Rate — shown to SDP, employing business, AND host client */}
-                    {canSeeClientBillingRate && (selectedContract as any).customerBillingRate && (
+                    {/* Billing rate — see getBilledRateLabel for who sees it */}
+                    {billedRateLabel && (selectedContract as any).customerBillingRate && (
                       <div>
-                        <p className="text-xs text-muted-foreground">Client Billing Rate</p>
+                        <p className="text-xs text-muted-foreground">{billedRateLabel} Billing Rate</p>
                         <p className="font-medium">{(selectedContract as any).customerCurrency || selectedContract.currency} {parseFloat((selectedContract as any).customerBillingRate).toFixed(2)} / {(selectedContract as any).customerBillingRateType || 'hour'}</p>
                       </div>
                     )}
@@ -1945,6 +1955,7 @@ export default function ContractsPage() {
                       contractId={selectedContract.id}
                       currency={selectedContract.currency}
                       rateType={selectedContract.rateType}
+                      billedRateLabel={getBilledRateLabel(selectedContract, (user as any)?.userType)}
                     />
                   </div>
                 )}

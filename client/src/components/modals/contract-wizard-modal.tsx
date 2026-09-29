@@ -255,6 +255,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   
   const [formData, setFormData] = useState(getInitialFormData);
 
+  // Billing-rate inputs show for rate-based customer work, and for internal work
+  // that SDP sets up on behalf of a business (the rate SDP charges that business).
+  // The internal-work rate is saved for reference only: invoices are not generated
+  // for isForClient=false contracts.
+  const isInternalOnBehalf = isSDPInternal && formData.onBehalf && !formData.isForClient;
+  const isRateBasedClientBilling = formData.isForClient && (formData.clientBillingType || 'rate_based') === 'rate_based';
+  const showBillingRate = isRateBasedClientBilling || isInternalOnBehalf;
+  const billedParty = isInternalOnBehalf ? 'Business' : 'Client';
+
   // Refs to track previous country and employment type for template clearing logic
   const prevCountryRef = useRef(formData.countryId);
   const prevEmploymentTypeRef = useRef(formData.employmentType);
@@ -707,8 +716,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       ? (projectRateLines.find((l: any) => l.isDefault && l.rate) || projectRateLines.find((l: any) => l.rate))
       : null;
     const effectiveRate = primaryRateLine?.rate || formData.rate;
-    // Same for customer billing rate when client billing is rate-based on a multiple-rate contract
-    const effectiveCustomerBillingRate = (formData.isForClient && formData.clientBillingType !== 'fixed_price' && formData.rateStructure === 'multiple')
+    // Same for the billing rate when it is entered per line on a multiple-rate contract
+    const effectiveCustomerBillingRate = (showBillingRate && formData.rateStructure === 'multiple')
       ? (primaryRateLine?.clientRate || formData.customerBillingRate)
       : formData.customerBillingRate;
 
@@ -716,6 +725,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       ...formData,
       rate: effectiveRate,
       customerBillingRate: effectiveCustomerBillingRate,
+      // Internal work has no host client. Clear what an earlier Customer Work
+      // choice left behind, otherwise that host client keeps access to the
+      // contract. customerBillingRate is kept: a business user editing the
+      // contract must not wipe the rate SDP entered.
+      ...(formData.isForClient ? {} : {
+        customerBusinessId: '',
+        fixedBillingAmount: '',
+        clientBillingType: formData.clientBillingType === 'fixed_price' ? '' : formData.clientBillingType,
+      }),
       // Include on-behalf fields for SDP internal users
       onBehalf: isSDPInternal ? formData.onBehalf : false,
       selectedBusinessId: isSDPInternal && formData.onBehalf ? formData.selectedBusinessId : undefined,
@@ -1992,7 +2010,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                     <div className="text-secondary-600">
                       <p className="text-lg font-medium mb-2">Internal Work Selected</p>
                       <p>No customer billing setup required for internal work arrangements.</p>
-                      <p className="mt-2 text-sm text-secondary-500">SDP billing to your business will be covered in the next step.</p>
+                      {isInternalOnBehalf && (
+                        <p className="mt-2 text-sm text-secondary-500">You can enter the rate SDP charges the business in the next step, under Pay Structure.</p>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -2347,11 +2367,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                       <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
                         SDP will review and allocate this across base salary, allowances and statutory deductions. The full pay breakdown will be confirmed before the contract is issued.
                       </div>
-                      {/* Salary + Rate-Based: client billing rate */}
-                      {formData.isForClient && (formData.clientBillingType || 'rate_based') === 'rate_based' && (
+                      {/* Salary + Rate-Based: client billing rate (or SDP → business rate for internal on-behalf work) */}
+                      {showBillingRate && (
                         <div className="space-y-3 p-3 bg-white rounded-lg border border-secondary-200">
-                          <h5 className="text-sm font-semibold text-secondary-900">Client Billing Rate</h5>
-                          <p className="text-xs text-secondary-600">This worker is on a fixed salary, but the client will be billed based on time logged. Set the rate you charge the client per unit.</p>
+                          <h5 className="text-sm font-semibold text-secondary-900">{billedParty} Billing Rate</h5>
+                          <p className="text-xs text-secondary-600">
+                            {isInternalOnBehalf
+                              ? 'Optional. The rate SDP charges the business for this worker. Invoices for internal work are not generated automatically.'
+                              : 'This worker is on a fixed salary, but the client will be billed based on time logged. Set the rate you charge the client per unit.'}
+                          </p>
                           <div className="grid grid-cols-3 gap-3">
                             <div>
                               <Label className="text-xs font-medium">Billing Basis</Label>
@@ -2364,7 +2388,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                               </Select>
                             </div>
                             <div>
-                              <Label className="text-xs font-medium">Client Rate *</Label>
+                              <Label className="text-xs font-medium">{billedParty} Rate{isInternalOnBehalf ? '' : ' *'}</Label>
                               <Input
                                 type="number"
                                 step="0.01"
@@ -2433,11 +2457,11 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                               </Select>
                             </div>
                           </div>
-                          {/* Client Rate for single rate + rate-based billing */}
-                          {formData.isForClient && (formData.clientBillingType || 'rate_based') === 'rate_based' && (
+                          {/* Billing rate for single rate + rate-based billing */}
+                          {showBillingRate && (
                             <div className="grid grid-cols-3 gap-3 pt-2 border-t border-secondary-100">
                               <div className="col-span-2">
-                                <Label className="text-sm font-medium text-accent-700">{formData.rateType === 'hourly' ? 'Client Billing Rate (per hour)' : 'Client Billing Rate (per day)'} *</Label>
+                                <Label className="text-sm font-medium text-accent-700">{billedParty} Billing Rate ({formData.rateType === 'hourly' ? 'per hour' : 'per day'}){isInternalOnBehalf ? '' : ' *'}</Label>
                                 <Input
                                   type="number"
                                   step="0.01"
@@ -2452,9 +2476,12 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                                   <span className="text-xs text-green-700 font-medium">Margin: {formData.currency} {(parseFloat(formData.customerBillingRate) - parseFloat(formData.rate)).toFixed(2)}/{formData.rateType === 'hourly' ? 'hr' : 'day'}</span>
                                 )}
                                 {formData.rate && formData.customerBillingRate && parseFloat(formData.customerBillingRate) <= parseFloat(formData.rate) && (
-                                  <span className="text-xs text-red-600 font-medium">Warning: client rate ≤ worker rate</span>
+                                  <span className="text-xs text-red-600 font-medium">Warning: {billedParty.toLowerCase()} rate ≤ worker rate</span>
                                 )}
                               </div>
+                              {isInternalOnBehalf && (
+                                <p className="col-span-3 text-xs text-secondary-500">Optional. The rate SDP charges the business for this worker. Invoices for internal work are not generated automatically.</p>
+                              )}
                             </div>
                           )}
                           {formData.isForClient && formData.clientBillingType === 'fixed_price' && (
@@ -2468,7 +2495,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                         <div className="space-y-3 p-3 bg-white rounded-lg border border-secondary-200">
                           <p className="text-xs text-secondary-600">Define all rates that apply — including penalty rates such as overtime, weekend and public holiday rates. Workers will select the applicable rate on each timesheet entry.</p>
                           {projectRateLines.map((prl, idx) => (
-                            <div key={idx} className={`grid gap-2 items-end bg-secondary-50 p-2 rounded border border-secondary-100 ${formData.isForClient && (formData.clientBillingType || 'rate_based') === 'rate_based' ? 'grid-cols-12' : 'grid-cols-10'}`}>
+                            <div key={idx} className={`grid gap-2 items-end bg-secondary-50 p-2 rounded border border-secondary-100 ${showBillingRate ? 'grid-cols-12' : 'grid-cols-10'}`}>
                               <div className="col-span-3">
                                 <Label className="text-xs">Rate Name</Label>
                                 <Input className="h-8" value={prl.projectName} onChange={(e) => {
@@ -2481,9 +2508,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                                   const u = [...projectRateLines]; u[idx].rate = e.target.value; setProjectRateLines(u);
                                 }} placeholder="0.00" />
                               </div>
-                              {formData.isForClient && (formData.clientBillingType || 'rate_based') === 'rate_based' && (
+                              {showBillingRate && (
                                 <div className="col-span-2">
-                                  <Label className="text-xs text-accent-700">Client Rate</Label>
+                                  <Label className="text-xs text-accent-700">{billedParty} Rate</Label>
                                   <Input className="h-8 border-accent-300" type="number" step="0.01" value={prl.clientRate || ''} onChange={(e) => {
                                     const u = [...projectRateLines]; u[idx].clientRate = e.target.value; setProjectRateLines(u);
                                   }} placeholder="0.00" />
@@ -2518,8 +2545,12 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                             <Plus className="h-4 w-4 mr-1" />
                             Add Rate Line
                           </Button>
-                          {formData.isForClient && (formData.clientBillingType || 'rate_based') === 'rate_based' && (
-                            <p className="text-xs text-secondary-500 mt-1">Set a client rate per line to charge the correct amount for each rate type (e.g. higher client rate for Sunday work).</p>
+                          {showBillingRate && (
+                            <p className="text-xs text-secondary-500 mt-1">
+                              {isInternalOnBehalf
+                                ? 'Optional. Set the rate SDP charges the business for each line. Invoices for internal work are not generated automatically.'
+                                : 'Set a client rate per line to charge the correct amount for each rate type (e.g. higher client rate for Sunday work).'}
+                            </p>
                           )}
                         </div>
                       )}

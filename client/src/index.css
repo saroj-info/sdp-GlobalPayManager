@@ -115,11 +115,14 @@
     font-family: 'Inter', system-ui, sans-serif;
   }
 
-  /* AuthenticatedLayout adds `.app-shell` to <body> while mounted so only <main>
-     scrolls. Public pages (Landing, Login) keep natural body scroll. */
+  /* AuthenticatedLayout adds `.app-shell` to <html> and <body> while mounted so
+     only <main> scrolls. Public pages (Landing, Login) keep natural body scroll.
+     Height is 100%, not 100vh: on tablets 100vh can be taller than the visible
+     area, which lets the document shift up with no way to scroll it back. */
+  html.app-shell,
   body.app-shell,
   body.app-shell #root {
-    height: 100vh;
+    height: 100%;
     overflow: hidden;
   }
 }

@@ -172,7 +172,7 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="w-64 h-screen flex flex-col bg-white dark:bg-gray-900 shadow-lg border-r border-secondary-100 dark:border-gray-800">
+    <aside className="w-64 h-full flex flex-col bg-white dark:bg-gray-900 shadow-lg border-r border-secondary-100 dark:border-gray-800">
       {/* Top: logo + user info — does not scroll */}
       <div className="px-6 pt-6 pb-4">
         <div className="mb-6">
