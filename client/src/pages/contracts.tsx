@@ -955,6 +955,59 @@ function ContractRateLinesPanel({ contractId, currency, rateType, billedRateLabe
   );
 }
 
+// Read-only display of tier discounts on a client-work contract
+function ContractTierDiscountsPanel({ contractId, startDate }: { contractId: string; startDate?: string }) {
+  const { data: tiers = [], isLoading, isError } = useQuery<any[]>({
+    queryKey: ['/api/contracts', contractId, 'tier-discounts'],
+    queryFn: async () => {
+      const res = await apiRequest('GET', `/api/contracts/${contractId}/tier-discounts`);
+      return res.json();
+    },
+    enabled: !!contractId,
+    retry: false,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="p-4">
+        <Loader fullPage size="sm" label="Loading tier discounts" />
+      </div>
+    );
+  }
+  if (isError || !tiers || tiers.length === 0) {
+    return <div className="text-xs text-muted-foreground p-3">No tier discounts defined.</div>;
+  }
+
+  const now = new Date();
+  const effDate = (months: number): Date | null => {
+    if (!startDate) return null;
+    const d = new Date(startDate);
+    if (isNaN(d.getTime())) return null;
+    d.setMonth(d.getMonth() + Number(months));
+    return d;
+  };
+
+  return (
+    <div className="divide-y divide-secondary-200/60">
+      {tiers.map((t: any) => {
+        const eff = effDate(t.monthsAfterStart);
+        return (
+          <div key={t.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-secondary-900">After {t.monthsAfterStart} months</span>
+              {eff && <span className="text-[11px] text-muted-foreground">from {eff.toISOString().split('T')[0]}</span>}
+              {eff && eff <= now && <Badge variant="outline" className="text-[10px] h-4 px-1.5">Active</Badge>}
+            </div>
+            <div className="text-sm font-semibold text-primary-700 tabular-nums">
+              −{parseFloat(t.discountPercent).toFixed(2)}%
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ContractsPage() {
   const [showContractWizard, setShowContractWizard] = useState(false);
   const [showAiContractChat, setShowAiContractChat] = useState(false);
@@ -1956,6 +2009,21 @@ export default function ContractsPage() {
                       currency={selectedContract.currency}
                       rateType={selectedContract.rateType}
                       billedRateLabel={getBilledRateLabel(selectedContract, (user as any)?.userType)}
+                    />
+                  </div>
+                )}
+
+                {/* Tier discounts — client-work contracts only, not visible to workers or host clients */}
+                {selectedContract.isForClient && (user as any)?.userType !== 'worker' &&
+                 (selectedContract as any)?.viewerRole !== 'host_client' && (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="px-4 py-2 bg-secondary-50 border-b flex items-center justify-between">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Tier Discounts</p>
+                      <Badge variant="secondary" className="text-[10px]">Client billing</Badge>
+                    </div>
+                    <ContractTierDiscountsPanel
+                      contractId={selectedContract.id}
+                      startDate={selectedContract.startDate}
                     />
                   </div>
                 )}

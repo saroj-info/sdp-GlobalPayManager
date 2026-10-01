@@ -666,6 +666,24 @@ export const insertContractBillingLineSchema = createInsertSchema(contractBillin
   updatedAt: true,
 });
 
+// Contract Tier Discounts — time-based discount steps applied to the
+// HOST-CLIENT invoice only (e.g. after 3 months → 10% off client billing).
+// Worker pay and SDP fee lines are never discounted.
+export const contractTierDiscounts = pgTable("contract_tier_discounts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").references(() => contracts.id, { onDelete: 'cascade' }).notNull(),
+  monthsAfterStart: integer("months_after_start").notNull(),
+  discountPercent: decimal("discount_percent", { precision: 5, scale: 2 }).notNull(),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_contract_tier_discounts_contract").on(table.contractId),
+]);
+
+export type SelectContractTierDiscount = typeof contractTierDiscounts.$inferSelect;
+export type InsertContractTierDiscount = typeof contractTierDiscounts.$inferInsert;
+
 export type SelectPurchaseOrder = typeof purchaseOrders.$inferSelect;
 export type InsertPurchaseOrder = typeof purchaseOrders.$inferInsert;
 

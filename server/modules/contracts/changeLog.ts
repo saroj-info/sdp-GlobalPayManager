@@ -37,6 +37,10 @@ export const TRACKED_CONTRACT_FIELDS: Array<{ key: string; label: string }> = [
   { key: "billingMode",             label: "Billing Mode" },
   { key: "invoicingFrequency",      label: "Invoicing Frequency" },
   { key: "paymentTerms",            label: "Payment Terms" },
+  // Not a contract column — written via an explicit logContractChanges call
+  // in PUT /api/contracts/:id (the key never survives insertContractSchema
+  // parsing, so the normal diff can't see it). Listed here for the label.
+  { key: "tierDiscounts",           label: "Tier Discounts" },
 
   // Term
   { key: "startDate",               label: "Start Date" },

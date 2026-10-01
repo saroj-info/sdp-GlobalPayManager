@@ -171,6 +171,7 @@ const FIELD_LABEL: Record<string, string> = {
   paymentTerms: "Payment Terms (Days)",
   projectRateLines: "Multiple Rate Lines",
   purchaseOrderLines: "PO / SOW Lines",
+  tierDiscounts: "Tier discounts",
 };
 
 const labelOf = (key: string) => FIELD_LABEL[key] ?? key;
@@ -331,6 +332,7 @@ const STEP_DEFS: StepDef[] = [
       "remunerationLines",
       "projectRateLines",
       "purchaseOrderLines",
+      "tierDiscounts",
       "requiresTimesheet",
       "timesheetFrequency",
       "timesheetCalculationMethod",
@@ -395,7 +397,7 @@ const STEP_DEFS: StepDef[] = [
       // Show any other Step-4 fields the AI has set that aren't already in the list.
       // remunerationLines / projectRateLines / purchaseOrderLines are complex
       // arrays — never render placeholder rows for them; only show when set.
-      for (const k of ["remunerationLines", "projectRateLines", "purchaseOrderLines", "timesheetCalculationMethod", "paymentHolidayRule"]) {
+      for (const k of ["remunerationLines", "projectRateLines", "purchaseOrderLines", "tierDiscounts", "timesheetCalculationMethod", "paymentHolidayRule"]) {
         if (hasValue(draft[k]) && !list.includes(k)) list.push(k);
       }
       return list;

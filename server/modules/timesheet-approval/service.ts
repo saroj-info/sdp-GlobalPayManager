@@ -17,6 +17,7 @@ import {
   appendHostClientBillingLines,
   computeCustomerBilling,
   computeSdpServicesContent,
+  computeTierDiscount,
   computeWorkerCost,
   partitionBillingLines,
 } from "./calculations";
@@ -141,6 +142,7 @@ async function buildBillingSnapshot(args: {
   const activeBillingLines = (await storage.getContractBillingLines(contract.id)).filter((bl: any) => bl.isActive);
   const { business: businessBillingLines, hostClient: hostClientBillingLines } =
     partitionBillingLines(activeBillingLines as any);
+  const tierDiscountRows = await storage.getContractTierDiscounts(contract.id);
 
   // Worker cost (pure)
   const { workerCost, lineItems: workerCostLineItems } =
@@ -176,6 +178,32 @@ async function buildBillingSnapshot(args: {
     hostClientBillingLines: hostClientBillingLines as any,
   });
 
+  // Tier discount — reduces ONLY the host-client invoice. Base is the customer
+  // billing amount (rate-based or fixed-price), NOT the host-client fee lines.
+  // percentageBase / SDP fee lines stay on the undiscounted base.
+  const tierDiscount = computeTierDiscount({
+    tiers: tierDiscountRows as any,
+    contractStartDate: contract.startDate,
+    periodStart: timesheet.periodStart,
+    baseAmount: customer.amount,
+  });
+  let clientAmount = enriched.amount;
+  let clientLineItems = enriched.lineItems;
+  if (tierDiscount) {
+    clientAmount = Math.round((clientAmount - tierDiscount.amount) * 100) / 100;
+    clientLineItems = [
+      ...clientLineItems,
+      {
+        description: `Tier discount ${tierDiscount.percent}% (after ${tierDiscount.monthsAfterStart} months)`,
+        quantity: "1",
+        unitPrice: (-tierDiscount.amount).toFixed(2),
+        amount: (-tierDiscount.amount).toFixed(2),
+        // MUST be last: invoices.tsx reads lineItems[0].unitPrice as the displayed rate.
+        sortOrder: clientLineItems.length,
+      },
+    ];
+  }
+
   // SDP services content (pure)
   const sdpServices = computeSdpServicesContent({
     billingMode,
@@ -195,9 +223,9 @@ async function buildBillingSnapshot(args: {
     workerCostLineItems,
     sdpInvoiceTotal: sdpServices.total,
     sdpBillingLineItems: sdpServices.lineItems,
-    customerBillingAmount: enriched.amount,
-    clientLineItems: enriched.lineItems,
-    suggestedMargin: enriched.amount - workerCost,
+    customerBillingAmount: clientAmount,
+    clientLineItems,
+    suggestedMargin: clientAmount - workerCost,
     currency: contract.customerCurrency || contract.currency,
     invoiceDate,
     dueDate,

@@ -9,6 +9,7 @@ import {
   payItems,
   contractRateLines,
   contractBillingLines,
+  contractTierDiscounts,
   purchaseOrders,
   contractTemplates,
   contractInstances,
@@ -111,6 +112,8 @@ import {
   type InsertContractRateLine,
   type SelectContractBillingLine,
   type InsertContractBillingLine,
+  type SelectContractTierDiscount,
+  type InsertContractTierDiscount,
   type SelectPurchaseOrder,
   type InsertPurchaseOrder,
 } from "@shared/schema";
@@ -310,6 +313,10 @@ export interface IStorage {
   updateContractRateLine(id: string, data: Partial<InsertContractRateLine>): Promise<SelectContractRateLine>;
   deleteContractRateLine(id: string): Promise<void>;
   replaceContractRateLines(contractId: string, lines: InsertContractRateLine[]): Promise<SelectContractRateLine[]>;
+
+  // Contract Tier Discounts (client-billing discount steps)
+  getContractTierDiscounts(contractId: string): Promise<SelectContractTierDiscount[]>;
+  replaceContractTierDiscounts(contractId: string, rows: InsertContractTierDiscount[]): Promise<SelectContractTierDiscount[]>;
 
   // Contract Billing Lines (SDP-only)
   getContractBillingLines(contractId: string): Promise<SelectContractBillingLine[]>;
@@ -1954,6 +1961,21 @@ export class DatabaseStorage implements IStorage {
     await db.delete(contractRateLines).where(eq(contractRateLines.contractId, contractId));
     if (lines.length === 0) return [];
     return await db.insert(contractRateLines).values(lines).returning();
+  }
+
+  // Contract Tier Discounts (client-billing discount steps)
+  async getContractTierDiscounts(contractId: string): Promise<SelectContractTierDiscount[]> {
+    return await db
+      .select()
+      .from(contractTierDiscounts)
+      .where(eq(contractTierDiscounts.contractId, contractId))
+      .orderBy(contractTierDiscounts.monthsAfterStart);
+  }
+
+  async replaceContractTierDiscounts(contractId: string, rows: InsertContractTierDiscount[]): Promise<SelectContractTierDiscount[]> {
+    await db.delete(contractTierDiscounts).where(eq(contractTierDiscounts.contractId, contractId));
+    if (rows.length === 0) return [];
+    return await db.insert(contractTierDiscounts).values(rows).returning();
   }
 
   // Contract Billing Lines (SDP-only)

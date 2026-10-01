@@ -15,6 +15,7 @@ import {
 } from "./modules/workforce/associations";
 import { registerContractsRoutes } from "./modules/contracts";
 import { logContractChanges, TRACKED_CONTRACT_FIELDS } from "./modules/contracts/changeLog";
+import { normalizeTierDiscounts, findPastEffectiveTier, serializeTiers } from "./modules/contracts/tierDiscounts";
 import {
   logWorkerChanges,
   diffWorkerFields,
@@ -5913,7 +5914,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: firstError?.message || 'Invalid contract data', errors: parseResult.error.errors });
       }
       const data = parseResult.data;
-      
+
+      // Optional tier discounts ride the raw body (insertContractSchema strips
+      // the key, same as remunerationLines). No past-date rule on create — the
+      // contract is just being configured.
+      const tierParse = normalizeTierDiscounts(req.body.tierDiscounts);
+      if (!tierParse.ok) {
+        return res.status(400).json({ message: tierParse.error });
+      }
+
       // Add audit fields after parsing (since they're omitted from insertContractSchema)
       const finalContractData = {
         ...data,
@@ -6038,6 +6047,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Persist tier discounts if provided
+      if (tierParse.tiers.length > 0) {
+        try {
+          await storage.replaceContractTierDiscounts(contract.id, tierParse.tiers.map((t, i) => ({
+            contractId: contract.id,
+            monthsAfterStart: t.monthsAfterStart,
+            discountPercent: t.discountPercent.toFixed(2), // decimal column takes a string
+            sortOrder: i,
+          })));
+        } catch (tierErr: any) {
+          console.error('Failed to create tier discounts:', tierErr?.message ?? tierErr);
+        }
+      }
+
       // Send email notification to SDP users if contract requires review
       if (contract.status === 'pending_sdp_review') {
         try {
@@ -6158,6 +6181,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         businessId: existingContract.businessId, // Keep original business ID
       });
 
+      // Tier discounts: validate + enforce the future-effective-date rule
+      // BEFORE any write, so a 400 leaves the contract completely untouched.
+      // New/changed tiers whose effective date has passed are rejected;
+      // unchanged tiers are preserved even if past, removals are allowed.
+      const rawTiers = req.body.tierDiscounts;
+      let parsedTiers: { monthsAfterStart: number; discountPercent: number }[] | null = null;
+      let existingTiers: Awaited<ReturnType<typeof storage.getContractTierDiscounts>> = [];
+      if (rawTiers !== undefined) {
+        const tierParse = normalizeTierDiscounts(rawTiers);
+        if (!tierParse.ok) {
+          return res.status(400).json({ message: tierParse.error });
+        }
+        parsedTiers = tierParse.tiers;
+        existingTiers = await storage.getContractTierDiscounts(id);
+        // Use the startDate this update will land (schema transforms it to a Date).
+        const effectiveStart = data.startDate instanceof Date
+          ? data.startDate
+          : new Date(existingContract.startDate as any);
+        const pastTier = findPastEffectiveTier({
+          incoming: parsedTiers,
+          existing: existingTiers,
+          startDate: effectiveStart,
+        });
+        if (pastTier) {
+          return res.status(400).json({
+            code: "TIER_DISCOUNT_IN_PAST",
+            message: `Tier discount at ${pastTier.monthsAfterStart} months (${pastTier.discountPercent}%) would take effect on a date that has already passed. New or changed tiers must take effect on a future date.`,
+          });
+        }
+      }
+
       // If contractDocument is provided alongside other fields, include it in the update
       const updateData = contractDocument !== undefined
         ? { ...data, contractDocument }
@@ -6194,7 +6248,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error('Failed to update remuneration lines:', remunError);
         }
       }
-      
+
+      // Handle tier discounts if provided (replace-all, mirrors remuneration lines)
+      if (parsedTiers !== null) {
+        try {
+          await storage.replaceContractTierDiscounts(id, parsedTiers.map((t, i) => ({
+            contractId: id,
+            monthsAfterStart: t.monthsAfterStart,
+            discountPercent: t.discountPercent.toFixed(2),
+            sortOrder: i,
+          })));
+          // Explicit change-log entry — tierDiscounts never survives
+          // insertContractSchema parsing, so the logContractChanges call
+          // above can't see it.
+          const oldSerialized = serializeTiers(existingTiers);
+          const newSerialized = serializeTiers(parsedTiers);
+          if (oldSerialized !== newSerialized) {
+            await logContractChanges({
+              contractId: id,
+              before: { tierDiscounts: oldSerialized },
+              after: { tierDiscounts: newSerialized },
+              changedBy: userId ?? null,
+            }).catch((e: any) => console.error("Failed to log tier discount change:", e?.message ?? e));
+          }
+        } catch (tierErr: any) {
+          console.error('Failed to update tier discounts:', tierErr?.message ?? tierErr);
+        }
+      }
+
       res.json(updatedContract);
     } catch (error: any) {
       console.error("Error updating contract:", error?.message || String(error));
@@ -6615,6 +6696,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error fetching contract rate lines:", error);
       res.status(500).json({ message: "Failed to fetch rate lines" });
+    }
+  });
+
+  app.get('/api/contracts/:id/tier-discounts', authMiddleware, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const contract = await storage.getContract(id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      // Ownership check (same rule as PUT /api/contracts/:id): non-SDP users
+      // may only read tiers on their own business's contracts.
+      if (req.user?.userType !== 'sdp_internal') {
+        const business = await storage.getPrimaryBusinessForUser(req.user?.id);
+        if (!business || contract.businessId !== business.id) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+      }
+      const rows = await storage.getContractTierDiscounts(id);
+      res.json(rows);
+    } catch (error: any) {
+      console.error("Error fetching contract tier discounts:", error?.message ?? String(error));
+      res.status(500).json({ message: "Failed to fetch tier discounts" });
     }
   });
 

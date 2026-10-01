@@ -361,3 +361,41 @@ export function appendHostClientBillingLines(args: {
   }
   return { amount: total, lineItems: out };
 }
+
+// ─── Tier discount ──────────────────────────────────────────────────────────
+
+/**
+ * Pick the applicable tier discount for a billing period: the tier with the
+ * HIGHEST monthsAfterStart whose effective date (contract start + N months,
+ * native setMonth semantics) is on or before the timesheet period start.
+ * The discount applies to the customer billing amount only — NOT host-client
+ * fee lines, worker pay, or SDP fees. Returns null when no tier applies.
+ */
+export function computeTierDiscount(args: {
+  tiers: Array<{ monthsAfterStart: number; discountPercent: string | number }>;
+  contractStartDate: any;
+  periodStart: any;
+  baseAmount: number;
+}): { monthsAfterStart: number; percent: number; amount: number } | null {
+  const { tiers, contractStartDate, periodStart, baseAmount } = args;
+  if (!tiers || tiers.length === 0 || baseAmount <= 0) return null;
+  const start = contractStartDate instanceof Date ? contractStartDate : new Date(contractStartDate);
+  const pStart = periodStart instanceof Date ? periodStart : new Date(periodStart);
+  if (isNaN(start.getTime()) || isNaN(pStart.getTime())) return null;
+
+  let best: { monthsAfterStart: number; percent: number } | null = null;
+  for (const t of tiers) {
+    const months = Number(t.monthsAfterStart);
+    const pct = num(t.discountPercent);
+    if (!Number.isInteger(months) || months < 1 || pct <= 0) continue;
+    const effective = new Date(start);
+    effective.setMonth(effective.getMonth() + months); // mirrors tierDiscounts.addMonths
+    if (effective <= pStart && (!best || months > best.monthsAfterStart)) {
+      best = { monthsAfterStart: months, percent: pct };
+    }
+  }
+  if (!best) return null;
+  const amount = Math.round(baseAmount * best.percent) / 100; // base × pct/100, 2dp
+  if (amount <= 0) return null;
+  return { ...best, amount };
+}

@@ -40,6 +40,10 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   const [projectRateLines, setProjectRateLines] = useState<any[]>([]);
   const [showPurchaseOrders, setShowPurchaseOrders] = useState(false);
   const [purchaseOrderLines, setPurchaseOrderLines] = useState<any[]>([]);
+  const [tierDiscountLines, setTierDiscountLines] = useState<any[]>([]);
+  // Guards the edit-mode "always send tierDiscounts" payload rule against the
+  // async hydration fetch racing a fast Save (which would wipe existing tiers).
+  const [tierDiscountsHydrated, setTierDiscountsHydrated] = useState(false);
   const { user } = useAuth();
   const [, navigate] = useLocation();
 
@@ -277,6 +281,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     prevEmploymentTypeRef.current = newData.employmentType;
     // Reset rate lines; they'll be hydrated from the server below when editing a multiple-rate contract
     setProjectRateLines([]);
+    // Same for tier discounts — hydrated below when editing a client-work contract
+    setTierDiscountLines([]);
+    setTierDiscountsHydrated(false);
   }, [editMode, existingContract]);
 
   // Sync preselectedWorkerId into form whenever it is provided (the modal may already be mounted
@@ -312,6 +319,31 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         }
       } catch (e) {
         console.error('Failed to load existing rate lines:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [editMode, existingContract]);
+
+  // Load existing tier discounts when editing a client-work contract
+  useEffect(() => {
+    if (!editMode || !existingContract?.id || !existingContract?.isForClient) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest('GET', `/api/contracts/${existingContract.id}/tier-discounts`);
+        const rows = await res.json();
+        if (!cancelled && Array.isArray(rows)) {
+          setTierDiscountLines(rows.map((r: any) => ({
+            monthsAfterStart: r.monthsAfterStart != null ? String(r.monthsAfterStart) : '',
+            discountPercent: r.discountPercent != null ? String(parseFloat(r.discountPercent)) : '',
+            existing: true,
+          })));
+          // Only flag hydrated on success — on a failed fetch the payload
+          // omits tierDiscounts so existing tiers can never be wiped.
+          setTierDiscountsHydrated(true);
+        }
+      } catch (e) {
+        console.error('Failed to load existing tier discounts:', e);
       }
     })();
     return () => { cancelled = true; };
@@ -568,6 +600,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       setFormData(getInitialFormData());
       setProjectRateLines([]);
       setPurchaseOrderLines([]);
+      setTierDiscountLines([]);
+      setTierDiscountsHydrated(false);
       setShowMultipleRates(false);
       setShowPurchaseOrders(false);
       toast({
@@ -600,6 +634,22 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       });
     },
   });
+
+  // Tier-discount date helpers — same native setMonth semantics as the server,
+  // so the preview and the enforcement agree (incl. month-end overflow).
+  const tierEffectiveDate = (months: string | number): Date | null => {
+    if (!formData.startDate) return null;
+    const m = Number(months);
+    if (!Number.isInteger(m) || m < 1) return null;
+    const d = new Date(formData.startDate);
+    if (isNaN(d.getTime())) return null;
+    d.setMonth(d.getMonth() + m);
+    return d;
+  };
+  const isTierPast = (months: string | number): boolean => {
+    const d = tierEffectiveDate(months);
+    return !!d && d <= new Date();
+  };
 
   // Per-step validation — returns first missing field error, or null if valid
   const validateStep4 = (): string | null => {
@@ -636,6 +686,23 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     }
     if (isSDPInternal && formData.onBehalf && !formData.selectedBusinessId) {
       return "Please select a business when creating contracts on behalf.";
+    }
+    if (formData.isForClient && tierDiscountLines.length > 0) {
+      const seenMonths = new Set<number>();
+      for (const t of tierDiscountLines) {
+        const months = Number(t.monthsAfterStart);
+        const pct = Number(t.discountPercent);
+        if (!Number.isInteger(months) || months < 1) {
+          return "Each tier discount needs a whole number of months (1 or more).";
+        }
+        if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+          return "Each tier discount percent must be greater than 0 and at most 100.";
+        }
+        if (seenMonths.has(months)) {
+          return "Tier discounts must each use a different number of months.";
+        }
+        seenMonths.add(months);
+      }
     }
     return null;
   };
@@ -745,6 +812,18 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       // Handle custom role titles properly
       roleTitleId: formData.roleTitleId === 'custom' ? null : formData.roleTitleId,
       status: contractStatus, // Set the appropriate workflow status
+      // Tier discounts: EDIT always sends the key once hydrated (even [] so
+      // clearing works); CREATE omits the key when empty so the legacy payload
+      // shape is untouched.
+      ...(formData.isForClient &&
+         (editMode ? (tierDiscountsHydrated || tierDiscountLines.length > 0) : tierDiscountLines.length > 0)
+        ? {
+            tierDiscounts: tierDiscountLines.map((t: any) => ({
+              monthsAfterStart: t.monthsAfterStart,
+              discountPercent: t.discountPercent,
+            })),
+          }
+        : {}),
     };
 
     // Handle role title data properly
@@ -2674,6 +2753,64 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   )}
                 </CardContent>
               </Card>
+
+              {/* Tier Discounts — client-work only */}
+              {formData.isForClient && (
+                <Card className="bg-secondary-50 border border-secondary-200">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-medium text-secondary-900">Tier Discount</h4>
+                      <span className="text-xs text-secondary-500">(optional)</span>
+                    </div>
+                    <p className="text-xs text-secondary-600 mt-1">
+                      Reduce the host-client invoice after the contract has run for a number of months.
+                      Worker pay and SDP fees are not affected.
+                    </p>
+                    <div className="mt-3 space-y-3">
+                      {tierDiscountLines.map((t: any, idx: number) => {
+                        const eff = tierEffectiveDate(t.monthsAfterStart);
+                        const locked = editMode && t.existing && isTierPast(t.monthsAfterStart);
+                        return (
+                          <div key={idx} className="grid grid-cols-12 gap-2 items-end bg-white p-2 rounded border border-secondary-100">
+                            <div className="col-span-3">
+                              <Label className="text-xs">After (months)</Label>
+                              <Input className="h-8" type="number" min="1" step="1" disabled={locked}
+                                value={t.monthsAfterStart}
+                                onChange={(e) => { const u = [...tierDiscountLines]; u[idx] = { ...u[idx], monthsAfterStart: e.target.value, existing: false }; setTierDiscountLines(u); }}
+                                placeholder="e.g. 3" />
+                            </div>
+                            <div className="col-span-3">
+                              <Label className="text-xs">Discount %</Label>
+                              <Input className="h-8" type="number" min="0.01" max="100" step="0.01" disabled={locked}
+                                value={t.discountPercent}
+                                onChange={(e) => { const u = [...tierDiscountLines]; u[idx] = { ...u[idx], discountPercent: e.target.value, existing: false }; setTierDiscountLines(u); }}
+                                placeholder="e.g. 10" />
+                            </div>
+                            <div className="col-span-5 pb-1.5 flex items-center gap-2">
+                              {eff && <span className="text-xs text-secondary-600">Effective {eff.toISOString().split('T')[0]}</span>}
+                              {locked && <Badge variant="outline" className="text-[10px] h-4 px-1.5">Active</Badge>}
+                              {!locked && eff && eff <= new Date() && (
+                                <span className="text-[10px] text-red-600">Date already passed</span>
+                              )}
+                            </div>
+                            <div className="col-span-1 flex items-end justify-end">
+                              <Button type="button" variant="ghost" size="sm" className="h-8 w-8 p-0"
+                                onClick={() => setTierDiscountLines(tierDiscountLines.filter((_: any, i: number) => i !== idx))}>
+                                <Trash2 className="h-4 w-4 text-red-600" />
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <Button type="button" variant="outline" size="sm"
+                        onClick={() => setTierDiscountLines([...tierDiscountLines, { monthsAfterStart: '', discountPercent: '' }])}>
+                        <Plus className="h-4 w-4 mr-1" />
+                        Add Tier
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               {/* SDP Entity Selection */}
               <Card className="bg-secondary-50 border border-secondary-200">

@@ -729,6 +729,7 @@ const STEP_FIELDS: Record<1 | 2 | 3 | 4, string[]> = {
     "customRoleTitle", "roleTitleId", "roleDescription", "templateId",
     "startDate", "endDate", "rateType", "rate", "currency", "rateStructure",
     "totalPackageValue", "remunerationLines", "projectRateLines", "purchaseOrderLines",
+    "tierDiscounts",
     "requiresTimesheet", "timesheetFrequency", "timesheetCalculationMethod",
     "timesheetApproverRole", "paymentScheduleType", "paymentDay",
     "paymentDaysAfterPeriod", "paymentHolidayRule", "noticePeriodDays",
