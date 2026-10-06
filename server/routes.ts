@@ -32,6 +32,7 @@ import { registerAiCountryIntelRoutes, isAiCountryIntelEnabled } from "./modules
 import { registerAiRoleSuggestRoutes, isAiRoleSuggestEnabled } from "./modules/ai/roleSuggest";
 import { registerAiAdminSettingsRoutes } from "./modules/ai/adminSettings";
 import { registerDashboardRoutes } from "./modules/dashboard";
+import { registerBusinessProfileRoutes, checkBusinessProfileForContract } from "./modules/businesses";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -5883,7 +5884,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         resolvedWorker = worker;
         targetBusinessId = business.id;
       }
-      
+
+      // No new contract for a customer business whose profile details
+      // (address, country, registration number) are missing — whoever is
+      // creating it. Host clients and the SDP-owned row are never blocked.
+      const profileBlock = checkBusinessProfileForContract(business, userType);
+      if (profileBlock) {
+        return res.status(profileBlock.status).json(profileBlock.body);
+      }
+
       // Snapshot-fill: when the payload references a host client via
       // customerBusinessId but the snapshot columns (clientName /
       // clientContactEmail / clientAddress) are empty, populate them from
@@ -7608,6 +7617,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // SDP-admin AI settings + usage (daily token limit). No LLM calls here, so
   // no env flag — the gate is the admin-role middleware.
   registerAiAdminSettingsRoutes(app, authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin']));
+
+  // Business profile details (address, country, registration number) —
+  // PATCH /api/businesses/me. The contract-creation block that depends on
+  // them is checkBusinessProfileForContract, called from POST /api/contracts.
+  registerBusinessProfileRoutes(app, authMiddleware);
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {

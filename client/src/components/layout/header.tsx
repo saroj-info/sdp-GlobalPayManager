@@ -13,6 +13,7 @@ import { handleLogout, apiRequest } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
+import { requiresBusinessProfile } from "@shared/businessProfile";
 
 interface HeaderProps {
   title: string;
@@ -259,9 +260,9 @@ export function Header({ title, description, accessibleCountries = [] }: HeaderP
               </div>
               <DropdownMenuSeparator />
 
-              {/* Business Profile - Only for business users */}
-              {(user as any)?.userType === 'business_user' && (
-                <DropdownMenuItem data-testid="menu-business-profile" onClick={() => window.location.href = '/business-setup'}>
+              {/* Business Profile - business users of a customer business (not host-client logins) */}
+              {(user as any)?.userType === 'business_user' && requiresBusinessProfile((user as any)?.business) && (
+                <DropdownMenuItem data-testid="menu-business-profile" onClick={() => setLocation('/business-profile')}>
                   <Building2 className="mr-2 h-4 w-4" />
                   <span>Business Profile</span>
                 </DropdownMenuItem>

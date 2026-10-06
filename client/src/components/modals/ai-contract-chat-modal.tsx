@@ -33,6 +33,7 @@ import { WorkerCombobox } from "@/components/pickers/WorkerCombobox";
 import { BusinessCombobox } from "@/components/pickers/BusinessCombobox";
 import { useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
 import { useAuth } from "@/hooks/useAuth";
+import { describeMissingBusinessDetails, getMissingBusinessDetails } from "@shared/businessProfile";
 import { ContractPreviewModal, type PreviewSection, type PreviewRow } from "@/components/modals/contract-preview-modal";
 import { ContractDocumentModal, type ContractDocumentSummary } from "@/components/modals/contract-document-modal";
 
@@ -1112,6 +1113,12 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     },
     onError: (err: any) => {
       const msg = err?.message || "Unknown error";
+      // Missing business profile details: nothing in the draft can fix this,
+      // so show the server's sentence and keep it out of the chat.
+      if (typeof msg === "string" && msg.includes("BUSINESS_PROFILE_INCOMPLETE")) {
+        toast({ title: "Couldn't create contract", description: extractApiErrorMessage(err, msg), variant: "destructive" });
+        return;
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -1463,6 +1470,17 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     const insert = `&${name} `;
     const caretPos = before.length + insert.length;
     setInput(before + insert + after);
+
+    // Warn at pick time rather than after a whole draft: the server refuses
+    // Create Contract for a business whose profile details are missing.
+    const missingDetails = getMissingBusinessDetails(biz);
+    if (missingDetails.length > 0) {
+      toast({
+        title: "Business profile incomplete",
+        description: `${name} has not completed its business profile (missing: ${describeMissingBusinessDetails(missingDetails, biz?.registrationCountryId)}). A contract cannot be created until the business saves these details.`,
+        variant: "destructive",
+      });
+    }
 
     const switchingBusiness =
       typeof draft.selectedBusinessId === "string" &&

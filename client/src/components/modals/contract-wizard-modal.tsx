@@ -19,7 +19,9 @@ import { calculatePeriod } from '@shared/timesheetPeriodCalculator';
 import type { TimesheetPeriodConfig } from '@shared/timesheetPeriodCalculator';
 import { calculateFirstTimesheetStartDate } from '@shared/contractHelpers';
 import { CountryIntelPanel } from '@/components/contract-wizard/country-intel-panel';
-import { HelpCircle, InfoIcon, Building2, DollarSign, CheckCircle, FileText, Clock, Plus, Trash2, Search, LayoutGrid, List as ListIcon, UserCheck, UserX, MapPin, ExternalLink, ChevronDown, ChevronUp } from "lucide-react";
+import { HelpCircle, InfoIcon, Building2, DollarSign, CheckCircle, FileText, Clock, Plus, Trash2, Search, LayoutGrid, List as ListIcon, UserCheck, UserX, MapPin, ExternalLink, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { describeMissingBusinessDetails, getMissingBusinessDetails } from "@shared/businessProfile";
 
 interface ContractWizardModalProps {
   open: boolean;
@@ -267,6 +269,18 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   const isRateBasedClientBilling = formData.isForClient && (formData.clientBillingType || 'rate_based') === 'rate_based';
   const showBillingRate = isRateBasedClientBilling || isInternalOnBehalf;
   const billedParty = isInternalOnBehalf ? 'Business' : 'Client';
+
+  // SDP on behalf: no new contract for a customer business whose profile
+  // details (address, country, registration number) are missing. The server
+  // refuses it too (409 BUSINESS_PROFILE_INCOMPLETE); SDP cannot enter the
+  // details, the business does. Editing an existing contract is not blocked.
+  const onBehalfBusiness = isSDPInternal && formData.onBehalf && !editMode
+    ? (businesses || []).find((b: any) => b.id === formData.selectedBusinessId)
+    : undefined;
+  const onBehalfMissingDetails = getMissingBusinessDetails(onBehalfBusiness);
+  const onBehalfProfileError = onBehalfMissingDetails.length > 0
+    ? `${onBehalfBusiness.name} has not completed its business profile (missing: ${describeMissingBusinessDetails(onBehalfMissingDetails, onBehalfBusiness.registrationCountryId)}). A contract cannot be created until the business saves these details.`
+    : null;
 
   // Refs to track previous country and employment type for template clearing logic
   const prevCountryRef = useRef(formData.countryId);
@@ -736,6 +750,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       toast({
         title: "Error",
         description: "Please select a business when creating contracts on behalf.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (onBehalfProfileError) {
+      toast({
+        title: "Business profile incomplete",
+        description: onBehalfProfileError,
         variant: "destructive",
       });
       return;
@@ -1239,6 +1262,12 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                           Worker picker below will show this business's own workers plus any SDP-employed workers available to share.
                         </p>
                       )}
+                      {onBehalfProfileError && (
+                        <Alert className="mt-3 border-amber-200 bg-amber-50" data-testid="alert-onbehalf-profile-incomplete">
+                          <AlertTriangle className="h-4 w-4 text-amber-600" />
+                          <AlertDescription className="text-amber-800 text-sm">{onBehalfProfileError}</AlertDescription>
+                        </Alert>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1604,7 +1633,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   type="button"
                   data-testid="button-continue-step1"
                   onClick={() => setStep(2)}
-                  disabled={!formData.workerId || !formData.countryId}
+                  disabled={!formData.workerId || !formData.countryId || !!onBehalfProfileError}
                   className="w-auto"
                 >
                   Continue to Client Details

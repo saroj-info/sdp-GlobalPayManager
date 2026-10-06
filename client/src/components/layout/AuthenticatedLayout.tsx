@@ -2,6 +2,7 @@ import { ReactNode, useEffect, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
+import { BusinessProfileReminder } from "./BusinessProfileReminder";
 import { AuthenticatedLayoutProvider, useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
 import { useAuth } from "@/hooks/useAuth";
 import { AiSearchModal } from "@/components/modals/ai-search-modal";
@@ -90,6 +91,7 @@ function AuthenticatedLayoutContent({ children }: { children: ReactNode }) {
     <div className="flex h-full overflow-hidden bg-gray-50 dark:bg-gray-900">
       <Sidebar />
       <main className="flex-1 min-h-0 overflow-y-auto">
+        <BusinessProfileReminder />
         <Header
           title={headerMetadata.title}
           description={headerMetadata.description || ""}

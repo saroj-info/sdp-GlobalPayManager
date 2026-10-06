@@ -17,6 +17,8 @@ import { Loader, PageLoader } from "@/components/ui/loader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
 import { AiContractChatModal } from "@/components/modals/ai-contract-chat-modal";
+import { BusinessProfileRequiredDialog } from "@/components/modals/business-profile-required-dialog";
+import { useMissingBusinessDetails } from "@/hooks/useBusinessProfile";
 import { useAuth } from "@/hooks/useAuth";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { getContractStatusLabel, getContractStatusVariant } from "@shared/contractHelpers";
@@ -1011,6 +1013,19 @@ function ContractTierDiscountsPanel({ contractId, startDate }: { contractId: str
 export default function ContractsPage() {
   const [showContractWizard, setShowContractWizard] = useState(false);
   const [showAiContractChat, setShowAiContractChat] = useState(false);
+  // A business user cannot create a contract while business details are
+  // missing: the create buttons open this dialog instead of the wizard or the
+  // AI draft. Editing an existing contract is not blocked.
+  const [showProfileRequired, setShowProfileRequired] = useState(false);
+  const { isIncomplete: businessProfileIncomplete } = useMissingBusinessDetails();
+  const openCreateWizard = () => {
+    if (businessProfileIncomplete) setShowProfileRequired(true);
+    else setShowContractWizard(true);
+  };
+  const openAiContractChat = () => {
+    if (businessProfileIncomplete) setShowProfileRequired(true);
+    else setShowAiContractChat(true);
+  };
   const [selectedContract, setSelectedContract] = useState<any>(null);
   const [showContractDetails, setShowContractDetails] = useState(false);
   const [showContractDocument, setShowContractDocument] = useState(false);
@@ -1051,8 +1066,12 @@ export default function ContractsPage() {
       const urlParams = new URLSearchParams(window.location.search);
       const workerId = urlParams.get('workerId');
       if (workerId) {
-        setPreselectedWorkerId(workerId);
-        setShowContractWizard(true);
+        if (businessProfileIncomplete) {
+          setShowProfileRequired(true);
+        } else {
+          setPreselectedWorkerId(workerId);
+          setShowContractWizard(true);
+        }
         // Clear URL parameter after reading it
         window.history.replaceState({}, '', '/contracts');
       }
@@ -1307,14 +1326,14 @@ export default function ContractsPage() {
                   {(user as any)?.featureFlags?.aiContractDraftEnabled && (
                     <Button
                       variant="outline"
-                      onClick={() => setShowAiContractChat(true)}
+                      onClick={openAiContractChat}
                       data-testid="button-draft-with-ai"
                     >
                       <Sparkles className="mr-2 h-4 w-4" />
                       Create Contract with AI
                     </Button>
                   )}
-                  <Button onClick={() => setShowContractWizard(true)} data-testid="button-create-contract">
+                  <Button onClick={openCreateWizard} data-testid="button-create-contract">
                     <Plus className="mr-2 h-4 w-4" />
                     Create Contract
                   </Button>
@@ -1568,7 +1587,7 @@ export default function ContractsPage() {
                       }
                     </p>
                     {(user as any)?.userType !== 'worker' && (
-                      <Button onClick={() => setShowContractWizard(true)} data-testid="button-create-first-contract">
+                      <Button onClick={openCreateWizard} data-testid="button-create-first-contract">
                         <Plus className="mr-2 h-4 w-4" />
                         Create Your First Contract
                       </Button>
@@ -1661,7 +1680,7 @@ export default function ContractsPage() {
                     }
                   </p>
                   {(user as any)?.userType !== 'worker' && (
-                    <Button onClick={() => setShowContractWizard(true)} data-testid="button-create-first-contract">
+                    <Button onClick={openCreateWizard} data-testid="button-create-first-contract">
                       <Plus className="mr-2 h-4 w-4" />
                       Create Your First Contract
                     </Button>
@@ -1703,6 +1722,8 @@ export default function ContractsPage() {
         open={showAiContractChat}
         onOpenChange={setShowAiContractChat}
       />
+
+      <BusinessProfileRequiredDialog open={showProfileRequired} onOpenChange={setShowProfileRequired} />
 
       {/* Contract Details Modal - Comprehensive Summary */}
       <Dialog open={showContractDetails} onOpenChange={setShowContractDetails}>

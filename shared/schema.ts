@@ -101,6 +101,13 @@ export const businesses = pgTable("businesses", {
   contactEmail: varchar("contact_email"),
   contactName: varchar("contact_name"),
   address: text("address"), // optional postal/business address — shown on contract preview/signing pages for host clients
+  // Business profile details, entered by the business on /business-profile
+  // (PATCH /api/businesses/me). Completeness rules: shared/businessProfile.ts.
+  // Deliberately not named `countryId`: SDP invoice code reads
+  // `business.countryId` to decide GST and must not pick this up by accident.
+  registrationCountryId: varchar("registration_country_id").references(() => countries.id),
+  registrationNumber: varchar("registration_number", { length: 50 }),
+  taxNumber: varchar("tax_number", { length: 50 }),
   // Marks the single "SDP as employer" row. Workers hired directly by SDP
   // (no customer business) point their businessId at this row so every
   // downstream join / tenant guard keeps working unchanged.
@@ -1602,6 +1609,10 @@ export const insertBusinessSchema = createInsertSchema(businesses).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+  // Profile details are written only through PATCH /api/businesses/me.
+  registrationCountryId: true,
+  registrationNumber: true,
+  taxNumber: true,
 });
 
 export const insertCountrySchema = createInsertSchema(countries).omit({

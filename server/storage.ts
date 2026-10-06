@@ -747,7 +747,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getBusinessByOwnerId(ownerId: string): Promise<Business | undefined> {
-    const [business] = await db.select().from(businesses).where(eq(businesses.ownerId, ownerId));
+    // A user can also own host-client rows (isRegistered = false). Prefer the
+    // registered business, oldest first, so the result never depends on row order.
+    const [business] = await db
+      .select()
+      .from(businesses)
+      .where(eq(businesses.ownerId, ownerId))
+      .orderBy(desc(businesses.isRegistered), businesses.createdAt, businesses.id)
+      .limit(1);
     return business;
   }
 
@@ -775,15 +782,17 @@ export class DatabaseStorage implements IStorage {
     const ownedBusinesses = await db
       .select()
       .from(businesses)
-      .where(eq(businesses.ownerId, userId));
-    
+      .where(eq(businesses.ownerId, userId))
+      .orderBy(businesses.createdAt, businesses.id);
+
     // Find businesses user has access to via accessibleBusinessIds
     let accessibleBusinesses: Business[] = [];
     if (user.accessibleBusinessIds && user.accessibleBusinessIds.length > 0) {
       accessibleBusinesses = await db
         .select()
         .from(businesses)
-        .where(inArray(businesses.id, user.accessibleBusinessIds));
+        .where(inArray(businesses.id, user.accessibleBusinessIds))
+        .orderBy(businesses.createdAt, businesses.id);
     }
 
     // Combine and deduplicate businesses
@@ -943,12 +952,16 @@ export class DatabaseStorage implements IStorage {
   async getPrimaryBusinessForUser(userId: string): Promise<Business | undefined> {
     const businesses = await this.getBusinessesForUser(userId);
 
-    // First check if user owns a business
-    const ownedBusiness = businesses.find(b => b.ownerId === userId);
-    if (ownedBusiness) return ownedBusiness;
-
-    // Otherwise return the first accessible business
-    return businesses[0];
+    // A user can own host-client rows (isRegistered = false) next to, or
+    // instead of, their real business: POST /api/businesses/host-clients makes
+    // the creator the owner. A registered business must win over those, for the
+    // owner and for a team member alike; a host-client login has only its own
+    // unregistered row and still resolves to it.
+    const isCustomerBusiness = (b: Business) => b.isRegistered !== false;
+    return businesses.find(b => b.ownerId === userId && isCustomerBusiness(b))
+      ?? businesses.find(isCustomerBusiness)
+      ?? businesses.find(b => b.ownerId === userId)
+      ?? businesses[0];
   }
 
   /**

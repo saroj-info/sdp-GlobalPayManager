@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { RolesCard } from "@/components/settings/RolesCard";
+import { markPromptedForBusinessProfile } from "@/lib/businessProfilePrompt";
 import sampleUserPhoto from "@assets/generated_images/Professional_business_headshot_8ca64f96.png";
 
 export default function Settings() {
@@ -76,6 +77,9 @@ export default function Settings() {
       // navbar and every downstream /api/auth/user read pick up the new name.
       if (data?.token) {
         localStorage.setItem("authToken", data.token);
+        // Same login, new token: don't send a business user back to the
+        // business-profile prompt on their next dashboard visit.
+        markPromptedForBusinessProfile();
       }
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
       queryClient.refetchQueries({ queryKey: ["/api/profile"] });
