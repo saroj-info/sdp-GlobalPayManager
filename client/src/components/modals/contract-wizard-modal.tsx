@@ -19,9 +19,11 @@ import { calculatePeriod } from '@shared/timesheetPeriodCalculator';
 import type { TimesheetPeriodConfig } from '@shared/timesheetPeriodCalculator';
 import { calculateFirstTimesheetStartDate } from '@shared/contractHelpers';
 import { CountryIntelPanel } from '@/components/contract-wizard/country-intel-panel';
-import { HelpCircle, InfoIcon, Building2, DollarSign, CheckCircle, FileText, Clock, Plus, Trash2, Search, LayoutGrid, List as ListIcon, UserCheck, UserX, MapPin, ExternalLink, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+import { HelpCircle, InfoIcon, Building2, DollarSign, CheckCircle, FileText, Clock, Plus, Trash2, Search, LayoutGrid, List as ListIcon, UserCheck, UserX, MapPin, ExternalLink, ChevronDown, ChevronUp, AlertTriangle, AlertCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { describeMissingBusinessDetails, getMissingBusinessDetails } from "@shared/businessProfile";
+import { requiresBillingTerms, type BillingTermsAcceptanceInput, type BillingTermsAcceptanceView, type RenderedBillingTerms } from "@shared/billingTerms";
+import { BillingTermsDialog, BILLING_TERMS_CURRENT_KEY } from "@/components/modals/billing-terms-dialog";
 
 interface ContractWizardModalProps {
   open: boolean;
@@ -282,6 +284,42 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     ? `${onBehalfBusiness.name} has not completed its business profile (missing: ${describeMissingBusinessDetails(onBehalfMissingDetails, onBehalfBusiness.registrationCountryId)}). A contract cannot be created until the business saves these details.`
     : null;
 
+  // SDP billing terms: Billing Agent / Auto Invoice on customer work needs the
+  // business's acceptance on every contract. Kept outside formData so it does not
+  // ride `...formData` into the payload by accident; attached explicitly on submit.
+  const [billingTermsAcceptance, setBillingTermsAcceptance] = useState<BillingTermsAcceptanceInput | null>(null);
+  const [billingTermsVersion, setBillingTermsVersion] = useState<RenderedBillingTerms | null>(null);
+  const [billingTermsDialogOpen, setBillingTermsDialogOpen] = useState(false);
+  const [billingTermsViewOpen, setBillingTermsViewOpen] = useState(false);
+  // "Skip for now": the contract saves without an acceptance and shows a pending
+  // reminder until it is accepted later (edit wizard or contract details).
+  const [billingTermsSkipped, setBillingTermsSkipped] = useState(false);
+  const termsRequired = requiresBillingTerms(formData.billingMode, formData.isForClient);
+  // Who accepts is decided by the caller's role (edit mode sets onBehalf for every contract).
+  const termsMode: 'in_app' | 'sdp_offline' = isSDPInternal ? 'sdp_offline' : 'in_app';
+  const termsBusinessId: string | undefined = isSDPInternal
+    ? (formData.selectedBusinessId || existingContract?.businessId || workers.find((w: any) => w.id === formData.workerId)?.businessId || undefined)
+    : undefined;
+  const termsBusinessName: string | undefined = isSDPInternal
+    ? (businesses || []).find((b: any) => b.id === termsBusinessId)?.name
+    : (user as any)?.business?.name;
+  const { data: existingTermsData } = useQuery<{ acceptance: BillingTermsAcceptanceView | null }>({
+    queryKey: [`/api/contracts/${existingContract?.id}/billing-terms-acceptance`],
+    enabled: open && editMode && !!existingContract?.id,
+  });
+  const existingTermsAcceptance = existingTermsData?.acceptance ?? null;
+  // Asked whenever the resulting contract needs the terms and none is on file
+  // (create, a move into a triggering mode, or an earlier skip).
+  const termsNeededNow = termsRequired && !existingTermsAcceptance;
+  const termsSatisfied = !termsNeededNow || !!billingTermsAcceptance || billingTermsSkipped;
+  // SDP, non-compliant contractors and third-party workers get Step 5 (contract
+  // generation); everyone else submits from Step 4. The terms card sits on the
+  // step that holds the submit button.
+  const shouldGoToStep5 = isSDPInternal ||
+    (formData.employmentType === 'contractor' && !formData.contractorCompliance) ||
+    formData.employmentType === 'third_party_worker';
+  const isFinalStep = step === 5 || (step === 4 && !shouldGoToStep5);
+
   // Refs to track previous country and employment type for template clearing logic
   const prevCountryRef = useRef(formData.countryId);
   const prevEmploymentTypeRef = useRef(formData.employmentType);
@@ -298,6 +336,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     // Same for tier discounts — hydrated below when editing a client-work contract
     setTierDiscountLines([]);
     setTierDiscountsHydrated(false);
+    setBillingTermsAcceptance(null);
+    setBillingTermsVersion(null);
+    setBillingTermsSkipped(false);
   }, [editMode, existingContract]);
 
   // Sync preselectedWorkerId into form whenever it is provided (the modal may already be mounted
@@ -618,6 +659,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       setTierDiscountsHydrated(false);
       setShowMultipleRates(false);
       setShowPurchaseOrders(false);
+      setBillingTermsAcceptance(null);
+      setBillingTermsVersion(null);
+      setBillingTermsSkipped(false);
       toast({
         title: "Success",
         description: editMode ? "Contract updated successfully." : "Contract created successfully.",
@@ -625,6 +669,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     },
     onError: (error) => {
       let errorMessage = editMode ? "Failed to update contract. Please try again." : "Failed to create contract. Please try again.";
+      let errorCode: string | undefined;
       
       try {
         const errorText = error.message || '';
@@ -636,9 +681,28 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
           } else if (parsed.message) {
             errorMessage = parsed.message;
           }
+          errorCode = parsed.code;
         }
       } catch (e) {
         // Use default message if parsing fails
+      }
+
+      // Billing terms were updated, invalid or not published: clear the stale
+      // acceptance, stay on the final step and (when possible) re-open the dialog.
+      if (errorCode === 'BILLING_TERMS_OUTDATED' || errorCode === 'BILLING_TERMS_REQUIRED' || errorCode === 'BILLING_TERMS_NOT_PUBLISHED' || errorCode === 'BILLING_TERMS_INVALID') {
+        setBillingTermsAcceptance(null);
+        setBillingTermsVersion(null);
+        setBillingTermsSkipped(false);
+        queryClient.invalidateQueries({ queryKey: [BILLING_TERMS_CURRENT_KEY] });
+        if (errorCode !== 'BILLING_TERMS_NOT_PUBLISHED') setBillingTermsDialogOpen(true);
+        toast({
+          title: errorCode === 'BILLING_TERMS_OUTDATED' ? "Billing terms updated" : "Billing terms required",
+          description: errorCode === 'BILLING_TERMS_OUTDATED'
+            ? "The billing terms were updated. Please review and accept the new version."
+            : errorMessage,
+          variant: "destructive",
+        });
+        return;
       }
       
       toast({
@@ -765,12 +829,21 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     }
 
     // Check if should go to Step 5 (contract generation) or submit directly
-    const shouldGoToStep5 = (user as any)?.userType === 'sdp_internal' || 
-                           (formData.employmentType === 'contractor' && !formData.contractorCompliance) || 
-                           formData.employmentType === 'third_party_worker';
-    
     if (shouldGoToStep5 && step === 4) {
       setStep(5); // Go to contract generation step
+      return;
+    }
+
+    // Final step: the billing terms must be accepted or explicitly skipped.
+    if (!termsSatisfied) {
+      toast({
+        title: "Billing terms",
+        description: isSDPInternal
+          ? "Record the business's acceptance of SDP's billing terms, or skip for now."
+          : "Please read and accept SDP's billing terms, or skip for now.",
+        variant: "destructive",
+      });
+      setBillingTermsDialogOpen(true);
       return;
     }
 
@@ -835,6 +908,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       // Handle custom role titles properly
       roleTitleId: formData.roleTitleId === 'custom' ? null : formData.roleTitleId,
       status: contractStatus, // Set the appropriate workflow status
+      // SDP billing terms acceptance (only when this save needs one)
+      ...(termsNeededNow && billingTermsAcceptance ? { billingTermsAcceptance } : {}),
       // Tier discounts: EDIT always sends the key once hydrated (even [] so
       // clearing works); CREATE omits the key when empty so the legacy payload
       // shape is untouched.
@@ -1092,6 +1167,69 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       default:
         return 'Select an engagement type to see detailed information about its characteristics and obligations.';
     }
+  };
+
+  // SDP Billing Terms card, rendered on the final step above the submit button.
+  const renderBillingTermsCard = () => {
+    if (!termsRequired || !isFinalStep) return null;
+    return (
+      <Card className="border-accent-200 bg-accent-50/40" data-testid="card-billing-terms">
+        <CardContent className="p-5 space-y-3">
+          <div className="flex items-start gap-3">
+            <FileText className="h-5 w-5 text-accent-600 mt-0.5" />
+            <div className="flex-1 space-y-1">
+              <h3 className="font-semibold text-secondary-900">SDP Billing Terms & Conditions</h3>
+              <p className="text-sm text-secondary-600">
+                Because SDP Global Pay will act as the billing entity for this contract,
+                {' '}{termsBusinessName ? <span className="font-medium">{termsBusinessName}</span> : 'the business'} must accept SDP's billing terms.
+                {isSDPInternal && ' SDP cannot accept on the business\'s behalf; record the acceptance the business signed offline.'}
+                {' '}You can download the terms as a PDF, sign on paper and upload the signed copy.
+              </p>
+            </div>
+          </div>
+
+          {!termsNeededNow && existingTermsAcceptance ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm" data-testid="row-billing-terms-existing">
+              <span className="flex items-center gap-2 text-green-800">
+                <CheckCircle className="h-4 w-4" />
+                Accepted v{existingTermsAcceptance.termsVersionNumber} by {existingTermsAcceptance.method === 'in_app' ? (existingTermsAcceptance.acceptedByName ?? 'the business') : (existingTermsAcceptance.signerName ?? 'the business')} on {new Date(existingTermsAcceptance.acceptedAt).toLocaleDateString()} ({existingTermsAcceptance.method === 'in_app' ? 'in app' : 'offline'})
+              </span>
+              <Button type="button" variant="outline" size="sm" onClick={() => setBillingTermsViewOpen(true)} data-testid="button-billing-terms-view-existing">View</Button>
+            </div>
+          ) : billingTermsAcceptance ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm" data-testid="row-billing-terms-accepted">
+              <span className="flex items-center gap-2 text-green-800">
+                <CheckCircle className="h-4 w-4" />
+                {billingTermsAcceptance.method === 'in_app'
+                  ? `Accepted v${billingTermsVersion?.versionNumber ?? ''}${billingTermsAcceptance.signedDocumentPath ? ' (signed copy attached)' : ''}`
+                  : `Offline acceptance recorded (v${billingTermsVersion?.versionNumber ?? ''}, signed by ${billingTermsAcceptance.signerName} on ${billingTermsAcceptance.acceptedDate})`}
+              </span>
+              <Button type="button" variant="outline" size="sm" onClick={() => setBillingTermsDialogOpen(true)} data-testid="button-billing-terms-change">Change</Button>
+            </div>
+          ) : billingTermsSkipped ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm" data-testid="row-billing-terms-skipped">
+              <span className="flex items-center gap-2 text-amber-800">
+                <AlertCircle className="h-4 w-4" />
+                Skipped for now. The contract will show as "terms pending" until accepted from the contract.
+              </span>
+              <Button type="button" variant="outline" size="sm" onClick={() => setBillingTermsDialogOpen(true)} data-testid="button-billing-terms-open">Accept now</Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="button" variant="default" onClick={() => setBillingTermsDialogOpen(true)} data-testid="button-billing-terms-open">
+                {isSDPInternal ? 'Record offline acceptance' : 'Read and accept the terms'}
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setBillingTermsSkipped(true)} data-testid="button-billing-terms-skip-card">
+                Skip for now
+              </Button>
+              <span className="text-xs text-secondary-500">
+                {editMode ? 'This contract has no acceptance on file yet.' : 'Accept now, or skip and accept later from the contract.'}
+              </span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
   };
 
   return (
@@ -1469,13 +1607,13 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                 </RadioGroup>
               </div>
 
-              {/* Curated country intelligence — auto-expands on country pick via
-                  the key remount; collapsed in edit mode when country is unchanged. */}
+              {/* Curated country intelligence — collapsed by default; the user
+                  expands it on demand. Key remount resets it on country change. */}
               <CountryIntelPanel
                 key={formData.countryId}
                 country={selectedCountry}
                 employmentType={formData.employmentType}
-                defaultOpen={!editMode || formData.countryId !== existingContract?.countryId}
+                defaultOpen={false}
               />
 
               {/* Engagement Type */}
@@ -1951,6 +2089,10 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                       onValueChange={(value) => {
                         const isThruPlatform = value === 'invoice_through_platform';
                         setFormData({ ...formData, billingMode: value, invoiceCustomer: isThruPlatform });
+                        // An acceptance (or a skip) is tied to the mode it was given for.
+                        setBillingTermsAcceptance(null);
+                        setBillingTermsVersion(null);
+                        setBillingTermsSkipped(false);
                       }}
                       className="grid grid-cols-1 gap-3"
                     >
@@ -2138,7 +2280,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   type="button"
                   data-testid="button-continue-step3"
                   onClick={() => setStep(4)}
-                  disabled={formData.isForClient && formData.billingMode && formData.billingMode !== 'direct' && formData.clientBillingType === 'fixed_price' && !formData.fixedBillingAmount}
+                  disabled={!!(formData.isForClient && formData.billingMode && formData.billingMode !== 'direct' && formData.clientBillingType === 'fixed_price' && !formData.fixedBillingAmount)}
                 >
                   Continue to Contract Details
                 </Button>
@@ -3127,6 +3269,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                 </Card>
               )}
 
+              {renderBillingTermsCard()}
+
               {/* Actions */}
               <div className="flex justify-between">
                 <Button
@@ -3151,7 +3295,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                         ? 'button' 
                         : 'submit'
                     }
-                    disabled={createContractMutation.isPending}
+                    disabled={createContractMutation.isPending || (!shouldGoToStep5 && !termsSatisfied)}
+                    title={!shouldGoToStep5 && !termsSatisfied ? 'Accept or skip the SDP billing terms first' : undefined}
                     onClick={
                       (user as any)?.userType === 'sdp_internal' ||
                       (formData.employmentType === 'contractor' && !formData.contractorCompliance)
@@ -3240,6 +3385,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                     </div>
                   </CardContent>
                 </Card>
+
+                {renderBillingTermsCard()}
 
                 {/* Preview and Action Buttons */}
                 <div className="flex flex-col sm:flex-row gap-3">
@@ -3373,7 +3520,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   <Button
                     type="submit"
                     className={`flex-1 ${formData.rateType === 'annual' ? 'bg-amber-600 hover:bg-amber-700' : ''}`}
-                    disabled={createContractMutation.isPending}
+                    disabled={createContractMutation.isPending || !termsSatisfied}
+                    title={!termsSatisfied ? 'Accept or skip the SDP billing terms first' : undefined}
                   >
                     {createContractMutation.isPending ? (
                       <>
@@ -3592,6 +3740,30 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* SDP billing terms: accept (business user) / record offline (SDP) / view stored */}
+      <BillingTermsDialog
+        open={billingTermsDialogOpen}
+        onOpenChange={setBillingTermsDialogOpen}
+        mode={termsMode}
+        businessId={termsBusinessId}
+        countryId={formData.countryId || undefined}
+        businessName={termsBusinessName}
+        onAccepted={(payload, terms) => {
+          setBillingTermsAcceptance(payload);
+          setBillingTermsVersion(terms);
+          setBillingTermsSkipped(false);
+        }}
+        allowSkip
+        onSkip={() => setBillingTermsSkipped(true)}
+      />
+      <BillingTermsDialog
+        open={billingTermsViewOpen}
+        onOpenChange={setBillingTermsViewOpen}
+        mode="read_only"
+        existingAcceptance={existingTermsAcceptance}
+        contractId={existingContract?.id}
+      />
     </Dialog>
   );
 }

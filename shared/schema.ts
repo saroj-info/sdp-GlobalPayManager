@@ -810,6 +810,69 @@ export const contractChangeLog = pgTable("contract_change_log", {
 export type ContractChangeLog = typeof contractChangeLog.$inferSelect;
 export type InsertContractChangeLog = typeof contractChangeLog.$inferInsert;
 
+// ---------------------------------------------------------------------------
+// SDP Billing Terms — the legal text a business accepts when a contract uses a
+// billing mode where SDP acts as the billing entity (shared/billingTerms.ts
+// holds the trigger rule). One row per version: at most one `draft` and one
+// `published` at a time; publishing supersedes the previous published row.
+// ---------------------------------------------------------------------------
+export const billingTermsStatusEnum = pgEnum('billing_terms_status', ['draft', 'published', 'superseded']);
+export const billingTermsAcceptanceMethodEnum = pgEnum('billing_terms_acceptance_method', ['in_app', 'sdp_offline']);
+
+export const billingTermsVersions = pgTable("billing_terms_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  versionNumber: integer("version_number").notNull(),
+  title: varchar("title").notNull().default('SDP Billing Terms & Conditions'),
+  bodyTemplate: text("body_template").notNull(), // raw text with {{placeholders}}
+  bodyHash: varchar("body_hash", { length: 64 }), // sha256 of bodyTemplate, set at publish
+  changelog: text("changelog"),
+  status: billingTermsStatusEnum("status").notNull().default('draft'),
+  publishedAt: timestamp("published_at"),
+  publishedByUserId: varchar("published_by_user_id").references(() => users.id),
+  createdByUserId: varchar("created_by_user_id").references(() => users.id).notNull(),
+  updatedByUserId: varchar("updated_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  uniqueIndex("uniq_billing_terms_published").on(table.status).where(sql`status = 'published'`),
+  uniqueIndex("uniq_billing_terms_draft").on(table.status).where(sql`status = 'draft'`),
+  uniqueIndex("uniq_billing_terms_version_number").on(table.versionNumber),
+]);
+
+// One row per acceptance. Several per contract are possible (an edit that moves
+// the contract into a triggering mode asks again); the latest is the current one.
+// The rendered text and its hash are frozen here so the record stands even if a
+// version row were edited later.
+export const contractBillingTermsAcceptances = pgTable("contract_billing_terms_acceptances", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").references(() => contracts.id, { onDelete: 'cascade' }).notNull(),
+  businessId: varchar("business_id").references(() => businesses.id).notNull(),
+  termsVersionId: varchar("terms_version_id").references(() => billingTermsVersions.id).notNull(),
+  termsVersionNumber: integer("terms_version_number").notNull(),
+  termsText: text("terms_text").notNull(), // rendered text as shown to the accepter
+  termsHash: varchar("terms_hash", { length: 64 }).notNull(), // sha256 of termsText
+  billingMode: billingModeEnum("billing_mode").notNull(),
+  method: billingTermsAcceptanceMethodEnum("method").notNull(),
+  acceptedByUserId: varchar("accepted_by_user_id").references(() => users.id), // in_app: the business user; sdp_offline: null
+  recordedByUserId: varchar("recorded_by_user_id").references(() => users.id).notNull(), // who made the request
+  acceptedAt: timestamp("accepted_at").notNull(), // in_app: now; sdp_offline: the signer's date
+  ipAddress: varchar("ip_address"),
+  userAgent: text("user_agent"),
+  signerName: varchar("signer_name"), // sdp_offline
+  signerEmail: varchar("signer_email"), // sdp_offline, optional
+  signedDocumentPath: text("signed_document_path"), // sdp_offline, '/objects/…', optional
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_cbta_contract").on(table.contractId, table.createdAt),
+  index("idx_cbta_business").on(table.businessId),
+  index("idx_cbta_version").on(table.termsVersionId),
+]);
+
+export type BillingTermsVersion = typeof billingTermsVersions.$inferSelect;
+export type InsertBillingTermsVersion = typeof billingTermsVersions.$inferInsert;
+export type ContractBillingTermsAcceptance = typeof contractBillingTermsAcceptances.$inferSelect;
+export type InsertContractBillingTermsAcceptance = typeof contractBillingTermsAcceptances.$inferInsert;
+
 // Append-only audit log of worker profile edits. Same shape/purpose as
 // contractChangeLog. Rendered as "Change History" on the workforce details
 // modal so operators can see who touched a bank account / tax ID / etc.

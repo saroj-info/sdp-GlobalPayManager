@@ -33,6 +33,7 @@ import { registerAiRoleSuggestRoutes, isAiRoleSuggestEnabled } from "./modules/a
 import { registerAiAdminSettingsRoutes } from "./modules/ai/adminSettings";
 import { registerDashboardRoutes } from "./modules/dashboard";
 import { registerBusinessProfileRoutes, checkBusinessProfileForContract } from "./modules/businesses";
+import { registerBillingTermsRoutes, checkBillingTermsForCreate, checkBillingTermsForUpdate, recordBillingTermsAcceptance, hardDeleteContract } from "./modules/billingTerms";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -5772,6 +5773,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const contractData = { ...req.body };
       delete contractData.onBehalf;
       delete contractData.selectedBusinessId;
+      // SDP billing terms acceptance rides the body but is not a contract column.
+      const billingTermsAcceptanceRaw = req.body.billingTermsAcceptance;
+      delete contractData.billingTermsAcceptance;
       
       let business;
       let targetBusinessId;
@@ -5961,6 +5965,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "Payment terms are required for client work contracts" });
         }
       }
+
+      // SDP as billing entity (Billing Agent / Auto Invoice) needs the business's
+      // acceptance of SDP's billing terms on every contract. Validated before any
+      // write; the acceptance row is inserted right after the contract below.
+      const termsCheck = await checkBillingTermsForCreate({
+        billingMode,
+        isForClient: finalContractData.isForClient,
+        acceptanceRaw: billingTermsAcceptanceRaw,
+        callerUserType: userType,
+      });
+      if (!termsCheck.ok) {
+        return res.status(termsCheck.status).json({ message: termsCheck.message, code: termsCheck.code, ...(termsCheck.extra ?? {}) });
+      }
+      const validatedBillingTerms = termsCheck.data;
       
       // If a custom role title is provided, create it as a reusable role title.
       // Description sources, in order: finalContractData.jobDescription (wizard's
@@ -6015,6 +6033,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const contract = await storage.createContract(finalContractData as any);
+
+      if (validatedBillingTerms) {
+        try {
+          await recordBillingTermsAcceptance(validatedBillingTerms, {
+            contractId: contract.id,
+            businessId: contract.businessId,
+            countryId: contract.countryId,
+            billingMode: billingMode,
+            recordedByUserId: userId,
+            acceptedByUserId: validatedBillingTerms.input.method === 'in_app' ? userId : null,
+            ip: req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for'],
+            userAgent: req.headers['user-agent'],
+          });
+        } catch (termsErr: any) {
+          console.error("[billing-terms] acceptance insert failed, removing contract:", termsErr?.message ?? String(termsErr));
+          await hardDeleteContract(contract.id).catch(() => {});
+          return res.status(500).json({ message: "Could not record the billing terms acceptance; the contract was not created.", code: "BILLING_TERMS_RECORD_FAILED" });
+        }
+      }
 
       // If the contract's business differs from the worker's home business,
       // the worker is being shared into another business — upsert the
@@ -6176,7 +6213,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Extract contractDocument before schema parsing (it's omitted from insertContractSchema)
-      const { contractDocument, ...bodyWithoutDoc } = req.body;
+      const { contractDocument, billingTermsAcceptance: billingTermsAcceptanceRaw, ...bodyWithoutDoc } = req.body;
 
 
       // If only contractDocument is being updated, skip full schema validation
@@ -6221,12 +6258,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // An acceptance of SDP's billing terms may ride an edit (moving into Billing
+      // Agent / Auto Invoice, or accepting later after a skip). Validated before any write.
+      const termsUpdate = await checkBillingTermsForUpdate({
+        before: { billingMode: (existingContract as any).billingMode, isForClient: existingContract.isForClient },
+        after: { billingMode: (data as any).billingMode, isForClient: data.isForClient },
+        acceptanceRaw: billingTermsAcceptanceRaw,
+        callerUserType: userType,
+      });
+      if (!termsUpdate.ok) {
+        return res.status(termsUpdate.status).json({ message: termsUpdate.message, code: termsUpdate.code, ...(termsUpdate.extra ?? {}) });
+      }
+
       // If contractDocument is provided alongside other fields, include it in the update
       const updateData = contractDocument !== undefined
         ? { ...data, contractDocument }
         : data;
 
       const updatedContract = await storage.updateContract(id, updateData as any);
+
+      if (termsUpdate.data) {
+        try {
+          await recordBillingTermsAcceptance(termsUpdate.data, {
+            contractId: id,
+            businessId: existingContract.businessId,
+            countryId: (updatedContract as any)?.countryId ?? existingContract.countryId,
+            // Accept-later edits leave the mode unchanged, so fall back to the stored one.
+            billingMode: (data as any).billingMode ?? (existingContract as any).billingMode,
+            recordedByUserId: userId,
+            acceptedByUserId: termsUpdate.data.input.method === 'in_app' ? userId : null,
+            ip: req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for'],
+            userAgent: req.headers['user-agent'],
+          });
+        } catch (termsErr: any) {
+          console.error("[billing-terms] acceptance insert failed on update:", termsErr?.message ?? String(termsErr));
+        }
+      }
 
       // Write a row per changed field to the change-log. Fire-and-forget
       // (catch + log) so a logging hiccup never aborts a contract update.
@@ -7622,6 +7689,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // PATCH /api/businesses/me. The contract-creation block that depends on
   // them is checkBusinessProfileForContract, called from POST /api/contracts.
   registerBusinessProfileRoutes(app, authMiddleware);
+
+  // SDP billing terms: current text, acceptance per contract, admin editor.
+  // The create/update blocks are checkBillingTermsForCreate/Update inside
+  // POST /api/contracts and PUT /api/contracts/:id.
+  registerBillingTermsRoutes(app, authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin']));
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {

@@ -42,7 +42,7 @@ function onCostQualifier(item: OnCostItem, currencySymbol: string): string | nul
  * Renders nothing for countries outside the curated set.
  */
 export function CountryIntelPanel({ country, employmentType, defaultOpen }: CountryIntelPanelProps) {
-  const [open, setOpen] = useState(defaultOpen ?? true);
+  const [open, setOpen] = useState(defaultOpen ?? false);
 
   const canonical = country ? canonicaliseCountry(country.code) : null;
   if (!country || !canonical) return null;

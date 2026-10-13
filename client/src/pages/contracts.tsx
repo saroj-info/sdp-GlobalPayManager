@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, extractApiErrorMessage } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
 import { AiContractChatModal } from "@/components/modals/ai-contract-chat-modal";
 import { BusinessProfileRequiredDialog } from "@/components/modals/business-profile-required-dialog";
+import { BillingTermsDialog } from "@/components/modals/billing-terms-dialog";
+import { requiresBillingTerms, type BillingTermsAcceptanceInput, type BillingTermsAcceptanceView } from "@shared/billingTerms";
 import { useMissingBusinessDetails } from "@/hooks/useBusinessProfile";
 import { useAuth } from "@/hooks/useAuth";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
@@ -695,6 +697,133 @@ function SdpRemunerationPanel({ contract }: { contract: any }) {
 // Audit log of contract field edits. Renders the latest changes (worker rate,
 // client billing rate, etc.) with old → new values, who changed it, and when.
 // Useful after renegotiation to see what was modified before re-issuing.
+// SDP Billing Terms acceptance for contracts where SDP is the billing entity
+// (Billing Agent / Auto Invoice). Shown to SDP and the employing business.
+// A contract whose terms were skipped shows a pending reminder with "Accept now"
+// (business user: in app; SDP: offline record) that POSTs the acceptance.
+function ContractBillingTermsPanel({ contractId, billingMode, isForClient, businessId, businessName, countryId, canAccept, acceptMode }: {
+  contractId: string;
+  billingMode?: string | null;
+  isForClient?: boolean | null;
+  businessId?: string;
+  businessName?: string;
+  countryId?: string;
+  canAccept: boolean;
+  acceptMode: 'in_app' | 'sdp_offline';
+}) {
+  const [viewOpen, setViewOpen] = useState(false);
+  const [acceptOpen, setAcceptOpen] = useState(false);
+  const [docLoading, setDocLoading] = useState(false);
+  const { toast } = useToast();
+  const required = requiresBillingTerms(billingMode, isForClient);
+  const acceptanceKey = `/api/contracts/${contractId}/billing-terms-acceptance`;
+  const { data, isLoading } = useQuery<{ acceptance: BillingTermsAcceptanceView | null }>({
+    queryKey: [acceptanceKey],
+  });
+  const acceptance = data?.acceptance ?? null;
+  const acceptMutation = useMutation({
+    mutationFn: async (payload: BillingTermsAcceptanceInput) => {
+      const res = await apiRequest("POST", acceptanceKey, { billingTermsAcceptance: payload });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [acceptanceKey] });
+      queryClient.invalidateQueries({ predicate: (q) => typeof q.queryKey[0] === 'string' && q.queryKey[0].startsWith('/api/contracts') });
+      toast({ title: "Billing terms accepted", description: "The acceptance has been recorded on this contract." });
+    },
+    onError: (err) => {
+      queryClient.invalidateQueries({ queryKey: [acceptanceKey] });
+      toast({ title: "Couldn't record the acceptance", description: extractApiErrorMessage(err, "Please try again."), variant: "destructive" });
+    },
+  });
+  if (!required && !acceptance) return null;
+
+  const openDocument = async () => {
+    setDocLoading(true);
+    try {
+      const res = await apiRequest("GET", `/api/contracts/${contractId}/billing-terms-acceptance/document-url`);
+      const { url } = await res.json();
+      window.open(url, "_blank", "noopener");
+    } catch (err) {
+      toast({ title: "Couldn't open the document", description: extractApiErrorMessage(err, "Please try again."), variant: "destructive" });
+    } finally {
+      setDocLoading(false);
+    }
+  };
+
+  return (
+    <div className="border rounded-lg overflow-hidden" data-testid="panel-billing-terms">
+      <div className="px-4 py-2 bg-secondary-50 border-b flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">SDP Billing Terms</p>
+        {acceptance ? (
+          <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Accepted v{acceptance.termsVersionNumber}</Badge>
+        ) : !isLoading && required ? (
+          <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100" data-testid="badge-billing-terms-pending">Terms pending</Badge>
+        ) : null}
+      </div>
+      <div className="p-4 text-sm">
+        {isLoading ? (
+          <p className="text-muted-foreground">Loading…</p>
+        ) : !acceptance ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2" data-testid="text-billing-terms-none">
+            <span className="flex items-center gap-2 text-amber-800">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              Billing terms not accepted yet. SDP acts as the billing entity for this contract, so the business should accept SDP's billing terms.
+            </span>
+            {canAccept && (
+              <Button type="button" size="sm" onClick={() => setAcceptOpen(true)} disabled={acceptMutation.isPending} data-testid="button-billing-terms-accept-now">
+                {acceptMode === 'sdp_offline' ? 'Record acceptance' : 'Accept now'}
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <p className="text-xs text-muted-foreground">Method</p>
+              <p className="font-medium">{acceptance.method === 'in_app' ? 'Accepted in the app' : 'Signed offline, recorded by SDP'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Accepted by</p>
+              <p className="font-medium">
+                {acceptance.method === 'in_app' ? (acceptance.acceptedByName ?? '—') : (acceptance.signerName ?? '—')}
+                {acceptance.signerEmail ? <span className="text-muted-foreground"> ({acceptance.signerEmail})</span> : null}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Accepted on</p>
+              <p className="font-medium">{new Date(acceptance.acceptedAt).toLocaleDateString()}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Recorded by</p>
+              <p className="font-medium">{acceptance.recordedByName ?? '—'}</p>
+            </div>
+            <div className="md:col-span-2 flex flex-wrap gap-2 pt-1">
+              <Button type="button" variant="outline" size="sm" onClick={() => setViewOpen(true)} data-testid="button-billing-terms-view-text">
+                <FileText className="h-4 w-4 mr-1" /> View terms text
+              </Button>
+              {acceptance.hasSignedDocument && (
+                <Button type="button" variant="outline" size="sm" onClick={openDocument} disabled={docLoading} data-testid="button-billing-terms-document">
+                  <ExternalLink className="h-4 w-4 mr-1" /> Signed agreement
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      <BillingTermsDialog open={viewOpen} onOpenChange={setViewOpen} mode="read_only" existingAcceptance={acceptance} contractId={contractId} />
+      <BillingTermsDialog
+        open={acceptOpen}
+        onOpenChange={setAcceptOpen}
+        mode={acceptMode}
+        businessId={acceptMode === 'sdp_offline' ? businessId : undefined}
+        countryId={countryId}
+        businessName={businessName}
+        onAccepted={(payload) => acceptMutation.mutate(payload)}
+      />
+    </div>
+  );
+}
+
 function ContractChangeHistoryPanel({ contractId }: { contractId: string }) {
   const { data, isLoading } = useQuery<{ items: any[] }>({
     queryKey: [`/api/contracts/${contractId}/change-log`],
@@ -2161,6 +2290,20 @@ export default function ContractsPage() {
               {/* SDP Billing Lines Panel — SDP internal only */}
               {((user as any)?.userType === 'sdp_internal' || (user as any)?.userType === 'sdp_super_admin') && (
                 <SdpBillingLinesPanel contractId={selectedContract.id} isForClient={!!selectedContract.isForClient} />
+              )}
+
+              {/* SDP Billing Terms acceptance — SDP and the employing business */}
+              {(user as any)?.userType !== 'worker' && (selectedContract as any)?.viewerRole !== 'host_client' && (
+                <ContractBillingTermsPanel
+                  contractId={selectedContract.id}
+                  billingMode={(selectedContract as any).billingMode}
+                  isForClient={selectedContract.isForClient}
+                  businessId={selectedContract.businessId}
+                  businessName={(selectedContract as any).business?.name}
+                  countryId={(selectedContract as any).countryId ?? undefined}
+                  canAccept={(user as any)?.userType === 'sdp_internal' || ((user as any)?.userType === 'business_user' && (user as any)?.business?.id === selectedContract.businessId)}
+                  acceptMode={(user as any)?.userType === 'sdp_internal' ? 'sdp_offline' : 'in_app'}
+                />
               )}
 
               {/* Contract Change History — SDP internal only */}

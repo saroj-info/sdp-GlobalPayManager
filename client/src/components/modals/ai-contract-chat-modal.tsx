@@ -34,6 +34,8 @@ import { BusinessCombobox } from "@/components/pickers/BusinessCombobox";
 import { useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
 import { useAuth } from "@/hooks/useAuth";
 import { describeMissingBusinessDetails, getMissingBusinessDetails } from "@shared/businessProfile";
+import { requiresBillingTerms, type BillingTermsAcceptanceInput } from "@shared/billingTerms";
+import { BillingTermsDialog, BILLING_TERMS_CURRENT_KEY } from "@/components/modals/billing-terms-dialog";
 import { ContractPreviewModal, type PreviewSection, type PreviewRow } from "@/components/modals/contract-preview-modal";
 import { ContractDocumentModal, type ContractDocumentSummary } from "@/components/modals/contract-document-modal";
 
@@ -663,6 +665,13 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
   // authenticated-layout context; businesses/templates/role titles are
   // sourced from react-query below.
   const [resolvedRefs, setResolvedRefs] = useState<Record<string, string>>({});
+  // SDP billing terms: collected at Create time (not a draft field). Cleared when
+  // the billing mode changes and on close; the server enforces the rule.
+  const [billingTermsAcceptance, setBillingTermsAcceptance] = useState<BillingTermsAcceptanceInput | null>(null);
+  const [billingTermsDialogOpen, setBillingTermsDialogOpen] = useState(false);
+  useEffect(() => {
+    setBillingTermsAcceptance(null);
+  }, [draft.billingMode, draft.isForClient, draft.selectedBusinessId]);
 
   // Staged @/#/& picks — a mention chosen from a popover writes its intended
   // effect here, NOT directly into `draft` / `resolvedRefs` / `userEditedFieldPaths`.
@@ -752,6 +761,8 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       setEditingField(null);
       setEditValue(undefined);
       setResolvedRefs({});
+      setBillingTermsAcceptance(null);
+      setBillingTermsDialogOpen(false);
       setActiveStep(1);
       setManuallyNavigated(false);
       setMention(null);
@@ -863,10 +874,13 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
   // preview must see the same shape the server will actually persist.
   // Returns the raw effectiveDraft too so callers can look up business/worker
   // context (preview summary, generate-document businessId resolution).
-  async function buildContractPayload(): Promise<{
+  async function buildContractPayload(acceptanceOverride?: BillingTermsAcceptanceInput | null): Promise<{
     contractPayload: Record<string, any>;
     effectiveDraft: Record<string, any>;
   }> {
+    // The acceptance handed in by the dialog wins over state, because mutate()
+    // runs with the options of the last render (state not yet updated).
+    const acceptance = acceptanceOverride ?? billingTermsAcceptance;
     let effectiveDraft = draft;
 
     // If this is a client-facing contract and the host client hasn't been
@@ -1006,6 +1020,10 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       // so the invoice-generation flow has a stable cadence.
       contractPayload.invoicingFrequency = "monthly";
     }
+    // SDP billing terms acceptance rides the POST body when the mode needs it.
+    if (acceptance && requiresBillingTerms(contractPayload.billingMode, effectiveDraft.isForClient === true)) {
+      contractPayload.billingTermsAcceptance = acceptance;
+    }
     return { contractPayload, effectiveDraft };
   }
 
@@ -1080,8 +1098,8 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
   }
 
   const createContractMutation = useMutation({
-    mutationFn: async () => {
-      const { contractPayload } = await buildContractPayload();
+    mutationFn: async (vars?: { billingTermsAcceptance?: BillingTermsAcceptanceInput }) => {
+      const { contractPayload } = await buildContractPayload(vars?.billingTermsAcceptance);
       const resp = await apiRequest("POST", "/api/contracts", contractPayload);
       const created = await resp.json();
       // If the user pre-rendered the document via Generate, attach it to the
@@ -1117,6 +1135,19 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       // so show the server's sentence and keep it out of the chat.
       if (typeof msg === "string" && msg.includes("BUSINESS_PROFILE_INCOMPLETE")) {
         toast({ title: "Couldn't create contract", description: extractApiErrorMessage(err, msg), variant: "destructive" });
+        return;
+      }
+      // Billing terms missing, outdated or not published: nothing in the draft
+      // fixes it either. Clear the stale acceptance and re-open the dialog.
+      if (typeof msg === "string" && msg.includes("BILLING_TERMS_")) {
+        setBillingTermsAcceptance(null);
+        queryClient.invalidateQueries({ queryKey: [BILLING_TERMS_CURRENT_KEY] });
+        if (!msg.includes("BILLING_TERMS_NOT_PUBLISHED")) setBillingTermsDialogOpen(true);
+        toast({
+          title: msg.includes("BILLING_TERMS_OUTDATED") ? "Billing terms updated" : "Billing terms required",
+          description: extractApiErrorMessage(err, msg),
+          variant: "destructive",
+        });
         return;
       }
       setMessages((prev) => [
@@ -1922,6 +1953,17 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
 
   const isEditable = (key: string) => key in FIELD_EDITOR;
 
+  // Create: when the draft uses a mode where SDP is the billing entity, offer the
+  // billing terms first (accept, or skip and accept later from the contract), then create.
+  const termsNeededForCreate = requiresBillingTerms(draft.billingMode, draft.isForClient === true);
+  const handleCreateClick = () => {
+    if (termsNeededForCreate && !billingTermsAcceptance) {
+      setBillingTermsDialogOpen(true);
+      return;
+    }
+    createContractMutation.mutate({});
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -2660,7 +2702,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
                 <Button
                   type="button"
                   size="sm"
-                  onClick={() => createContractMutation.mutate()}
+                  onClick={handleCreateClick}
                   disabled={!canCreate}
                   data-testid="button-ai-create-contract"
                   className="whitespace-nowrap shrink-0"
@@ -2680,6 +2722,20 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
           </div>
         </div>
       </DialogContent>
+      <BillingTermsDialog
+        open={billingTermsDialogOpen}
+        onOpenChange={setBillingTermsDialogOpen}
+        mode={isAdmin ? "sdp_offline" : "in_app"}
+        businessId={isAdmin ? (draft.selectedBusinessId || undefined) : undefined}
+        countryId={draft.countryId || undefined}
+        businessName={isAdmin ? resolvedRefs.selectedBusinessId : (user as any)?.business?.name}
+        onAccepted={(payload) => {
+          setBillingTermsAcceptance(payload);
+          createContractMutation.mutate({ billingTermsAcceptance: payload });
+        }}
+        allowSkip
+        onSkip={() => createContractMutation.mutate({})}
+      />
       <ContractPreviewModal
         open={previewOpen}
         onOpenChange={setPreviewOpen}

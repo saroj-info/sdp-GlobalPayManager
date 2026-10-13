@@ -59,6 +59,8 @@ export const TRACKED_CONTRACT_FIELDS: Array<{ key: string; label: string }> = [
 
   // Host client
   { key: "isForClient",             label: "Is For Host Client" },
+  // Not a contract column: written by modules/billingTerms when terms are accepted.
+  { key: "billingTermsAccepted",    label: "SDP Billing Terms Accepted" },
   { key: "clientName",              label: "Host Client Name" },
   { key: "customerBusinessId",      label: "Host Client (Business)" },
 ];

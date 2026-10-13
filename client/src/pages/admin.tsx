@@ -478,6 +478,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { ObjectUploader } from "@/components/ObjectUploader";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { VariableHelper } from "@/components/VariableHelper";
+import { BillingTermsAdminPanel } from "@/components/admin/billing-terms-admin-panel";
 
 const templateFormSchema = z.object({
   name: z.string().min(1, "Template name is required"),
@@ -1494,17 +1495,7 @@ Use variables from the helper panel on the right to customize your template.`}
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>System Settings</CardTitle>
-              <CardDescription>
-                Configure global system settings and preferences
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-muted-foreground">System settings panel coming soon...</p>
-            </CardContent>
-          </Card>
+          <BillingTermsAdminPanel />
         </TabsContent>
       </Tabs>
 
