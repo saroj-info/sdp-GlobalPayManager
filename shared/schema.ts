@@ -113,6 +113,11 @@ export const businesses = pgTable("businesses", {
   // (no customer business) point their businessId at this row so every
   // downstream join / tenant guard keeps working unchanged.
   isSdpOwned: boolean("is_sdp_owned").default(false).notNull(),
+  // Business logo shown in the app instead of the SDP Global Pay logo. The
+  // value is the public image URL `/api/businesses/<id>/logo?v=<hash>`; the
+  // bytes live in `business_logos`. Written only by the logo endpoints
+  // (server/modules/businesses).
+  logoUrl: varchar("logo_url"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
@@ -120,6 +125,20 @@ export const businesses = pgTable("businesses", {
   index("idx_businesses_parent").on(table.parentBusinessId),
   uniqueIndex("uniq_businesses_sdp_owned").on(table.isSdpOwned).where(sql`is_sdp_owned = true`),
 ]);
+
+// Logo image of a business, one row per business, served by
+// GET /api/businesses/:id/logo. Kept out of `businesses` so list payloads stay
+// small. `data` is base64 (no built-in bytea column type in drizzle 0.39 and
+// db.ts switches between the Neon and node-postgres drivers).
+export const businessLogos = pgTable("business_logos", {
+  businessId: varchar("business_id").primaryKey().references(() => businesses.id, { onDelete: "cascade" }),
+  contentType: varchar("content_type", { length: 32 }).notNull(),
+  byteSize: integer("byte_size").notNull(),
+  sha256: varchar("sha256", { length: 64 }).notNull(),
+  data: text("data").notNull(),
+  uploadedByUserId: varchar("uploaded_by_user_id").references(() => users.id),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
 
 // Countries and their SDP entities
 export const countries = pgTable("countries", {
@@ -1637,6 +1656,8 @@ export type InsertTwoFactorAuditLog = typeof twoFactorAuditLog.$inferInsert;
 
 export type InsertBusiness = typeof businesses.$inferInsert;
 export type Business = typeof businesses.$inferSelect;
+export type BusinessLogo = typeof businessLogos.$inferSelect;
+export type InsertBusinessLogo = typeof businessLogos.$inferInsert;
 
 export type InsertCountry = typeof countries.$inferInsert;
 export type Country = typeof countries.$inferSelect;
@@ -1696,10 +1717,13 @@ export const insertBusinessSchema = createInsertSchema(businesses).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
-  // Profile details are written only through PATCH /api/businesses/me.
+  // Profile details are written only through the profile endpoints
+  // (PATCH /api/businesses/me, PATCH /api/businesses/:id/profile) and the logo
+  // only through the logo endpoints.
   registrationCountryId: true,
   registrationNumber: true,
   taxNumber: true,
+  logoUrl: true,
 });
 
 export const insertCountrySchema = createInsertSchema(countries).omit({

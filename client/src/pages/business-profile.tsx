@@ -1,28 +1,25 @@
 /**
  * Business Profile — where a business user fills in their business address,
- * country, registration number and optional tax number.
+ * country, registration number and optional tax number, and uploads the
+ * business logo shown in place of the SDP Global Pay logo.
  *
  * Business users land here after login while details are missing (the gate is
  * in pages/dashboard/index.tsx) and can skip; contracts cannot be created
  * until the details are saved. Rules for "missing" and the per-country labels
- * live in shared/businessProfile.ts.
+ * live in shared/businessProfile.ts. SDP admins edit the same details from
+ * the Businesses page (components/modals/business-details-dialog.tsx).
  */
 
 import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
 import { AlertTriangle, Building2 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageLoader } from "@/components/ui/loader";
+import { BusinessDetailsForm } from "@/components/business/business-details-form";
+import { BusinessLogoUploader } from "@/components/business/business-logo-uploader";
 import { apiRequest, extractApiErrorMessage, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -30,10 +27,8 @@ import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { markPromptedForBusinessProfile } from "@/lib/businessProfilePrompt";
 import {
   describeMissingBusinessDetails,
-  getBusinessNumberLabels,
   getMissingBusinessDetails,
   requiresBusinessProfile,
-  updateBusinessProfileSchema,
   type UpdateBusinessProfileInput,
 } from "@shared/businessProfile";
 import type { Business } from "@shared/schema";
@@ -41,7 +36,7 @@ import type { Business } from "@shared/schema";
 export default function BusinessProfile() {
   const { user, isAuthenticated, authReady } = useAuth();
   const [, setLocation] = useLocation();
-  usePageHeader("Business Profile", "Your business address and registration details");
+  usePageHeader("Business Profile", "Your business address, registration details and logo");
 
   const isBusinessUser = user?.userType === "business_user";
 
@@ -92,6 +87,16 @@ export default function BusinessProfile() {
   return <BusinessProfileForm business={business} />;
 }
 
+// Write the saved row into the cached user instead of refetching, so the
+// sidebar logo, the reminder bar and the contract block update in the same
+// step. Also refreshes any business list in the cache.
+function applyUpdatedBusiness(updated: Business) {
+  queryClient.setQueryData(["/api/auth/user"], (old: any) => (old ? { ...old, business: updated } : old));
+  queryClient.invalidateQueries({
+    predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/businesses"),
+  });
+}
+
 function BusinessProfileForm({ business }: { business: Business }) {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
@@ -103,18 +108,6 @@ function BusinessProfileForm({ business }: { business: Business }) {
 
   const missing = getMissingBusinessDetails(business);
   const isIncomplete = missing.length > 0;
-
-  const form = useForm<UpdateBusinessProfileInput>({
-    resolver: zodResolver(updateBusinessProfileSchema),
-    defaultValues: {
-      address: business.address ?? "",
-      registrationCountryId: business.registrationCountryId ?? "",
-      registrationNumber: business.registrationNumber ?? "",
-      taxNumber: business.taxNumber ?? "",
-    },
-  });
-
-  const numberLabels = getBusinessNumberLabels(form.watch("registrationCountryId"));
 
   const saveMutation = useMutation({
     mutationFn: async (values: UpdateBusinessProfileInput) => {
@@ -132,13 +125,7 @@ function BusinessProfileForm({ business }: { business: Business }) {
         title: "Business details saved",
         description: wasIncomplete ? "Your business profile is complete." : "Your business profile has been updated.",
       });
-      // Write the saved row into the cached user instead of refetching, so the
-      // reminder bar and the contract block clear in the same step as the
-      // move to the dashboard.
-      queryClient.setQueryData(["/api/auth/user"], (old: any) => (old ? { ...old, business: updated } : old));
-      queryClient.invalidateQueries({
-        predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/businesses"),
-      });
+      applyUpdatedBusiness(updated);
       if (wasIncomplete) setLocation("/dashboard");
     },
     onError: (err) => {
@@ -169,103 +156,33 @@ function BusinessProfileForm({ business }: { business: Business }) {
             <CardDescription>The registered details of your business.</CardDescription>
           </CardHeader>
           <CardContent>
-            <Form {...form}>
-              <form onSubmit={form.handleSubmit((values) => saveMutation.mutate(values))} className="space-y-5">
-                <div className="space-y-2">
-                  <Label htmlFor="business-name">Business name</Label>
-                  <Input id="business-name" value={business.name} readOnly disabled data-testid="input-business-name" />
-                </div>
+            <BusinessDetailsForm
+              business={business}
+              countries={countries}
+              onSubmit={(values) => saveMutation.mutate(values)}
+              isSaving={saveMutation.isPending}
+              secondaryAction={isIncomplete ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setLocation("/dashboard")}
+                  disabled={saveMutation.isPending}
+                  data-testid="button-skip-business-profile"
+                >
+                  Skip for now
+                </Button>
+              ) : undefined}
+            />
+          </CardContent>
+        </Card>
 
-                <FormField
-                  control={form.control}
-                  name="registrationCountryId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Country *</FormLabel>
-                      <Select value={field.value} onValueChange={field.onChange}>
-                        <FormControl>
-                          <SelectTrigger data-testid="select-business-country">
-                            <SelectValue placeholder="Select the country your business is registered in" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {countries.map((country) => (
-                            <SelectItem key={country.id} value={country.id}>
-                              {country.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="address"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Business address *</FormLabel>
-                      <FormControl>
-                        <Textarea
-                          {...field}
-                          rows={3}
-                          placeholder="Street, city, state or region, postcode"
-                          data-testid="input-business-address"
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="registrationNumber"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{numberLabels.registration} *</FormLabel>
-                      <FormControl>
-                        <Input {...field} data-testid="input-business-registration-number" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="taxNumber"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{numberLabels.tax} (optional)</FormLabel>
-                      <FormControl>
-                        <Input {...field} value={field.value ?? ""} data-testid="input-business-tax-number" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <div className="flex flex-wrap justify-end gap-3 pt-2">
-                  {isIncomplete && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setLocation("/dashboard")}
-                      disabled={saveMutation.isPending}
-                      data-testid="button-skip-business-profile"
-                    >
-                      Skip for now
-                    </Button>
-                  )}
-                  <Button type="submit" disabled={saveMutation.isPending} data-testid="button-save-business-profile">
-                    {saveMutation.isPending ? "Saving..." : "Save details"}
-                  </Button>
-                </div>
-              </form>
-            </Form>
+        <Card data-testid="card-business-logo">
+          <CardHeader>
+            <CardTitle>Business logo</CardTitle>
+            <CardDescription>Shown to you and your workers in the app in place of the SDP Global Pay logo.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <BusinessLogoUploader business={business} onUpdated={applyUpdatedBusiness} />
           </CardContent>
         </Card>
       </div>

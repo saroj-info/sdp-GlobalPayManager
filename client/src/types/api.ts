@@ -116,6 +116,8 @@ export interface InvoiceWithContext extends Invoice {
 
 export interface AuthUser extends Omit<User, 'country'> {
   business?: Business | null;
+  // Workers only: the employer (slim), so the sidebar can show its logo.
+  employerBusiness?: { id: string; name: string; logoUrl: string | null } | null;
   country?: string | Country | null;
   // Dual-role: `userType` is the EFFECTIVE (active) role the server resolved.
   // These extra fields expose the switcher state.

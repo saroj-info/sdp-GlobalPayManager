@@ -81,6 +81,12 @@ function ContractStatusBadge({ contract }: { contract: any }) {
   );
 }
 
+// Triple-dot quick-actions menu beside "View Details" / "View" (renewal,
+// extension, host client confirmation). Hidden for now (2026-10-15); set to
+// true to show it again. The dialogs, pills, lineage rows and the details
+// modal's confirmation panel stay available.
+const CONTRACT_QUICK_ACTIONS_ENABLED = false;
+
 const fmtDay = (d: string | Date | null | undefined) =>
   d ? new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
 
@@ -1469,7 +1475,7 @@ export default function ContractsPage() {
   // as a split button: one joined control, main action on the left, menu on
   // the right. Plain function, not a component (see root CLAUDE.md).
   const renderViewWithActions = (contract: any, opts: { fullWidth: boolean; label: string; testId: string }) => {
-    const withActions = canUseContractActions(user as any, contract);
+    const withActions = CONTRACT_QUICK_ACTIONS_ENABLED && canUseContractActions(user as any, contract);
     return (
       <div className={opts.fullWidth ? 'flex w-full' : 'inline-flex'}>
         <Button

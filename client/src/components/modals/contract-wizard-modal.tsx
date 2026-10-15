@@ -274,14 +274,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
 
   // SDP on behalf: no new contract for a customer business whose profile
   // details (address, country, registration number) are missing. The server
-  // refuses it too (409 BUSINESS_PROFILE_INCOMPLETE); SDP cannot enter the
-  // details, the business does. Editing an existing contract is not blocked.
+  // refuses it too (409 BUSINESS_PROFILE_INCOMPLETE). The business fills them
+  // in on its profile page, or an SDP admin on the Businesses page. Editing an
+  // existing contract is not blocked.
   const onBehalfBusiness = isSDPInternal && formData.onBehalf && !editMode
     ? (businesses || []).find((b: any) => b.id === formData.selectedBusinessId)
     : undefined;
   const onBehalfMissingDetails = getMissingBusinessDetails(onBehalfBusiness);
   const onBehalfProfileError = onBehalfMissingDetails.length > 0
-    ? `${onBehalfBusiness.name} has not completed its business profile (missing: ${describeMissingBusinessDetails(onBehalfMissingDetails, onBehalfBusiness.registrationCountryId)}). A contract cannot be created until the business saves these details.`
+    ? `${onBehalfBusiness.name} has not completed its business profile (missing: ${describeMissingBusinessDetails(onBehalfMissingDetails, onBehalfBusiness.registrationCountryId)}). A contract cannot be created until these details are saved (by the business on its profile page, or by an SDP admin on the Businesses page).`
     : null;
 
   // SDP billing terms: Billing Agent / Auto Invoice on customer work needs the

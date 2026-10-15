@@ -32,7 +32,7 @@ import { registerAiCountryIntelRoutes, isAiCountryIntelEnabled } from "./modules
 import { registerAiRoleSuggestRoutes, isAiRoleSuggestEnabled } from "./modules/ai/roleSuggest";
 import { registerAiAdminSettingsRoutes } from "./modules/ai/adminSettings";
 import { registerDashboardRoutes } from "./modules/dashboard";
-import { registerBusinessProfileRoutes, checkBusinessProfileForContract } from "./modules/businesses";
+import { registerBusinessProfileRoutes, checkBusinessProfileForContract, businessesService } from "./modules/businesses";
 import { registerBillingTermsRoutes, checkBillingTermsForCreate, checkBillingTermsForUpdate, recordBillingTermsAcceptance, hardDeleteContract } from "./modules/billingTerms";
 import { registerContractLifecycleRoutes } from "./modules/contractLifecycle";
 
@@ -254,19 +254,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userData = getUserFromToken(token);
       
       if (userData) {
-        // Get business info for business users
-        let business = null;
-        if (userData.userType === 'business_user' && userData.id) {
-          try {
-            business = await storage.getPrimaryBusinessForUser(userData.id);
-          } catch (error: any) {
-            console.error('Error getting business for user:', error);
-          }
-        }
-        
+        // `business` for business users, slim `employerBusiness` for workers
+        // (the sidebar shows the employer's logo). Nulls for other roles.
+        const businessContext = await businessesService.resolveAuthBusinessContext(userData);
+
         return res.json({
           ...userData,
-          business,
+          ...businessContext,
           featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled(), aiCountryIntelEnabled: isAiCountryIntelEnabled(), aiRoleSuggestEnabled: isAiRoleSuggestEnabled() },
         });
       }
@@ -287,19 +281,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         accessibleBusinessIds: sessionUser.accessibleBusinessIds || []
       };
 
-      // Get business info for business users
-      let business = null;
-      if (userData.userType === 'business_user' && userData.id) {
-        try {
-          business = await storage.getPrimaryBusinessForUser(userData.id);
-        } catch (error: any) {
-          console.error('Error getting business for user:', error);
-        }
-      }
+      const businessContext = await businessesService.resolveAuthBusinessContext(userData);
 
       return res.json({
         ...userData,
-        business,
+        ...businessContext,
         featureFlags: { aiContractDraftEnabled: isAiEnabled(), aiSearchEnabled: isAiSearchEnabled(), aiCountryIntelEnabled: isAiCountryIntelEnabled(), aiRoleSuggestEnabled: isAiRoleSuggestEnabled() },
       });
     }

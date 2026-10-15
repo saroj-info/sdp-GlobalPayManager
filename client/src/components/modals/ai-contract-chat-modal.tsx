@@ -1508,7 +1508,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
     if (missingDetails.length > 0) {
       toast({
         title: "Business profile incomplete",
-        description: `${name} has not completed its business profile (missing: ${describeMissingBusinessDetails(missingDetails, biz?.registrationCountryId)}). A contract cannot be created until the business saves these details.`,
+        description: `${name} has not completed its business profile (missing: ${describeMissingBusinessDetails(missingDetails, biz?.registrationCountryId)}). A contract cannot be created until these details are saved (by the business on its profile page, or by an SDP admin on the Businesses page).`,
         variant: "destructive",
       });
     }

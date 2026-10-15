@@ -7,9 +7,17 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { usePageHeader, useAuthenticatedLayout } from "@/contexts/AuthenticatedLayoutContext";
-import { ArrowLeft, Building2, Mail, MapPin, Search, Users } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { AlertTriangle, ArrowLeft, Building2, Mail, MapPin, Pencil, Search, Users } from "lucide-react";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ViewWorkerModal } from "@/components/modals/view-worker-modal";
+import { BusinessDetailsDialog } from "@/components/modals/business-details-dialog";
+import { BusinessLogoUploader } from "@/components/business/business-logo-uploader";
+import {
+  describeMissingBusinessDetails,
+  getBusinessNumberLabels,
+  getMissingBusinessDetails,
+  requiresBusinessProfile,
+} from "@shared/businessProfile";
 import { DataPagination } from "@/components/ui/data-pagination";
 import { PageLoader } from "@/components/ui/loader";
 
@@ -25,7 +33,31 @@ interface BusinessRow {
   contactName?: string | null;
   parentBusinessId?: string | null;
   address?: string | null;
+  registrationCountryId?: string | null;
+  registrationNumber?: string | null;
+  taxNumber?: string | null;
+  logoUrl?: string | null;
   createdAt?: string | null;
+}
+
+// Logo thumbnail for a business, or the building icon when it has none (or
+// the image fails to load). Plain function, not a component.
+function businessMark(b: Pick<BusinessRow, 'id' | 'name' | 'logoUrl'>) {
+  return (
+    <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-primary-50 text-primary-600 flex-shrink-0 overflow-hidden">
+      {b.logoUrl ? (
+        <img
+          src={b.logoUrl}
+          alt={b.name}
+          className="h-10 w-10 object-contain bg-white"
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+          data-testid={`img-business-logo-${b.id}`}
+        />
+      ) : (
+        <Building2 className="h-5 w-5" />
+      )}
+    </div>
+  );
 }
 
 function BusinessTag({ b }: { b: BusinessRow }) {
@@ -56,6 +88,7 @@ export default function SdpBusinessesPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCountry, setFilterCountry] = useState("all");
   const [workerPage, setWorkerPage] = useState(1);
+  const [editingDetails, setEditingDetails] = useState(false);
 
   usePageHeader("Businesses", "Browse workers by business");
 
@@ -67,6 +100,15 @@ export default function SdpBusinessesPage() {
 
   const sdpRole = (currentUser as any)?.sdpRole;
   const isAllowed = !!sdpRole && ['sdp_super_admin', 'sdp_admin', 'sdp_agent'].includes(sdpRole);
+  // Super admins and admins may save a customer business's details and logo
+  // (PATCH /api/businesses/:id/profile, PUT /api/businesses/:id/logo); agents read only.
+  const canEditBusiness = !!sdpRole && ['sdp_super_admin', 'sdp_admin'].includes(sdpRole);
+
+  const invalidateBusinesses = () => {
+    queryClient.invalidateQueries({
+      predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/businesses"),
+    });
+  };
 
   // Fetch all businesses INCLUDING the SDP-owned "employer of record" row so
   // the admin can drill into it too. The escape hatch was added in the
@@ -104,9 +146,16 @@ export default function SdpBusinessesPage() {
     [businesses, selectedBusinessId],
   );
 
+  // Profile details apply to customer businesses only (not host clients, not
+  // the SDP-owned row): shared rule in shared/businessProfile.ts.
+  const selectedIsEditable = requiresBusinessProfile(selectedBusiness);
+  const selectedMissing = getMissingBusinessDetails(selectedBusiness);
+  const selectedNumberLabels = getBusinessNumberLabels(selectedBusiness?.registrationCountryId);
+
   // Reset pagination whenever the selected business changes.
   useEffect(() => {
     setWorkerPage(1);
+    setEditingDetails(false);
   }, [selectedBusinessId]);
 
   // Workers for the selected business — server-paginated via the same modular
@@ -220,18 +269,40 @@ export default function SdpBusinessesPage() {
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
-              <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-primary-50 text-primary-600 flex-shrink-0">
-                <Building2 className="h-5 w-5" />
-              </div>
+              {businessMark(selectedBusiness)}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-3 flex-wrap">
                   <CardTitle className="text-xl">{selectedBusiness.name}</CardTitle>
                   <BusinessTag b={selectedBusiness} />
                 </div>
               </div>
+              {canEditBusiness && selectedIsEditable && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditingDetails(true)}
+                  data-testid="button-edit-business-details"
+                >
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Edit details
+                </Button>
+              )}
             </div>
           </CardHeader>
-          <CardContent className="pt-0">
+          <CardContent className="pt-0 space-y-4">
+            {selectedIsEditable && selectedMissing.length > 0 && (
+              <div
+                className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+                data-testid="notice-business-profile-incomplete"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+                <span>
+                  Profile incomplete. Missing: {describeMissingBusinessDetails(selectedMissing, selectedBusiness.registrationCountryId)}.
+                  Contracts cannot be created for this business until these are saved.
+                </span>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
               {selectedBusiness.contactName && (
                 <div>
@@ -253,6 +324,36 @@ export default function SdpBusinessesPage() {
                   <span className="text-secondary-400 italic">Not on file</span>
                 )}
               </div>
+              {selectedIsEditable && (
+                <>
+                  <div>
+                    <span className="text-secondary-500">Country: </span>
+                    {selectedBusiness.registrationCountryId ? (
+                      <span className="text-secondary-900" data-testid="text-business-country">
+                        {countryNameById.get(selectedBusiness.registrationCountryId) ?? selectedBusiness.registrationCountryId}
+                      </span>
+                    ) : (
+                      <span className="text-secondary-400 italic">Not on file</span>
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-secondary-500">{selectedNumberLabels.registration}: </span>
+                    {selectedBusiness.registrationNumber ? (
+                      <span className="text-secondary-900" data-testid="text-business-registration-number">{selectedBusiness.registrationNumber}</span>
+                    ) : (
+                      <span className="text-secondary-400 italic">Not on file</span>
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-secondary-500">{selectedNumberLabels.tax}: </span>
+                    {selectedBusiness.taxNumber ? (
+                      <span className="text-secondary-900" data-testid="text-business-tax-number">{selectedBusiness.taxNumber}</span>
+                    ) : (
+                      <span className="text-secondary-400 italic">Not on file</span>
+                    )}
+                  </div>
+                </>
+              )}
               <div>
                 <span className="text-secondary-500">Workers: </span>
                 <span className="text-secondary-900">{totalWorkers}</span>
@@ -312,8 +413,27 @@ export default function SdpBusinessesPage() {
                 </div>
               )}
             </div>
+            {canEditBusiness && selectedIsEditable && (
+              <div className="border-t pt-4">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-secondary-500">Business logo</p>
+                <BusinessLogoUploader
+                  business={selectedBusiness as any}
+                  compact
+                  onUpdated={invalidateBusinesses}
+                />
+                <p className="mt-2 text-xs text-secondary-500">
+                  Shown to the business and its workers in place of the SDP Global Pay logo.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
+
+        <BusinessDetailsDialog
+          business={selectedBusiness as any}
+          open={editingDetails}
+          onOpenChange={setEditingDetails}
+        />
 
         {selectedBusiness.isRegistered !== false && (
           <Card>
@@ -507,9 +627,7 @@ export default function SdpBusinessesPage() {
               data-testid={`card-business-${b.id}`}
             >
               <div className="flex items-start gap-3">
-                <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-primary-50 text-primary-600 flex-shrink-0">
-                  <Building2 className="h-5 w-5" />
-                </div>
+                {businessMark(b)}
                 <div className="min-w-0 flex-1">
                   <div className="font-semibold text-secondary-900 truncate">{b.name}</div>
                   <div className="mt-1">

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { SDPLogo } from "@/components/ui/logo";
+import { useBrandLogo } from "@/hooks/useBrandLogo";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Building2, Briefcase, Check, ChevronsUpDown } from "lucide-react";
 import sampleUserPhoto from "@assets/generated_images/Professional_business_headshot_8ca64f96.png";
@@ -14,6 +15,8 @@ export function Sidebar() {
   const { toast } = useToast();
 
   const { user, activeRole, availableRoles, canSwitchRole, switchRole } = useAuth();
+  // The business's own logo when it has one, else the SDP Global Pay logo.
+  const brandLogo = useBrandLogo();
 
   // Dual-role: Slack-style workspace switcher lives in the sidebar header.
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
@@ -176,7 +179,7 @@ export function Sidebar() {
       {/* Top: logo + user info — does not scroll */}
       <div className="px-6 pt-6 pb-4">
         <div className="mb-6">
-          <SDPLogo size="lg" variant="horizontal" theme="light" />
+          <SDPLogo size="lg" variant="horizontal" theme="light" src={brandLogo.src} alt={brandLogo.alt} />
         </div>
 
         {user && (user as any) && (() => {

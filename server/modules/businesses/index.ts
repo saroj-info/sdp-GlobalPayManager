@@ -1,3 +1,4 @@
 export { registerBusinessProfileRoutes } from "./controller";
-export { updateOwnBusinessProfile, checkBusinessProfileForContract } from "./service";
-export type { AuthUser, UpdateProfileResult, ContractProfileBlock } from "./types";
+export { businessesService, createBusinessesService, updateOwnBusinessProfile, checkBusinessProfileForContract } from "./service";
+export { resolveEditableBusiness, canEditBusinesses, BUSINESS_EDIT_SDP_ROLES } from "./authorize";
+export type { AuthUser, AuthBusinessContext, BusinessesDeps, ContractProfileBlock, Result, UpdateProfileResult } from "./types";

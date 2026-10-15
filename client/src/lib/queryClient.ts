@@ -78,6 +78,31 @@ export async function apiRequest(
   return res;
 }
 
+// Raw file body (e.g. the business logo): same bearer, cookies and 401
+// handling as apiRequest, but the body is the file itself and Content-Type is
+// its MIME type. Use this instead of a direct fetch for authenticated uploads.
+export async function apiUpload(method: "PUT" | "POST", url: string, file: Blob): Promise<Response> {
+  const headers: Record<string, string> = {
+    "Content-Type": file.type || "application/octet-stream",
+  };
+  const token = localStorage.getItem("authToken");
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: file,
+    credentials: "include",
+    cache: "no-store",
+  });
+
+  if (res.status === 401) handleAuthExpired();
+  await throwIfResNotOk(res);
+  return res;
+}
+
 type UnauthorizedBehavior = "returnNull" | "throw";
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
