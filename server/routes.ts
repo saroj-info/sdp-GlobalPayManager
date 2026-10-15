@@ -34,6 +34,7 @@ import { registerAiAdminSettingsRoutes } from "./modules/ai/adminSettings";
 import { registerDashboardRoutes } from "./modules/dashboard";
 import { registerBusinessProfileRoutes, checkBusinessProfileForContract } from "./modules/businesses";
 import { registerBillingTermsRoutes, checkBillingTermsForCreate, checkBillingTermsForUpdate, recordBillingTermsAcceptance, hardDeleteContract } from "./modules/billingTerms";
+import { registerContractLifecycleRoutes } from "./modules/contractLifecycle";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -6432,8 +6433,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getContractBillingLines(contract.id).catch(() => []),
       ]);
 
+      // The signing page is public (token only): keep the business's host
+      // client confirmation note, reference and file off the wire.
+      const {
+        hostClientConfirmationNote: _hccNote,
+        hostClientReference: _hccRef,
+        hostClientConfirmationDocumentPath: _hccDoc,
+        ...contractForSigning
+      } = contract;
+      void _hccNote; void _hccRef; void _hccDoc;
+
       res.json({
-        ...contract,
+        ...contractForSigning,
         worker: worker ? {
           id: worker.id,
           firstName: worker.firstName,
@@ -7694,6 +7705,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // The create/update blocks are checkBillingTermsForCreate/Update inside
   // POST /api/contracts and PUT /api/contracts/:id.
   registerBillingTermsRoutes(app, authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin']));
+
+  // Contract lifecycle quick actions: renewal (clone + copy lines), extension
+  // (end date only) and host client confirmation. Dedicated endpoints because
+  // PUT /api/contracts/:id needs the whole row.
+  registerContractLifecycleRoutes(app, authMiddleware);
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {

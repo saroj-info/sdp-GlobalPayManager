@@ -63,6 +63,18 @@ export const TRACKED_CONTRACT_FIELDS: Array<{ key: string; label: string }> = [
   { key: "billingTermsAccepted",    label: "SDP Billing Terms Accepted" },
   { key: "clientName",              label: "Host Client Name" },
   { key: "customerBusinessId",      label: "Host Client (Business)" },
+
+  // Contract lifecycle (modules/contractLifecycle). `renewedFrom`, `renewedAs`
+  // and `hostClientConfirmationDocument` are pseudo-keys written by explicit
+  // logContractChanges calls (a contract description / "Attached", never a
+  // raw path); the other four are real columns on `contracts`.
+  { key: "renewedFrom",                    label: "Renewal of" },
+  { key: "renewedAs",                      label: "Renewed as" },
+  { key: "hostClientConfirmationStatus",   label: "Host Client Confirmation" },
+  { key: "hostClientConfirmedAt",          label: "Host Client Confirmed On" },
+  { key: "hostClientReference",            label: "Host Client PO / SOW Reference" },
+  { key: "hostClientConfirmationNote",     label: "Host Client Confirmation Note" },
+  { key: "hostClientConfirmationDocument", label: "Host Client Confirmation File" },
 ];
 
 const TRACKED_KEYS = new Set(TRACKED_CONTRACT_FIELDS.map((f) => f.key));

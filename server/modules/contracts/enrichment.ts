@@ -13,6 +13,17 @@
 
 import { storage } from "../../storage";
 import { getDerivedContractStatus } from "@shared/contractHelpers";
+import { fetchContractLinkSummaries, fetchRenewalsOf } from "./repository";
+
+/** Wire shape of a linked contract (renewal source or renewal). */
+export interface ContractLinkSummary {
+  id: string;
+  contractName: string | null;
+  customRoleTitle: string | null;
+  startDate: Date | string;
+  endDate: Date | string | null;
+  status: string | null;
+}
 
 const DATE_FIELDS = [
   "endDate",
@@ -122,4 +133,33 @@ export async function addDerivedStatusToContracts<T extends Record<string, any>>
       return { ...contract, derivedSignatureStatus: "draft", termExpired: false };
     }
   });
+}
+
+/** Attach renewal links: `renewedFrom` (the contract this one was cloned from,
+ *  or null) and `renewals` (contracts cloned from this one, oldest first).
+ *  Two queries for the whole page. */
+export async function addRenewalLinksToContracts<
+  T extends { id: string; renewedFromContractId?: string | null },
+>(contracts: T[]): Promise<(T & { renewedFrom: ContractLinkSummary | null; renewals: ContractLinkSummary[] })[]> {
+  if (contracts.length === 0) return [];
+  const ids = contracts.map(c => c.id);
+  const sourceIds = Array.from(new Set(contracts.map(c => c.renewedFromContractId).filter((id): id is string => !!id)));
+  const [sources, renewals] = await Promise.all([
+    fetchContractLinkSummaries(sourceIds).catch(() => []),
+    fetchRenewalsOf(ids).catch(() => []),
+  ]);
+  const sourceById = new Map<string, ContractLinkSummary>();
+  for (const s of sources) sourceById.set(s.id, s);
+  const renewalsBySource = new Map<string, ContractLinkSummary[]>();
+  for (const r of renewals) {
+    const { renewedFromContractId, ...summary } = r;
+    if (!renewedFromContractId) continue;
+    if (!renewalsBySource.has(renewedFromContractId)) renewalsBySource.set(renewedFromContractId, []);
+    renewalsBySource.get(renewedFromContractId)!.push(summary);
+  }
+  return contracts.map(c => ({
+    ...c,
+    renewedFrom: c.renewedFromContractId ? sourceById.get(c.renewedFromContractId) ?? null : null,
+    renewals: renewalsBySource.get(c.id) ?? [],
+  }));
 }

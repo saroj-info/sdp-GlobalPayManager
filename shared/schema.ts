@@ -12,6 +12,7 @@ import {
   decimal,
   pgEnum,
   time,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -449,6 +450,8 @@ export const workers = pgTable("workers", {
 export const employmentTypeEnum = pgEnum('employment_type', ['contractor', 'permanent', 'fixed_term', 'casual', 'third_party_worker', 'zero_hours', 'at_will', 'gig_worker', 'on_call', 'seasonal', 'part_time']);
 export const contractStatusEnum = pgEnum('contract_status', ['draft', 'pending_sdp_review', 'ready_to_issue', 'pending', 'active', 'completed', 'terminated']);
 export const rateTypeEnum = pgEnum('rate_type', ['annual', 'hourly', 'daily']);
+// Host client confirmation of a Customer Work contract (recorded by the business or SDP).
+export const hostClientConfirmationStatusEnum = pgEnum('host_client_confirmation_status', ['pending', 'confirmed', 'declined']);
 
 // Timesheet and leave types
 export const timesheetFrequencyEnum = pgEnum('timesheet_frequency', ['weekly', 'fortnightly', 'semi_monthly', 'monthly']);
@@ -541,7 +544,21 @@ export const contracts = pgTable("contracts", {
   // Audit fields
   createdByUserId: varchar("created_by_user_id").references(() => users.id), // Who created this contract
   createdOnBehalfOfBusinessId: varchar("created_on_behalf_of_business_id").references(() => businesses.id), // If created on behalf of a business
-  
+
+  // Contract lifecycle (shared/contractLifecycle.ts). A renewal is a new row
+  // cloned from the source contract; the link is kept here.
+  renewedFromContractId: varchar("renewed_from_contract_id").references((): AnyPgColumn => contracts.id),
+
+  // Host client confirmation of a Customer Work contract: recorded by the
+  // employing business or SDP, never by the host client. Null status = never recorded.
+  hostClientConfirmationStatus: hostClientConfirmationStatusEnum("host_client_confirmation_status"),
+  hostClientConfirmedAt: timestamp("host_client_confirmed_at"),
+  hostClientReference: varchar("host_client_reference"), // PO / SOW / reference number
+  hostClientConfirmationNote: text("host_client_confirmation_note"),
+  hostClientConfirmationDocumentPath: text("host_client_confirmation_document_path"), // /objects/... (object storage)
+  hostClientConfirmationUpdatedAt: timestamp("host_client_confirmation_updated_at"),
+  hostClientConfirmationUpdatedByUserId: varchar("host_client_confirmation_updated_by_user_id").references(() => users.id),
+
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
@@ -550,6 +567,7 @@ export const contracts = pgTable("contracts", {
   index("idx_contracts_country").on(table.countryId),
   index("idx_contracts_status").on(table.status),
   index("idx_contracts_created_at").on(table.createdAt),
+  index("idx_contracts_renewed_from").on(table.renewedFromContractId),
 ]);
 
 // Remuneration types for multiple compensation lines
@@ -1352,6 +1370,12 @@ export const contractsRelations = relations(contracts, ({ one, many }) => ({
     references: [roleTitles.id],
   }),
   timesheets: many(timesheets),
+  renewedFrom: one(contracts, {
+    fields: [contracts.renewedFromContractId],
+    references: [contracts.id],
+    relationName: 'contract_renewal',
+  }),
+  renewals: many(contracts, { relationName: 'contract_renewal' }),
 }));
 
 export const timesheetsRelations = relations(timesheets, ({ one, many }) => ({
@@ -1816,6 +1840,16 @@ export const insertContractSchema = createInsertSchema(contracts).omit({
   createdOnBehalfOfBusinessId: true,
   createdAt: true,
   updatedAt: true,
+  // Lifecycle columns are written only by modules/contractLifecycle, never by
+  // the contract create/edit payload.
+  renewedFromContractId: true,
+  hostClientConfirmationStatus: true,
+  hostClientConfirmedAt: true,
+  hostClientReference: true,
+  hostClientConfirmationNote: true,
+  hostClientConfirmationDocumentPath: true,
+  hostClientConfirmationUpdatedAt: true,
+  hostClientConfirmationUpdatedByUserId: true,
 }).extend({
   rate: z.union([z.string(), z.number()]).refine(
     (val) => val !== '' && val !== null && val !== undefined && !isNaN(Number(val)),

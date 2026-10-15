@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Navigation } from "@/components/layout/navigation";
-import { ChevronLeft, Building2, Users, Globe, CheckCircle, Mail, Clock } from "lucide-react";
+import { ChevronLeft, Building2, Users, Globe, CheckCircle, Mail, Clock, Eye, EyeOff } from "lucide-react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 
@@ -84,6 +84,8 @@ export default function Signup() {
   });
 
   const [currentStep, setCurrentStep] = useState(1);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [signupSuccess, setSignupSuccess] = useState(false);
   const [signupData, setSignupData] = useState<any>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -583,15 +585,27 @@ export default function Signup() {
 
                       <div className="space-y-2">
                         <Label htmlFor="password">Password</Label>
-                        <Input
-                          id="password"
-                          type="password"
-                          placeholder="Create a strong password"
-                          value={formData.password}
-                          onChange={(e) => handleInputChange('password', e.target.value)}
-                          className={formErrors.password ? 'border-red-500 focus:border-red-500' : ''}
-                          data-testid="input-password"
-                        />
+                        <div className="relative">
+                          <Input
+                            id="password"
+                            type={showPassword ? "text" : "password"}
+                            placeholder="Create a strong password"
+                            value={formData.password}
+                            onChange={(e) => handleInputChange('password', e.target.value)}
+                            className={`pr-10 ${formErrors.password ? 'border-red-500 focus:border-red-500' : ''}`}
+                            data-testid="input-password"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                            aria-label={showPassword ? "Hide password" : "Show password"}
+                            title={showPassword ? "Hide password" : "Show password"}
+                            data-testid="button-toggle-password"
+                          >
+                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
                         {formErrors.password && (
                           <p className="text-red-500 text-sm mt-1">{formErrors.password}</p>
                         )}
@@ -602,15 +616,27 @@ export default function Signup() {
 
                       <div className="space-y-2">
                         <Label htmlFor="confirmPassword">Confirm Password</Label>
-                        <Input
-                          id="confirmPassword"
-                          type="password"
-                          placeholder="Confirm your password"
-                          value={formData.confirmPassword}
-                          onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
-                          className={formErrors.confirmPassword ? 'border-red-500 focus:border-red-500' : ''}
-                          data-testid="input-confirmPassword"
-                        />
+                        <div className="relative">
+                          <Input
+                            id="confirmPassword"
+                            type={showConfirmPassword ? "text" : "password"}
+                            placeholder="Confirm your password"
+                            value={formData.confirmPassword}
+                            onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
+                            className={`pr-10 ${formErrors.confirmPassword ? 'border-red-500 focus:border-red-500' : ''}`}
+                            data-testid="input-confirmPassword"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                            aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                            title={showConfirmPassword ? "Hide password" : "Show password"}
+                            data-testid="button-toggle-confirm-password"
+                          >
+                            {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
                         {formErrors.confirmPassword && (
                           <p className="text-red-500 text-sm mt-1">{formErrors.confirmPassword}</p>
                         )}

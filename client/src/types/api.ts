@@ -54,6 +54,18 @@ export type {
 
 // ---- Enriched variants the API returns ---------------------------------
 
+export type { HostClientConfirmationStatus } from '@shared/contractLifecycle';
+
+/** A linked contract (renewal source or renewal) as attached by /api/contracts/list. */
+export interface ContractLinkSummary {
+  id: string;
+  contractName: string | null;
+  customRoleTitle: string | null;
+  startDate: string | Date;
+  endDate: string | Date | null;
+  status: string | null;
+}
+
 export interface ContractWithDerived extends Omit<Contract, 'signedAt'> {
   derivedSignatureStatus?: string;
   termExpired?: boolean;
@@ -68,6 +80,10 @@ export interface ContractWithDerived extends Omit<Contract, 'signedAt'> {
   viewerRole?: 'owner' | 'host_client';
   readOnly?: boolean;
   signedAt?: string | Date | null;
+  remunerationLines?: RemunerationLine[];
+  // Contract lifecycle (shared/contractLifecycle.ts): renewal links attached by the list.
+  renewedFrom?: ContractLinkSummary | null;
+  renewals?: ContractLinkSummary[];
 }
 
 export interface TimesheetWithContract extends Timesheet {

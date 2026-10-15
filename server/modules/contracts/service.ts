@@ -18,6 +18,7 @@ import {
   addDerivedStatusToContracts,
   addRateLinesToContracts,
   addRemunerationLinesToContracts,
+  addRenewalLinksToContracts,
 } from "./enrichment";
 import type { AuthUser, ContractListQuery, ListContractsResult } from "./types";
 
@@ -43,6 +44,7 @@ export async function listContracts(user: AuthUser, query: ContractListQuery): P
 
   // Enrich the page slice.
   items = await addDerivedStatusToContracts(items);
+  items = await addRenewalLinksToContracts(items);
   items = await addRemunerationLinesToContracts(items, user.userType);
   items = await addRateLinesToContracts(items);
   if (user.userType === "sdp_internal") {
@@ -59,6 +61,16 @@ export async function listContracts(user: AuthUser, query: ContractListQuery): P
       return c;
     }),
   );
+
+  // Workers see whether the host client confirmed the engagement, not the
+  // business's reference, note or file (modules/contractLifecycle).
+  if (user.userType === "worker") {
+    items = items.map((c: any) => {
+      const { hostClientConfirmationNote, hostClientReference, hostClientConfirmationDocumentPath, ...rest } = c;
+      void hostClientConfirmationNote; void hostClientReference; void hostClientConfirmationDocumentPath;
+      return rest;
+    });
+  }
 
   return { ok: true, data: { ...raw, items } };
 }

@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, FileText, Clock, CheckCircle, AlertCircle, Users, Building2, MapPin, DollarSign, Edit, Save, X, Mail, ExternalLink, LayoutGrid, List as ListIcon, ArrowUpDown, RotateCcw, Lock, ChevronDown, ChevronUp, Trash2, Info, Sparkles } from "lucide-react";
+import { Plus, FileText, Clock, CheckCircle, AlertCircle, Users, Building2, MapPin, DollarSign, Edit, Save, X, Mail, ExternalLink, LayoutGrid, List as ListIcon, ArrowUpDown, RotateCcw, Lock, ChevronDown, ChevronUp, Trash2, Info, Sparkles, RefreshCw, ClipboardCheck } from "lucide-react";
 import { Loader, PageLoader } from "@/components/ui/loader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
@@ -26,6 +26,11 @@ import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { getContractStatusLabel, getContractStatusVariant } from "@shared/contractHelpers";
 import { generatePeriodSchedule } from "@shared/timesheetPeriodCalculator";
 import { DataPagination } from "@/components/ui/data-pagination";
+import { ContractActionsMenu } from "@/components/contracts/contract-actions-menu";
+import { HostClientConfirmationDialog } from "@/components/modals/host-client-confirmation-dialog";
+import { ContractRenewalDialog } from "@/components/modals/contract-renewal-dialog";
+import { ContractExtendDialog } from "@/components/modals/contract-extend-dialog";
+import { canUseContractActions, HOST_CLIENT_CONFIRMATION_LABELS, type HostClientConfirmationStatus } from "@shared/contractLifecycle";
 
 interface ContractInstance {
   id: string;
@@ -72,6 +77,182 @@ function ContractStatusBadge({ contract }: { contract: any }) {
           Term Expired
         </Badge>
       )}
+    </div>
+  );
+}
+
+const fmtDay = (d: string | Date | null | undefined) =>
+  d ? new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+
+const describeLinkedContract = (c: any) =>
+  `${c?.contractName || c?.customRoleTitle || 'Contract'} (${fmtDay(c?.startDate)} – ${c?.endDate ? fmtDay(c.endDate) : 'Ongoing'})`;
+
+const confirmationPillClass: Record<HostClientConfirmationStatus, string> = {
+  confirmed: 'text-green-700 bg-green-50 border-green-200',
+  pending: 'text-amber-700 bg-amber-50 border-amber-200',
+  declined: 'text-red-700 bg-red-50 border-red-200',
+};
+
+const confirmationBadgeClass: Record<HostClientConfirmationStatus, string> = {
+  confirmed: 'bg-green-100 text-green-800 hover:bg-green-100',
+  pending: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
+  declined: 'bg-red-100 text-red-800 hover:bg-red-100',
+};
+
+/** Renewal links and the host client confirmation as small pills (card header and list status cell). */
+function ContractLifecyclePills({ contract, userType }: { contract: any; userType?: string }) {
+  const status = contract?.hostClientConfirmationStatus as HostClientConfirmationStatus | null | undefined;
+  const renewals: any[] = Array.isArray(contract?.renewals) ? contract.renewals : [];
+  const renewedFrom = contract?.renewedFrom;
+  const showConfirmation = !!status && !!contract?.isForClient && userType !== 'worker';
+  if (!showConfirmation && !renewedFrom && renewals.length === 0) return null;
+  return (
+    <>
+      {renewedFrom && (
+        <span
+          className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5"
+          title={`Renewal of ${describeLinkedContract(renewedFrom)}`}
+          data-testid={`pill-renewal-of-${contract.id}`}
+        >
+          <RefreshCw className="h-3 w-3" />Renewal
+        </span>
+      )}
+      {renewals.length > 0 && (
+        <span
+          className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5"
+          title={`Renewed as ${renewals.map(describeLinkedContract).join('; ')}`}
+          data-testid={`pill-renewed-${contract.id}`}
+        >
+          <RefreshCw className="h-3 w-3" />Renewed
+        </span>
+      )}
+      {showConfirmation && status && (
+        <span
+          className={`inline-flex items-center gap-1 text-[11px] font-medium border rounded-full px-2 py-0.5 ${confirmationPillClass[status]}`}
+          data-testid={`pill-host-client-confirmation-${contract.id}`}
+        >
+          <ClipboardCheck className="h-3 w-3" />{HOST_CLIENT_CONFIRMATION_LABELS[status]}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** "Renewal of …" / "Renewed as …" rows under the key details of the contract summary. */
+function ContractLineageSection({ contract, findOnPage, onSelect }: {
+  contract: any;
+  findOnPage: (id: string) => any | undefined;
+  onSelect: (row: any) => void;
+}) {
+  const renewedFrom = contract?.renewedFrom;
+  const renewals: any[] = Array.isArray(contract?.renewals) ? contract.renewals : [];
+  if (!renewedFrom && renewals.length === 0) return null;
+  const row = (label: string, linked: any) => {
+    const onPage = findOnPage(linked.id);
+    return (
+      <div key={`${label}-${linked.id}`} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm" data-testid={`row-lineage-${linked.id}`}>
+        <span>
+          <span className="text-xs text-muted-foreground">{label}: </span>
+          <span className="font-medium">{linked.contractName || linked.customRoleTitle || 'Contract'}</span>
+          <span className="text-muted-foreground"> ({fmtDay(linked.startDate)} – {linked.endDate ? fmtDay(linked.endDate) : 'Ongoing'})</span>
+        </span>
+        {onPage ? (
+          <Button type="button" variant="ghost" size="sm" onClick={() => onSelect(onPage)} data-testid={`button-lineage-view-${linked.id}`}>
+            View
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">Not on this page</span>
+        )}
+      </div>
+    );
+  };
+  return (
+    <div className="border rounded-lg overflow-hidden divide-y" data-testid="section-contract-lineage">
+      {renewedFrom && row('Renewal of', renewedFrom)}
+      {renewals.map((r) => row('Renewed as', r))}
+    </div>
+  );
+}
+
+/** Host client confirmation panel in the contract summary (Customer Work only). */
+function HostClientConfirmationPanel({ contract, canUpdate, showNote, onUpdate }: {
+  contract: any;
+  canUpdate: boolean;
+  showNote: boolean;
+  onUpdate: () => void;
+}) {
+  const { toast } = useToast();
+  const [docOpening, setDocOpening] = useState(false);
+  const status = contract?.hostClientConfirmationStatus as HostClientConfirmationStatus | null | undefined;
+
+  const openDocument = async () => {
+    setDocOpening(true);
+    try {
+      const res = await apiRequest('GET', `/api/contracts/${contract.id}/host-client-confirmation/document-url`);
+      const { url } = (await res.json()) as { url: string };
+      window.open(url, '_blank', 'noopener');
+    } catch (err) {
+      toast({ title: "Couldn't open the file", description: extractApiErrorMessage(err, 'Please try again.'), variant: 'destructive' });
+    } finally {
+      setDocOpening(false);
+    }
+  };
+
+  return (
+    <div className="border rounded-lg overflow-hidden" data-testid="panel-host-client-confirmation">
+      <div className="px-4 py-2 bg-secondary-50 border-b flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Host Client Confirmation</p>
+        {status ? (
+          <Badge className={confirmationBadgeClass[status]} data-testid="badge-host-client-confirmation">{HOST_CLIENT_CONFIRMATION_LABELS[status]}</Badge>
+        ) : (
+          <Badge variant="outline" data-testid="badge-host-client-confirmation">Not recorded</Badge>
+        )}
+      </div>
+      <div className="p-4 text-sm">
+        {!status ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="text-muted-foreground">No confirmation from the host client has been recorded for this contract.</span>
+            {canUpdate && (
+              <Button type="button" size="sm" onClick={onUpdate} data-testid="button-host-client-confirmation-update">
+                <ClipboardCheck className="h-4 w-4 mr-1" /> Record confirmation
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <p className="text-xs text-muted-foreground">Confirmed on</p>
+              <p className="font-medium">{contract.hostClientConfirmedAt ? new Date(contract.hostClientConfirmedAt).toLocaleDateString() : '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">PO / SOW reference</p>
+              <p className="font-medium">{contract.hostClientReference || '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Last updated</p>
+              <p className="font-medium">{contract.hostClientConfirmationUpdatedAt ? new Date(contract.hostClientConfirmationUpdatedAt).toLocaleString() : '—'}</p>
+            </div>
+            {showNote && contract.hostClientConfirmationNote && (
+              <div className="md:col-span-2">
+                <p className="text-xs text-muted-foreground">Note</p>
+                <p className="font-medium whitespace-pre-wrap">{contract.hostClientConfirmationNote}</p>
+              </div>
+            )}
+            <div className="md:col-span-2 flex flex-wrap gap-2 pt-1">
+              {contract.hostClientConfirmationDocumentPath && (
+                <Button type="button" variant="outline" size="sm" onClick={openDocument} disabled={docOpening} data-testid="button-host-client-confirmation-document">
+                  <ExternalLink className="h-4 w-4 mr-1" /> Confirmation file
+                </Button>
+              )}
+              {canUpdate && (
+                <Button type="button" variant="outline" size="sm" onClick={onUpdate} data-testid="button-host-client-confirmation-update">
+                  <Edit className="h-4 w-4 mr-1" /> Update
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1155,7 +1336,15 @@ export default function ContractsPage() {
     if (businessProfileIncomplete) setShowProfileRequired(true);
     else setShowAiContractChat(true);
   };
-  const [selectedContract, setSelectedContract] = useState<any>(null);
+  // The list row is the source of truth: the snapshot only remembers which
+  // contract is open, so the details modal shows fresh data after an edit,
+  // extension or confirmation refetches the list (derived below as selectedContract).
+  const [selectedContractSnapshot, setSelectedContract] = useState<any>(null);
+  // Quick actions (triple-dot menu): which contract and which dialog is open.
+  const [actionContract, setActionContract] = useState<any>(null);
+  const [activeAction, setActiveAction] = useState<'confirm' | 'renew' | 'extend' | null>(null);
+  // After a renewal: open the new contract's details once the refreshed list has it.
+  const [pendingOpenContractId, setPendingOpenContractId] = useState<string | null>(null);
   const [showContractDetails, setShowContractDetails] = useState(false);
   const [showContractDocument, setShowContractDocument] = useState(false);
   const [isEditingContract, setIsEditingContract] = useState(false);
@@ -1249,12 +1438,75 @@ export default function ContractsPage() {
   });
 
   const allContracts = contractListData?.items ?? [];
+  const selectedContract = selectedContractSnapshot
+    ? (allContracts.find((c: any) => c.id === selectedContractSnapshot.id) ?? selectedContractSnapshot)
+    : null;
   const totalContracts = contractListData?.total ?? 0;
   const totalContractPages = Math.max(1, Math.ceil(totalContracts / CONTRACTS_PAGE_SIZE));
 
   // Filtering / sorting / pagination are all server-side now. Keep this alias to
   // minimise churn in the JSX below.
   const filteredAndSortedContracts = allContracts;
+
+  // Quick actions (triple-dot menu beside View Details).
+  const openQuickAction = (contract: any, action: 'confirm' | 'renew' | 'extend') => {
+    // A renewal creates a contract, so it gets the same business-profile block as the wizard.
+    if (action === 'renew' && businessProfileIncomplete) {
+      setShowProfileRequired(true);
+      return;
+    }
+    setActionContract(contract);
+    setActiveAction(action);
+  };
+  const closeQuickAction = (open: boolean) => {
+    if (!open) {
+      setActiveAction(null);
+      setActionContract(null);
+    }
+  };
+
+  // "View Details" (card) / "View" (list) with the quick-actions menu attached
+  // as a split button: one joined control, main action on the left, menu on
+  // the right. Plain function, not a component (see root CLAUDE.md).
+  const renderViewWithActions = (contract: any, opts: { fullWidth: boolean; label: string; testId: string }) => {
+    const withActions = canUseContractActions(user as any, contract);
+    return (
+      <div className={opts.fullWidth ? 'flex w-full' : 'inline-flex'}>
+        <Button
+          variant="outline"
+          size="sm"
+          className={[opts.fullWidth ? 'flex-1' : '', withActions ? 'rounded-r-none border-r-0' : ''].filter(Boolean).join(' ')}
+          onClick={() => {
+            setSelectedContract(contract);
+            setShowContractDetails(true);
+          }}
+          data-testid={opts.testId}
+        >
+          <FileText className={opts.fullWidth ? 'mr-2 h-4 w-4' : 'mr-1 h-3 w-3'} />
+          {opts.label}
+        </Button>
+        {withActions && (
+          <ContractActionsMenu
+            contract={contract}
+            className="rounded-l-none px-2.5"
+            onConfirmClient={(c) => openQuickAction(c, 'confirm')}
+            onRenew={(c) => openQuickAction(c, 'renew')}
+            onExtend={(c) => openQuickAction(c, 'extend')}
+          />
+        )}
+      </div>
+    );
+  };
+
+  useEffect(() => {
+    if (!pendingOpenContractId) return;
+    const row = allContracts.find((c: any) => c.id === pendingOpenContractId);
+    if (row) {
+      setSelectedContract(row);
+      setShowContractDetails(true);
+      setPendingOpenContractId(null);
+    }
+  }, [allContracts, pendingOpenContractId]);
 
   // Fetch workers and countries for contract wizard - only when on contracts page
   const { data: workers = [] } = useQuery<any[]>({
@@ -1564,6 +1816,7 @@ export default function ContractsPage() {
                             <Building2 className="h-3 w-3" />3rd Party
                           </span>
                         )}
+                        <ContractLifecyclePills contract={contract} userType={(user as any)?.userType} />
                       </div>
                     </CardHeader>
 
@@ -1687,18 +1940,7 @@ export default function ContractsPage() {
                           Sign Contract
                         </Button>
                       )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full"
-                        onClick={() => {
-                          setSelectedContract(contract);
-                          setShowContractDetails(true);
-                        }}
-                      >
-                        <FileText className="mr-2 h-4 w-4" />
-                        View Details
-                      </Button>
+                      {renderViewWithActions(contract, { fullWidth: true, label: 'View Details', testId: `button-view-details-${contract.id}` })}
                     </CardFooter>
                   </Card>
                 );
@@ -1778,21 +2020,13 @@ export default function ContractsPage() {
                                 3rd Party: {(contract as any).thirdPartyBusinessName}
                               </span>
                             )}
+                            <div className="flex flex-wrap gap-1">
+                              <ContractLifecyclePills contract={contract} userType={(user as any)?.userType} />
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => {
-                              setSelectedContract(contract);
-                              setShowContractDetails(true);
-                            }}
-                            data-testid={`button-view-details-list-${contract.id}`}
-                          >
-                            <FileText className="mr-1 h-3 w-3" />
-                            View
-                          </Button>
+                          {renderViewWithActions(contract, { fullWidth: false, label: 'View', testId: `button-view-details-list-${contract.id}` })}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -1853,6 +2087,25 @@ export default function ContractsPage() {
       />
 
       <BusinessProfileRequiredDialog open={showProfileRequired} onOpenChange={setShowProfileRequired} />
+
+      {/* Contract quick actions (triple-dot menu beside View Details) */}
+      <HostClientConfirmationDialog open={activeAction === 'confirm'} onOpenChange={closeQuickAction} contract={actionContract} />
+      <ContractRenewalDialog
+        open={activeAction === 'renew'}
+        onOpenChange={closeQuickAction}
+        contract={actionContract}
+        onCreated={(created) => {
+          // The new contract is the newest row: show page 1 sorted by date and
+          // open its details once the refreshed list has it.
+          setFilterStatus('all');
+          setFilterBusiness('all');
+          setSortBy('date');
+          setContractsPage(1);
+          setShowContractDetails(false);
+          setPendingOpenContractId(created?.id ?? null);
+        }}
+      />
+      <ContractExtendDialog open={activeAction === 'extend'} onOpenChange={closeQuickAction} contract={actionContract} />
 
       {/* Contract Details Modal - Comprehensive Summary */}
       <Dialog open={showContractDetails} onOpenChange={setShowContractDetails}>
@@ -1919,6 +2172,13 @@ export default function ContractsPage() {
                   </div>
                 )}
               </div>
+
+              {/* Renewal lineage: "Renewal of …" / "Renewed as …" */}
+              <ContractLineageSection
+                contract={selectedContract}
+                findOnPage={(id) => allContracts.find((c: any) => c.id === id)}
+                onSelect={(row) => setSelectedContract(row)}
+              />
 
               {/* Comprehensive details — visible to all roles */}
               <div className="space-y-4">
@@ -2215,6 +2475,16 @@ export default function ContractsPage() {
                       )}
                     </div>
                   </div>
+                )}
+
+                {/* Host client confirmation — Customer Work only; SDP and the employing business update it */}
+                {selectedContract.isForClient && (user as any)?.userType !== 'worker' && (
+                  <HostClientConfirmationPanel
+                    contract={selectedContract}
+                    canUpdate={canUseContractActions(user as any, selectedContract)}
+                    showNote={(selectedContract as any)?.viewerRole !== 'host_client'}
+                    onUpdate={() => openQuickAction(selectedContract, 'confirm')}
+                  />
                 )}
 
                 {/* SDP / Third-party entity references */}

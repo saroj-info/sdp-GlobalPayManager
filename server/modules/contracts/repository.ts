@@ -8,7 +8,7 @@
 
 import { db } from "../../db";
 import { contracts, workers, businesses, countries, roleTitles } from "@shared/schema";
-import { and, or, eq, ilike, isNull, isNotNull, sql, asc, desc, type SQL } from "drizzle-orm";
+import { and, or, eq, ilike, inArray, isNull, isNotNull, sql, asc, desc, type SQL } from "drizzle-orm";
 import type { ContractListQuery, ContractListResult, ContractListScope, SortKey } from "./types";
 
 function orderClause(sortBy: SortKey) {
@@ -116,4 +116,31 @@ export async function fetchContractList(
   }));
 
   return { items, total, page: query.page, pageSize: query.pageSize };
+}
+
+// ---- Renewal links (contract lifecycle) ------------------------------------
+// Small projections used by addRenewalLinksToContracts: one query for the
+// sources of the renewals on the page, one for the renewals of the page's rows.
+
+const linkSummaryColumns = {
+  id: contracts.id,
+  contractName: contracts.contractName,
+  customRoleTitle: contracts.customRoleTitle,
+  startDate: contracts.startDate,
+  endDate: contracts.endDate,
+  status: contracts.status,
+};
+
+export async function fetchContractLinkSummaries(ids: string[]) {
+  if (ids.length === 0) return [];
+  return db.select(linkSummaryColumns).from(contracts).where(inArray(contracts.id, ids));
+}
+
+export async function fetchRenewalsOf(sourceIds: string[]) {
+  if (sourceIds.length === 0) return [];
+  return db
+    .select({ ...linkSummaryColumns, renewedFromContractId: contracts.renewedFromContractId })
+    .from(contracts)
+    .where(inArray(contracts.renewedFromContractId, sourceIds))
+    .orderBy(asc(contracts.startDate), asc(contracts.createdAt));
 }

@@ -14,5 +14,7 @@ export {
   addRemunerationLinesToContracts,
   addRateLinesToContracts,
   addBillingLinesToContracts,
+  addRenewalLinksToContracts,
   normalizeDateFields,
 } from "./enrichment";
+export type { ContractLinkSummary } from "./enrichment";
