@@ -132,7 +132,8 @@ export default function BenefitsPage() {
   }
 
   const country = countries.find((c: any) => c.id === workerProfile?.countryId);
-  const countryBenefits = getCountryBenefits(workerProfile?.countryId || 'au');
+  // No country on the profile → the generic 'default' branch, not Australia.
+  const countryBenefits = getCountryBenefits(workerProfile?.countryId || '');
 
   return (
     <div className="p-6 bg-gradient-to-br from-blue-50 to-white min-h-screen">

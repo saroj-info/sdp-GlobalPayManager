@@ -207,13 +207,16 @@ export default function UserManagement() {
   });
 
   // Resend invitation mutation
+  // The server issues a new token and a new 48-hour expiry on every resend,
+  // so an expired invite becomes valid again; refetch so "Expired" clears.
   const resendInviteMutation = useMutation({
     mutationFn: (inviteId: string) =>
       apiRequest('POST', `/api/sdp-users/invites/${inviteId}/resend`, {}),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sdp-users/invites/pending"] });
       toast({
         title: "Invitation resent",
-        description: "The invitation email has been resent successfully.",
+        description: "A new invitation email was sent. The new link is valid for 48 hours.",
       });
     },
     onError: (error: any) => {
@@ -706,13 +709,19 @@ export default function UserManagement() {
                           {getRoleDisplayName(user.sdpRole)}
                         </Badge>
                         
-                        <Badge 
-                          variant={user.isPending ? "outline" : (user.isActive ? "default" : "secondary")}
-                          className={user.isPending ? "border-amber-500 text-amber-700 bg-amber-50" : ""}
-                          data-testid={`badge-user-status-${user.id}`}
-                        >
-                          {user.isPending ? "Pending" : (user.isActive ? "Active" : "Inactive")}
-                        </Badge>
+                        {(() => {
+                          const inviteExpired = !!user.isPending && !!user.expiresAt && new Date(user.expiresAt) < new Date();
+                          return (
+                            <Badge 
+                              variant={user.isPending ? "outline" : (user.isActive ? "default" : "secondary")}
+                              className={inviteExpired ? "border-red-400 text-red-700 bg-red-50" : (user.isPending ? "border-amber-500 text-amber-700 bg-amber-50" : "")}
+                              title={user.isPending && user.expiresAt ? `Invitation link ${inviteExpired ? 'expired' : 'expires'} ${new Date(user.expiresAt).toLocaleString()}` : undefined}
+                              data-testid={`badge-user-status-${user.id}`}
+                            >
+                              {inviteExpired ? "Expired" : (user.isPending ? "Pending" : (user.isActive ? "Active" : "Inactive"))}
+                            </Badge>
+                          );
+                        })()}
                         
                         {canInviteUsers && user.isPending && (
                           <Button 

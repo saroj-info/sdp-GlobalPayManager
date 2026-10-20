@@ -24,7 +24,8 @@ function toPositiveInt(v: any, fallback: number): number {
 
 function parseQuery(req: any): WorkerListQuery {
   const q = req.query ?? {};
-  const sortBy: SortKey = ALLOWED_SORT_KEYS.includes(q.sortBy) ? q.sortBy : "name";
+  // Default is newest first; callers that want alphabetical pass sortBy=name.
+  const sortBy: SortKey = ALLOWED_SORT_KEYS.includes(q.sortBy) ? q.sortBy : "created";
   return {
     page: toPositiveInt(q.page, 1),
     pageSize: Math.min(MAX_PAGE_SIZE, toPositiveInt(q.pageSize, DEFAULT_PAGE_SIZE)),

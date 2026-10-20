@@ -1830,6 +1830,9 @@ export const personalDetailsSchema = z.object({
   suburb: z.string().min(1, "Suburb/City is required"),
   state: z.string().min(1, "State/Province is required"),
   postcode: z.string().min(1, "Postcode/Zip code is required"),
+  // `countries.id` ('au', 'nz', ...). Drives which business, bank and tax
+  // fields the worker's My Details page shows.
+  countryId: z.string().min(1, "Country is required"),
 });
 
 export const businessStructureSchema = z.object({
@@ -1838,8 +1841,14 @@ export const businessStructureSchema = z.object({
   businessAddress: z.string().optional(),
   businessPhone: z.string().optional(),
   businessEmail: z.string().email().optional().or(z.literal("")),
+  // Per-country business identifiers; the page shows the ones for the
+  // worker's country (AU: abn/acn, NZ: irdNumber, US: ein, UK: utrNumber, CA: businessNumber).
   abn: z.string().optional(),
   acn: z.string().optional(),
+  irdNumber: z.string().optional(),
+  ein: z.string().optional(),
+  utrNumber: z.string().optional(),
+  businessNumber: z.string().optional(),
   gstRegistered: z.boolean().default(false),
   gstNumber: z.string().optional(),
 });
@@ -1853,8 +1862,11 @@ export const bankDetailsSchema = z.object({
   swiftCode: z.string().optional(),
 });
 
+// Which tax field is required depends on the worker's country (TFN in AU,
+// IRD number in NZ, SSN in the US ...), so the page builds the required
+// rules from its per-country declaration config; this base keeps the shape.
 export const taxDetailsSchema = z.object({
-  taxFileNumber: z.string().min(1, "Tax file number is required"),
+  taxFileNumber: z.string().optional(),
 });
 
 export const insertContractSchema = createInsertSchema(contracts).omit({

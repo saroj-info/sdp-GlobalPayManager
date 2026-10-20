@@ -18,6 +18,7 @@ import { apiRequest } from "@/lib/queryClient";
 // Map the page's `client` sort option onto the server's `business` sort key
 // (the server uses the column name, the page uses the user-facing label).
 const SORT_TO_SERVER: Record<string, string> = {
+  created: "created",
   name: "name",
   country: "country",
   type: "type",
@@ -35,7 +36,7 @@ export default function Workforce() {
   const [filterType, setFilterType] = useState("all");
   const [filterBusiness, setFilterBusiness] = useState("all");
   const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
-  const [sortBy, setSortBy] = useState<'name' | 'country' | 'type' | 'client'>('name');
+  const [sortBy, setSortBy] = useState<'created' | 'name' | 'country' | 'type' | 'client'>('created');
   const [page, setPage] = useState(1);
 
   // Reset page to 1 when any filter / sort changes — otherwise the user might
@@ -66,7 +67,7 @@ export default function Workforce() {
     countryId: filterCountry !== "all" ? filterCountry : undefined,
     workerType: filterType !== "all" ? filterType : undefined,
     businessId: filterBusiness !== "all" ? filterBusiness : undefined,
-    sortBy: SORT_TO_SERVER[sortBy] ?? "name",
+    sortBy: SORT_TO_SERVER[sortBy] ?? "created",
   }), [page, searchTerm, filterCountry, filterType, filterBusiness, sortBy]);
 
   const { data: workerListData, isLoading: isLoadingWorkers } = useQuery<{
@@ -223,6 +224,7 @@ export default function Workforce() {
                     <SelectValue placeholder="Sort by" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="created">Date added</SelectItem>
                     <SelectItem value="name">Name</SelectItem>
                     <SelectItem value="country">Country</SelectItem>
                     <SelectItem value="type">Type</SelectItem>

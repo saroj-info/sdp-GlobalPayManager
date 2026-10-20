@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Form,
@@ -30,7 +32,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { personalDetailsSchema, businessStructureSchema, bankDetailsSchema, taxDetailsSchema, Worker } from "@shared/schema";
-import { User, Building, CreditCard, FileText, Phone, Mail, MapPin, Calendar, Edit, Save, X, Shield, PiggyBank, Globe } from "lucide-react";
+import { User, Building, CreditCard, FileText, Phone, Mail, MapPin, Calendar, Edit, Save, X, Shield, PiggyBank, Globe, AlertTriangle } from "lucide-react";
 import { PageLoader } from "@/components/ui/loader";
 
 type PersonalDetailsData = {
@@ -43,6 +45,7 @@ type PersonalDetailsData = {
   suburb: string;
   state: string;
   postcode: string;
+  countryId: string;
   emergencyContactName?: string;
   emergencyContactRelationship?: string;
   emergencyContactPhone?: string;
@@ -57,6 +60,10 @@ type BusinessStructureData = {
   businessEmail?: string;
   abn?: string;
   acn?: string;
+  irdNumber?: string;
+  ein?: string;
+  utrNumber?: string;
+  businessNumber?: string;
   gstRegistered: boolean;
   gstNumber?: string;
 };
@@ -284,6 +291,68 @@ const getCountryTaxDeclaration = (countryId: string) => {
   }
 };
 
+// Business identifiers a contractor enters, by `countries.id`. Only columns
+// that exist on `workers` are listed (NZ has no NZBN column today).
+const getContractorBusinessIdFields = (countryId: string | null) => {
+  switch (countryId) {
+    case 'au':
+      return [
+        { name: 'abn', label: 'ABN (Australian Business Number)', placeholder: '12 345 678 901' },
+        { name: 'acn', label: 'ACN (Australian Company Number)', placeholder: '123 456 789' },
+      ];
+    case 'nz':
+      return [{ name: 'irdNumber', label: 'IRD Number', placeholder: '123-456-789' }];
+    case 'us':
+      return [{ name: 'ein', label: 'EIN (Employer Identification Number)', placeholder: '12-3456789' }];
+    case 'uk':
+      return [{ name: 'utrNumber', label: 'UTR (Unique Taxpayer Reference)', placeholder: '1234567890' }];
+    case 'ca':
+      return [{ name: 'businessNumber', label: 'Business Number (BN)', placeholder: '123456789RP0001' }];
+    default:
+      return [];
+  }
+};
+
+// Name of the indirect tax a contractor may be registered for.
+const getIndirectTaxLabel = (countryId: string | null): string => {
+  switch (countryId) {
+    case 'au': case 'nz': case 'sg': case 'in': case 'ca': return 'GST';
+    case 'uk': case 'ie': case 'ph': return 'VAT';
+    case 'us': return 'Sales tax';
+    case 'jp': return 'Consumption tax';
+    default: return 'GST/VAT';
+  }
+};
+
+const getPensionHeading = (countryId: string | null): string => {
+  switch (countryId) {
+    case 'au': return 'Superannuation Details';
+    case 'nz': return 'KiwiSaver Details';
+    case 'us': return '401(k) Details';
+    case 'uk': return 'Workplace Pension Details';
+    case 'ca': return 'CPP / QPP Details';
+    default: return 'Pension Details';
+  }
+};
+
+// Same list as the business-side view-worker-modal (IBAN countries).
+const IBAN_COUNTRY_IDS = new Set(['uk', 'ie']);
+
+type TaxFieldSpec = { name: string; label: string; type?: string; required?: boolean };
+
+// Required rules follow the country's declaration (TFN in AU, IRD number in
+// NZ, SSN in the US ...), so the resolver is built per country.
+const buildTaxSchema = (fields: TaxFieldSpec[]) =>
+  z.object(
+    Object.fromEntries(
+      fields.map((f) => {
+        if (f.type === 'checkbox') return [f.name, z.boolean().optional()];
+        if (f.type === 'number') return [f.name, z.coerce.number().optional()];
+        return [f.name, f.required ? z.string().min(1, `${f.label} is required`) : z.string().optional()];
+      }),
+    ),
+  );
+
 export default function MyDetailsPage() {
   usePageHeader("My Details", "Manage your personal information, business structure, bank details, and tax information");
   
@@ -306,9 +375,22 @@ export default function MyDetailsPage() {
     enabled: isAuthenticated && (user as any)?.userType === 'worker',
   });
 
-  const { data: countries = [] } = useQuery({
+  const { data: countries = [] } = useQuery<Array<{ id: string; name: string; code: string; currency: string }>>({
     queryKey: ["/api/countries"],
   });
+
+  // The worker's own country (`workers.countryId`, set by the business on
+  // Add Worker or by the worker on the Personal tab) decides which business,
+  // bank and tax fields are shown. No country → no country-specific block,
+  // never an Australian default.
+  const countryId: string | null = workerProfile?.countryId || null;
+  const country = countries.find((c) => c.id === countryId) || null;
+  const businessIdFields = getContractorBusinessIdFields(countryId);
+  const indirectTaxLabel = getIndirectTaxLabel(countryId);
+  const pensionFields = countryId ? getCountryPensionFields(countryId) : [];
+  const taxDeclaration = countryId ? getCountryTaxDeclaration(countryId) : null;
+  const taxFieldsRef = useRef<TaxFieldSpec[]>([]);
+  taxFieldsRef.current = (taxDeclaration?.fields ?? []) as TaxFieldSpec[];
 
   const personalForm = useForm<PersonalDetailsData>({
     resolver: zodResolver(personalDetailsSchema),
@@ -323,6 +405,7 @@ export default function MyDetailsPage() {
       suburb: '',
       state: '',
       postcode: '',
+      countryId: '',
     }
   });
 
@@ -337,6 +420,10 @@ export default function MyDetailsPage() {
       businessEmail: '',
       abn: '',
       acn: '',
+      irdNumber: '',
+      ein: '',
+      utrNumber: '',
+      businessNumber: '',
       gstRegistered: false,
       gstNumber: '',
     }
@@ -368,7 +455,10 @@ export default function MyDetailsPage() {
   });
 
   const taxForm = useForm<TaxDetailsData>({
-    resolver: zodResolver(taxDetailsSchema),
+    // Reads the current country's fields on every validation (the form is
+    // created once, the country can load or change later).
+    resolver: (values, context, options) =>
+      (zodResolver(buildTaxSchema(taxFieldsRef.current)) as any)(values, context, options),
     mode: "onChange",
     defaultValues: {
       taxFileNumber: '',
@@ -415,6 +505,7 @@ export default function MyDetailsPage() {
         suburb: workerProfile.suburb || '',
         state: workerProfile.state || '',
         postcode: workerProfile.postcode || '',
+        countryId: workerProfile.countryId || '',
         emergencyContactName: workerProfile.emergencyContactName || '',
         emergencyContactRelationship: workerProfile.emergencyContactRelationship || '',
         emergencyContactPhone: workerProfile.emergencyContactPhone || '',
@@ -429,6 +520,10 @@ export default function MyDetailsPage() {
         businessEmail: workerProfile.businessEmail || '',
         abn: workerProfile.abn || '',
         acn: workerProfile.acn || '',
+        irdNumber: workerProfile.irdNumber || '',
+        ein: workerProfile.ein || '',
+        utrNumber: workerProfile.utrNumber || '',
+        businessNumber: workerProfile.businessNumber || '',
         gstRegistered: workerProfile.gstRegistered || false,
         gstNumber: workerProfile.gstNumber || '',
       });
@@ -523,7 +618,21 @@ export default function MyDetailsPage() {
           });
           return;
         }
-        data = businessForm.getValues();
+        {
+          // Only the common fields plus this country's identifiers, so the
+          // other countries' columns are not overwritten with "".
+          const values = businessForm.getValues() as Record<string, any>;
+          data = {
+            businessStructure: values.businessStructure,
+            businessName: values.businessName,
+            businessAddress: values.businessAddress,
+            businessPhone: values.businessPhone,
+            businessEmail: values.businessEmail,
+            gstRegistered: values.gstRegistered,
+            gstNumber: values.gstNumber,
+          };
+          for (const f of businessIdFields) data[f.name] = values[f.name];
+        }
         data.businessDetailsCompleted = true;
         break;
       case 'bank':
@@ -549,7 +658,11 @@ export default function MyDetailsPage() {
           });
           return;
         }
-        data = taxForm.getValues();
+        {
+          const values = taxForm.getValues() as Record<string, any>;
+          data = {};
+          for (const f of taxFieldsRef.current) data[f.name] = values[f.name];
+        }
         break;
     }
 
@@ -582,8 +695,21 @@ export default function MyDetailsPage() {
                     {workerProfile?.businessStructure?.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
                   </Badge>
                 )}
+                <Badge variant="outline" className="text-sm flex items-center gap-1" data-testid="chip-worker-country">
+                  <Globe className="h-3 w-3" />
+                  {country ? country.name : 'Country not set'}
+                </Badge>
               </div>
             </div>
+
+            {!countryId && (
+              <Alert className="border-amber-200 bg-amber-50" data-testid="notice-worker-country">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <AlertDescription className="text-amber-800 text-sm">
+                  Set your country under Personal details to see the right business, bank and tax fields for where you work.
+                </AlertDescription>
+              </Alert>
+            )}
 
             <Tabs defaultValue="personal" className="space-y-6">
               <TabsList className="grid w-full grid-cols-4">
@@ -807,6 +933,34 @@ export default function MyDetailsPage() {
                           </div>
                         </div>
 
+                        <FormField
+                          control={personalForm.control}
+                          name="countryId"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Country</FormLabel>
+                              <Select
+                                value={field.value || ''}
+                                onValueChange={field.onChange}
+                                disabled={editingSection !== 'personal'}
+                              >
+                                <FormControl>
+                                  <SelectTrigger data-testid="select-country">
+                                    <SelectValue placeholder="Select the country you work in" />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  {countries.map((c) => (
+                                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <FormDescription>Decides which tax, business and bank fields apply to you.</FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
                         {/* Emergency Contact Section */}
                         <div className="border-t pt-6 mt-6">
                           <div className="flex items-center gap-2 mb-4">
@@ -1026,40 +1180,28 @@ export default function MyDetailsPage() {
                                 </FormItem>
                               )}
                             />
-                            <FormField
-                              control={businessForm.control}
-                              name="abn"
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>ABN (Australian Business Number)</FormLabel>
-                                  <FormControl>
-                                    <Input 
-                                      {...field} 
-                                      disabled={editingSection !== 'business'}
-                                      data-testid="input-abn"
-                                    />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                            <FormField
-                              control={businessForm.control}
-                              name="acn"
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>ACN (Australian Company Number)</FormLabel>
-                                  <FormControl>
-                                    <Input 
-                                      {...field} 
-                                      disabled={editingSection !== 'business'}
-                                      data-testid="input-acn"
-                                    />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
+                            {businessIdFields.map((spec) => (
+                              <FormField
+                                key={spec.name}
+                                control={businessForm.control}
+                                name={spec.name as any}
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>{spec.label}</FormLabel>
+                                    <FormControl>
+                                      <Input 
+                                        {...field}
+                                        value={field.value ?? ''}
+                                        placeholder={spec.placeholder}
+                                        disabled={editingSection !== 'business'}
+                                        data-testid={`input-${spec.name}`}
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                            ))}
                           </div>
 
                           <FormField
@@ -1111,9 +1253,9 @@ export default function MyDetailsPage() {
                                     />
                                   </FormControl>
                                   <div className="space-y-1 leading-none">
-                                    <FormLabel>GST/VAT Registered</FormLabel>
+                                    <FormLabel>{indirectTaxLabel} Registered</FormLabel>
                                     <FormDescription>
-                                      Check if your business is registered for GST/VAT
+                                      Check if your business is registered for {indirectTaxLabel}
                                     </FormDescription>
                                   </div>
                                 </FormItem>
@@ -1126,7 +1268,7 @@ export default function MyDetailsPage() {
                                 name="gstNumber"
                                 render={({ field }) => (
                                   <FormItem>
-                                    <FormLabel>GST/VAT Number</FormLabel>
+                                    <FormLabel>{indirectTaxLabel} Number</FormLabel>
                                     <FormControl>
                                       <Input 
                                         {...field} 
@@ -1239,24 +1381,26 @@ export default function MyDetailsPage() {
                               </FormItem>
                             )}
                           />
-                          <FormField
-                            control={bankForm.control}
-                            name="bsb"
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>BSB (Bank State Branch)</FormLabel>
-                                <FormControl>
-                                  <Input 
-                                    {...field} 
-                                    disabled={editingSection !== 'bank'}
-                                    placeholder="For Australian accounts"
-                                    data-testid="input-bsb"
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
+                          {countryId === 'au' && (
+                            <FormField
+                              control={bankForm.control}
+                              name="bsb"
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>BSB (Bank State Branch)</FormLabel>
+                                  <FormControl>
+                                    <Input 
+                                      {...field} 
+                                      disabled={editingSection !== 'bank'}
+                                      placeholder="123-456"
+                                      data-testid="input-bsb"
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          )}
                           <FormField
                             control={bankForm.control}
                             name="accountNumber"
@@ -1274,24 +1418,26 @@ export default function MyDetailsPage() {
                               </FormItem>
                             )}
                           />
-                          <FormField
-                            control={bankForm.control}
-                            name="iban"
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>IBAN</FormLabel>
-                                <FormControl>
-                                  <Input 
-                                    {...field} 
-                                    disabled={editingSection !== 'bank'}
-                                    placeholder="For international accounts"
-                                    data-testid="input-iban"
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
+                          {!!countryId && IBAN_COUNTRY_IDS.has(countryId) && (
+                            <FormField
+                              control={bankForm.control}
+                              name="iban"
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>IBAN</FormLabel>
+                                  <FormControl>
+                                    <Input 
+                                      {...field} 
+                                      disabled={editingSection !== 'bank'}
+                                      placeholder="International Bank Account Number"
+                                      data-testid="input-iban"
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          )}
                           <FormField
                             control={bankForm.control}
                             name="swiftCode"
@@ -1312,83 +1458,47 @@ export default function MyDetailsPage() {
                           />
                         </div>
 
-                        {/* Superannuation/Pension Section (for employees) */}
-                        {isEmployee && (
-                          <div className="border-t pt-6 mt-6">
+                        {/* Pension / retirement section (employees), by country */}
+                        {isEmployee && pensionFields.length > 0 && (
+                          <div className="border-t pt-6 mt-6" data-testid="section-pension">
                             <div className="flex items-center gap-2 mb-4">
                               <PiggyBank className="h-5 w-5 text-green-600" />
-                              <h3 className="text-lg font-semibold">Superannuation Details</h3>
+                              <h3 className="text-lg font-semibold">{getPensionHeading(countryId)}</h3>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <FormField
-                                control={bankForm.control}
-                                name="superFundName"
-                                render={({ field }) => (
-                                  <FormItem>
-                                    <FormLabel>Super Fund Name</FormLabel>
-                                    <FormControl>
-                                      <Input 
-                                        {...field} 
-                                        disabled={editingSection !== 'bank'}
-                                        data-testid="input-super-fund-name"
-                                      />
-                                    </FormControl>
-                                    <FormMessage />
-                                  </FormItem>
-                                )}
-                              />
-                              <FormField
-                                control={bankForm.control}
-                                name="superFundAbn"
-                                render={({ field }) => (
-                                  <FormItem>
-                                    <FormLabel>Super Fund ABN</FormLabel>
-                                    <FormControl>
-                                      <Input 
-                                        {...field} 
-                                        disabled={editingSection !== 'bank'}
-                                        data-testid="input-super-fund-abn"
-                                      />
-                                    </FormControl>
-                                    <FormMessage />
-                                  </FormItem>
-                                )}
-                              />
-                              <FormField
-                                control={bankForm.control}
-                                name="superMemberNumber"
-                                render={({ field }) => (
-                                  <FormItem>
-                                    <FormLabel>Member Number</FormLabel>
-                                    <FormControl>
-                                      <Input 
-                                        {...field} 
-                                        disabled={editingSection !== 'bank'}
-                                        data-testid="input-super-member-number"
-                                      />
-                                    </FormControl>
-                                    <FormMessage />
-                                  </FormItem>
-                                )}
-                              />
-                              <FormField
-                                control={bankForm.control}
-                                name="superFundAddress"
-                                render={({ field }) => (
-                                  <FormItem>
-                                    <FormLabel>Super Fund Address</FormLabel>
-                                    <FormControl>
-                                      <Textarea 
-                                        {...field} 
-                                        disabled={editingSection !== 'bank'}
-                                        rows={3}
-                                        data-testid="input-super-fund-address"
-                                      />
-                                    </FormControl>
-                                    <FormMessage />
-                                  </FormItem>
-                                )}
-                              />
+                              {pensionFields.map((spec) => (
+                                <FormField
+                                  key={spec.name}
+                                  control={bankForm.control}
+                                  name={spec.name as any}
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>{spec.label}</FormLabel>
+                                      <FormControl>
+                                        {spec.name === 'superFundAddress' ? (
+                                          <Textarea 
+                                            {...field}
+                                            value={field.value ?? ''}
+                                            disabled={editingSection !== 'bank'}
+                                            rows={3}
+                                            placeholder={spec.placeholder}
+                                            data-testid={`input-${spec.name}`}
+                                          />
+                                        ) : (
+                                          <Input 
+                                            {...field}
+                                            value={field.value ?? ''}
+                                            disabled={editingSection !== 'bank'}
+                                            placeholder={spec.placeholder}
+                                            data-testid={`input-${spec.name}`}
+                                          />
+                                        )}
+                                      </FormControl>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                              ))}
                             </div>
                           </div>
                         )}
@@ -1455,7 +1565,16 @@ export default function MyDetailsPage() {
                     </CardHeader>
                     <CardContent>
                       {(() => {
-                        const taxDeclaration = getCountryTaxDeclaration(workerProfile?.countryId || 'au');
+                        if (!taxDeclaration) {
+                          return (
+                            <Alert className="border-amber-200 bg-amber-50" data-testid="notice-tax-country">
+                              <AlertTriangle className="h-4 w-4 text-amber-600" />
+                              <AlertDescription className="text-amber-800 text-sm">
+                                Set your country under Personal details to see the tax declaration that applies to you.
+                              </AlertDescription>
+                            </Alert>
+                          );
+                        }
                         return (
                           <div className="space-y-6">
                             {/* Tax Declaration Form Header */}

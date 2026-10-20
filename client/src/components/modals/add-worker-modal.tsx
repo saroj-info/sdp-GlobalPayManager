@@ -51,7 +51,8 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
 
   const createWorkerMutation = useMutation({
     mutationFn: async (data: any) => {
-      return await apiRequest('POST', '/api/workers', data);
+      const res = await apiRequest('POST', '/api/workers', data);
+      return (await res.json()) as { worker: any; invitationEmailSent?: boolean | null };
     },
     onSuccess: (data, variables) => {
       // Invalidate every worker-list-shaped query so the workforce page
@@ -79,6 +80,16 @@ export function AddWorkerModal({ open, onOpenChange, countries }: AddWorkerModal
       });
       
       const sendInvitation = variables.sendInvitation;
+      // The server creates the worker even when the invitation email fails;
+      // say so instead of claiming it was sent (Resend Invitation fixes it).
+      if (sendInvitation && data?.invitationEmailSent === false) {
+        toast({
+          title: "Worker added, invitation not sent",
+          description: "The invitation email could not be sent. Open the worker and use Resend Invitation.",
+          variant: "destructive",
+        });
+        return;
+      }
       toast({
         title: "Success",
         description: sendInvitation

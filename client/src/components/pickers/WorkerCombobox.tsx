@@ -78,6 +78,7 @@ export function WorkerCombobox({
       const qs = new URLSearchParams();
       qs.set('page', String(page));
       qs.set('pageSize', '20');
+      qs.set('sortBy', 'name'); // the list endpoint defaults to newest first; a picker reads better alphabetically
       if (debouncedSearch) qs.set('search', debouncedSearch);
       if (businessId) qs.set('businessId', businessId);
       if (includeSdpCandidates) qs.set('includeSdpCandidates', 'true');

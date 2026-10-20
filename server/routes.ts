@@ -7,7 +7,7 @@ import * as OTPAuth from "otpauth";
 import * as twoFactorAuth from "./twoFactorAuth";
 import { storage } from "./storage";
 import { registerTimesheetApprovalRoutes } from "./modules/timesheet-approval";
-import { registerWorkforceRoutes } from "./modules/workforce";
+import { registerWorkforceRoutes, findEmailConflict, describeEmailConflict, normalizeEmail, workerInvitations } from "./modules/workforce";
 import {
   upsertContractAssociation,
   isWorkerLinkedToBusiness,
@@ -1124,14 +1124,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { token } = req.params;
       if (!token) return res.status(400).json({ message: 'Token is required' });
 
-      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-      const worker = await storage.getWorkerByInvitationToken(tokenHash);
-
-      if (!worker) return res.status(404).json({ message: 'Invalid or expired invitation link' });
-
-      if (worker.invitationTokenExpiresAt && new Date() > worker.invitationTokenExpiresAt) {
-        return res.status(410).json({ message: 'This invitation link has expired. Please ask to be re-invited.' });
+      const lookup = await workerInvitations.lookupInvitation(token);
+      if (!lookup.ok) {
+        return res.status(lookup.status).json({ message: lookup.message, code: lookup.code });
       }
+      const worker = lookup.worker;
 
       // Return only the data needed to pre-fill the signup form
       res.json({
@@ -1182,15 +1179,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // with a token. In this case we must NOT create a new worker record —
       // we link the new users row to the existing workers row.
       if (data.inviteToken) {
-        const tokenHash = crypto.createHash('sha256').update(data.inviteToken).digest('hex');
-        const existingWorker = await storage.getWorkerByInvitationToken(tokenHash);
-
-        if (!existingWorker) {
-          return res.status(400).json({ message: 'Invalid or expired invitation link.' });
+        const lookup = await workerInvitations.lookupInvitation(data.inviteToken);
+        if (!lookup.ok) {
+          return res.status(lookup.status).json({ message: lookup.message, code: lookup.code });
         }
-        if (existingWorker.invitationTokenExpiresAt && new Date() > existingWorker.invitationTokenExpiresAt) {
-          return res.status(400).json({ message: 'This invitation link has expired. Please ask to be re-invited.' });
-        }
+        const existingWorker = lookup.worker;
         if (existingWorker.userId) {
           return res.status(400).json({ message: 'This invitation has already been used.' });
         }
@@ -2372,6 +2365,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   function generateInviteToken(): string {
     return crypto.randomBytes(32).toString('hex');
   }
+  const SDP_INVITE_TTL_MS = 48 * 60 * 60 * 1000;
 
   // Invite new SDP user
   app.post('/api/sdp-users/invite', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req: any, res) => {
@@ -2397,11 +2391,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check if there's already a pending invite for this email
       const existingInvite = await storage.getSdpUserInviteByEmail(data.email);
       if (existingInvite && !existingInvite.acceptedAt) {
-        return res.status(409).json({ message: `An invitation has already been sent to ${data.email}.` });
+        return res.status(409).json({ message: `An invitation is already pending for ${data.email}. Use Resend Invitation on the User Management page to send a fresh link.` });
       }
       
       const token = generateInviteToken();
-      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
+      const expiresAt = new Date(Date.now() + SDP_INVITE_TTL_MS);
       
       const invite = await storage.createSdpUserInvite({
         ...data,
@@ -2662,19 +2656,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invitation already accepted" });
       }
       
-      // Resend the email (allow resending even if expired)
+      // A resend always produces a working link, including when the original
+      // has expired: rotate the token and the expiry, persist, then email the
+      // new token. `sendEmail` returns false instead of throwing, so on a
+      // failed send the previous values go back and the caller is told.
+      const previous = { token: invite.token, expiresAt: invite.expiresAt };
+      const token = generateInviteToken();
+      const expiresAt = new Date(Date.now() + SDP_INVITE_TTL_MS);
+      await storage.updateSdpUserInvite(invite.id, { token, expiresAt });
+
+      let sent = false;
       try {
-        await emailService.sendSdpUserInvite(
-          invite.email,
-          invite.token,
-          req.user.name,
-          invite.sdpRole
-        );
-        res.json({ message: "Invitation resent successfully" });
+        sent = await emailService.sendSdpUserInvite(invite.email, token, req.user.name, invite.sdpRole);
       } catch (emailError: any) {
-        console.error('Failed to resend invitation email:', emailError);
-        res.status(500).json({ message: "Failed to resend invitation email" });
+        console.error('Failed to resend invitation email:', emailError?.message || emailError);
       }
+      if (!sent) {
+        await storage.updateSdpUserInvite(invite.id, previous);
+        return res.status(502).json({ message: "Could not send the invitation email. The invitation was left unchanged.", code: "EMAIL_SEND_FAILED" });
+      }
+      res.json({ message: "Invitation resent successfully", expiresAt });
     } catch (error: any) {
       console.error("Error resending invitation:", error);
       res.status(400).json({ message: "Failed to resend invitation" });
@@ -5027,13 +5028,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         targetBusinessId = business.id;
       }
       
-      // Check if a worker with this email already exists
-      const workerEmail = workerData.email?.trim()?.toLowerCase();
+      // Refuse an email that is already in use anywhere a login or a pending
+      // invitation lives (users, workers, SDP and team-member invites,
+      // third-party contacts). Checked here so the conflict shows up before
+      // an invitation goes out, not when the person tries to sign up.
+      const workerEmail = normalizeEmail(workerData.email);
       if (workerEmail) {
-        const existingWorker = await storage.getWorkerByEmail(workerEmail);
-        if (existingWorker) {
-          return res.status(400).json({ message: "A worker with this email already exists" });
+        const conflict = await findEmailConflict(workerEmail);
+        if (conflict) {
+          return res.status(409).json({ message: describeEmailConflict(conflict, workerEmail), code: "EMAIL_IN_USE" });
         }
+        workerData.email = workerEmail;
       }
 
       let thirdPartyBusinessId = null;
@@ -5079,37 +5084,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ...auditFields,
         });
         
-        const worker = await storage.createWorker(data);
+        let worker = await storage.createWorker(data);
         
-        // Send invitation email to third-party worker contact (only if sendInvitation is true)
+        // Invitation goes to the third-party business contact. The worker is
+        // created either way; `invitationEmailSent` tells the client whether
+        // the email went out so it can point at Resend Invitation.
+        let invitationEmailSent: boolean | null = null;
         if (sendInvitation) {
           try {
-            const rawToken = crypto.randomBytes(32).toString('hex');
-            const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-            const tokenExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours
-
-            await storage.updateWorkerProfile(worker.id, {
-              invitationToken: tokenHash,
-              invitationTokenExpiresAt: tokenExpiresAt,
-              invitationSent: true,
-            });
-
-            await emailService.sendWorkerInvitationEmail(
-              thirdPartyBusiness.email,
-              worker.firstName,
-              rawToken,
-              thirdPartyBusiness.name
-            );
-            console.log(`Third-party worker invitation sent to ${thirdPartyBusiness.email}`);
+            const result = await workerInvitations.issueInvitation(worker);
+            worker = result.worker;
+            invitationEmailSent = result.sent;
+            if (result.sent) console.log(`Third-party worker invitation sent to ${result.to}`);
+            else console.error(`Third-party worker invitation could not be sent to ${result.to}`);
           } catch (emailError: any) {
-            console.error('Failed to send third-party worker invitation:', emailError);
-            // Continue anyway - worker was created successfully
+            console.error('Failed to send third-party worker invitation:', emailError?.message || emailError);
+            invitationEmailSent = false;
           }
         } else {
           console.log(`Worker created without sending invitation (sendInvitation=${sendInvitation})`);
         }
         
-        res.json({ worker, thirdPartyBusiness });
+        res.json({ worker, thirdPartyBusiness, invitationEmailSent });
       } else {
         // Handle regular employee/contractor creation
         const data = insertWorkerSchema.parse({
@@ -5119,43 +5115,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ...auditFields,
         });
         
-        const worker = await storage.createWorker(data);
+        let worker = await storage.createWorker(data);
 
-        // Generate invite token and send onboarding link (only if sendInvitation is true)
+        // Issue the signup link (token hash on the row, raw token in the
+        // email). The worker is created either way; `invitationEmailSent`
+        // tells the client whether the email went out.
+        let invitationEmailSent: boolean | null = null;
         if (sendInvitation) {
           try {
-            const business = worker.businessId ? await storage.getBusinessById(worker.businessId) : undefined;
-            const businessName = business?.name || 'SDP Global Pay';
-
-            // Generate a secure invite token
-            const rawToken = crypto.randomBytes(32).toString('hex');
-            const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-            const tokenExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours
-
-            // Store hashed token on worker record
-            await storage.updateWorkerProfile(worker.id, {
-              invitationToken: tokenHash,
-              invitationTokenExpiresAt: tokenExpiresAt,
-              invitationSent: true,
-            });
-
-            // Send invite email with signup link containing the raw token
-            await emailService.sendWorkerInvitationEmail(
-              worker.email,
-              worker.firstName,
-              rawToken,
-              businessName
-            );
-            console.log(`Worker invitation email sent to ${worker.email}`);
+            const result = await workerInvitations.issueInvitation(worker);
+            worker = result.worker;
+            invitationEmailSent = result.sent;
+            if (result.sent) console.log(`Worker invitation email sent to ${result.to}`);
+            else console.error(`Worker invitation email could not be sent to ${result.to}`);
           } catch (emailError: any) {
-            console.error('Failed to send worker invitation email:', emailError);
-            // Continue anyway - worker was created successfully
+            console.error('Failed to send worker invitation email:', emailError?.message || emailError);
+            invitationEmailSent = false;
           }
         } else {
           console.log(`Worker created without sending invitation (sendInvitation=${sendInvitation})`);
         }
 
-        res.json({ worker });
+        res.json({ worker, invitationEmailSent });
       }
     } catch (error: any) {
       console.error("Error creating worker:", error);
@@ -5228,6 +5209,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updates = { ...req.body };
       if (updates.dateOfBirth && typeof updates.dateOfBirth === 'string') {
         updates.dateOfBirth = new Date(updates.dateOfBirth);
+      }
+
+      // A changed email must not collide with any other login or invitation.
+      if (typeof updates.email === 'string') {
+        const nextEmail = normalizeEmail(updates.email);
+        if (nextEmail && nextEmail !== normalizeEmail(worker.email)) {
+          const conflict = await findEmailConflict(nextEmail, { excludeWorkerId: worker.id, excludeUserId: userId });
+          if (conflict) {
+            return res.status(409).json({ message: describeEmailConflict(conflict, nextEmail), code: "EMAIL_IN_USE" });
+          }
+        }
+        if (nextEmail) updates.email = nextEmail;
       }
 
       // Auto-derive completion flags from the merged record
@@ -5313,10 +5306,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const updatedWorker = await storage.updateWorkerProfile(workerId, updates);
+      // A changed email must not collide with any other login or invitation
+      // (the signup step would refuse it later, after the invite went out).
+      const nextEmail = typeof updates.email === 'string' ? normalizeEmail(updates.email) : null;
+      const emailChanged = !!nextEmail && nextEmail !== normalizeEmail(worker.email);
+      if (emailChanged) {
+        const conflict = await findEmailConflict(nextEmail!, { excludeWorkerId: workerId, excludeUserId: worker.userId });
+        if (conflict) {
+          return res.status(409).json({ message: describeEmailConflict(conflict, nextEmail!), code: "EMAIL_IN_USE" });
+        }
+      }
+      if (nextEmail) updates.email = nextEmail;
+
+      let updatedWorker = await storage.updateWorkerProfile(workerId, updates);
+
+      // The invitation went to the old address. When the worker has not signed
+      // up yet, send a fresh link to the new address at once; the old link
+      // stops working. `resent: false` means the email could not be sent.
+      let invitation: { resent: boolean; to: string } | null = null;
+      if (emailChanged && !worker.userId && worker.invitationSent) {
+        try {
+          const result = await workerInvitations.issueInvitation(updatedWorker);
+          updatedWorker = result.worker;
+          invitation = { resent: result.sent, to: result.to };
+          if (result.sent) console.log(`Worker invitation re-sent to ${result.to} after an email change`);
+          else console.error(`Worker invitation could not be re-sent to ${result.to} after an email change`);
+        } catch (inviteErr: any) {
+          console.error('Failed to re-send worker invitation after email change:', inviteErr?.message || inviteErr);
+          invitation = { resent: false, to: updatedWorker.email };
+        }
+      }
 
       // Change log + email — best-effort; failures here do not roll the
-      // write back. Skip both when nothing actually changed.
+      // write back. Skip both when nothing actually changed. The "profile
+      // updated" notice is skipped when an invitation was just sent to the
+      // new address: that email is the relevant one.
       try {
         const changes = diffWorkerFields(worker as any, updates);
         if (changes.length > 0) {
@@ -5337,7 +5361,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               oldValueDisplay: c.sensitive ? maskSensitive(c.oldValue) : (c.oldValue ?? '—'),
               newValueDisplay: c.sensitive ? maskSensitive(c.newValue) : (c.newValue ?? '—'),
             }));
-            if (updatedWorker.email) {
+            if (updatedWorker.email && !invitation) {
               await emailService.sendWorkerDetailsUpdatedEmail({
                 to: updatedWorker.email,
                 workerName: `${updatedWorker.firstName ?? ''} ${updatedWorker.lastName ?? ''}`.trim() || 'there',
@@ -5353,7 +5377,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error('Failed to write worker change-log:', logErr?.message || logErr);
       }
 
-      res.json(updatedWorker);
+      res.json({ ...updatedWorker, invitation });
     } catch (error: any) {
       console.error('Error updating worker:', error);
       res.status(500).json({ message: 'Failed to update worker' });
@@ -5498,95 +5522,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const userType = req.user?.userType;
       const { id: workerId } = req.params;
-      
+
       const worker = await storage.getWorkerById(workerId);
       if (!worker) {
         return res.status(404).json({ message: "Worker not found" });
       }
-      
+
       // Allow SDP internal users or business owner to resend invitation
       if (userType !== 'sdp_internal') {
         const business = await storage.getPrimaryBusinessForUser(userId);
         if (!business) {
           return res.status(404).json({ message: "Business not found" });
         }
-        
         if (worker.businessId !== business.id) {
           return res.status(403).json({ message: "Access denied - can only resend invitations for your own workers" });
         }
       }
-      
+
       // The worker may already have signed up — in that case the invite-token
-      // flow doesn't apply (signup at routes.ts:1187 rejects "already used").
+      // flow is over and there is nothing to resend.
       if (worker.userId) {
         return res.status(400).json({ message: "This worker has already accepted their invitation and signed up." });
       }
 
-      // Resend the appropriate invitation email based on worker type.
-      // CRITICAL: must mint a fresh invitation token and persist it on the
-      // worker row, then send an email containing /signup?token=<raw>. Without
-      // a token the signup form falls through to the "create new worker"
-      // branch and produces a duplicate worker row. Mirrors the token-mint
-      // logic in POST /api/workers above.
+      // Fresh token + 72 h expiry, persisted before the email goes out; the
+      // service restores the previous token when the send fails, so the
+      // link the person already has keeps working (see modules/workforce/invitations.ts).
+      let result;
       try {
-        const business = worker.businessId ? await storage.getBusinessById(worker.businessId) : undefined;
-        const businessName = business?.name || 'SDP Global Pay';
-
-        const rawToken = crypto.randomBytes(32).toString('hex');
-        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-        const tokenExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 hours
-
-        await storage.updateWorkerProfile(worker.id, {
-          invitationToken: tokenHash,
-          invitationTokenExpiresAt: tokenExpiresAt,
-          invitationSent: true,
-        });
-
-        if (worker.workerType === 'third_party_worker') {
-          // For third-party workers the invitation email goes to the
-          // third-party business contact, but the token is still tied to
-          // the worker row so signup will link correctly.
-          const thirdPartyBusiness = worker.thirdPartyBusinessId
-            ? await storage.getThirdPartyBusinessById(worker.thirdPartyBusinessId)
-            : null;
-          if (thirdPartyBusiness) {
-            await emailService.sendWorkerInvitationEmail(
-              thirdPartyBusiness.email,
-              worker.firstName,
-              rawToken,
-              thirdPartyBusiness.name,
-            );
-            console.log(`Third-party worker invitation resent to ${thirdPartyBusiness.email}`);
-          } else {
-            await emailService.sendWorkerInvitationEmail(
-              worker.email,
-              worker.firstName,
-              rawToken,
-              businessName,
-            );
-            console.log(`Worker invitation resent to ${worker.email} (no third-party contact found)`);
-          }
-        } else {
-          // contractor + employee: same email helper, both land at /signup?token=<raw>
-          await emailService.sendWorkerInvitationEmail(
-            worker.email,
-            worker.firstName,
-            rawToken,
-            businessName,
-          );
-          console.log(`Worker invitation email resent to ${worker.email}`);
-        }
-
-        res.json({
-          message: "Invitation email sent successfully",
-          worker,
-        });
-      } catch (emailError: any) {
-        console.error('Failed to resend invitation email:', emailError);
-        res.status(500).json({ message: "Failed to send invitation email" });
+        result = await workerInvitations.issueInvitation(worker);
+      } catch (error: any) {
+        console.error('Error issuing worker invitation:', error?.message || error);
+        return res.status(500).json({ message: 'Failed to resend invitation' });
       }
+      if (!result.sent) {
+        return res.status(502).json({
+          message: 'Could not send the invitation email. The previous link, if any, still works.',
+          code: 'EMAIL_SEND_FAILED',
+        });
+      }
+      console.log(`Worker invitation resent to ${result.to}`);
+      res.json({ message: `Invitation email sent to ${result.to}`, worker: result.worker, expiresAt: result.expiresAt });
     } catch (error: any) {
-      console.error('Error resending invitation:', error);
+      console.error('Error resending invitation:', error?.message || error);
       res.status(500).json({ message: 'Failed to resend invitation' });
     }
   });

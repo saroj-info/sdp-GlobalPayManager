@@ -53,7 +53,9 @@ export default function AcceptSdpInvite() {
       try {
         const response = await fetch(`/api/sdp-users/invite/${token}`);
         if (!response.ok) {
-          throw new Error("Invalid or expired invitation");
+          // "Invitation expired" / "already accepted" / "Invalid invitation token"
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body?.message || "Invalid or expired invitation");
         }
         const data = await response.json();
         setInviteData(data);

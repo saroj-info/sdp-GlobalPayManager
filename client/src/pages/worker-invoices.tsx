@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -91,7 +91,7 @@ export default function WorkerInvoicesPage() {
       description: '',
       amount: 0,
       gstAmount: 0,
-      currency: 'AUD',
+      currency: '',
       contractId: '',
       timesheetId: '',
     }
@@ -102,6 +102,22 @@ export default function WorkerInvoicesPage() {
   const selectedContractId = form.watch('contractId');
   const selectedTimesheet = (workerTimesheets as any[]).find(t => t.id === selectedTimesheetId);
   const selectedContract = (workerContracts as any[]).find(c => c.id === selectedContractId);
+
+  // Currency options: every currency the platform's countries use, plus any
+  // contract currency not in that list. No hard-coded Australian default.
+  const currencyOptions = Array.from(new Set<string>([
+    ...(countries as any[]).map((c: any) => c.currency).filter(Boolean),
+    ...(workerContracts as any[]).map((c: any) => c.currency).filter(Boolean),
+  ]));
+  const workerCountryCurrency: string | undefined = (countries as any[]).find((c: any) => c.id === workerProfile?.countryId)?.currency;
+
+  // The invoice is in the contract's currency; before a contract is picked,
+  // the worker's own country's currency is the starting point.
+  useEffect(() => {
+    const next = selectedContract?.currency || workerCountryCurrency;
+    if (next && form.getValues('currency') !== next) form.setValue('currency', next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedContract?.currency, workerCountryCurrency]);
 
   const submitInvoiceMutation = useMutation({
     mutationFn: async (id: string) =>
@@ -412,18 +428,16 @@ export default function WorkerInvoicesPage() {
                           render={({ field }) => (
                             <FormItem>
                               <FormLabel>Currency</FormLabel>
-                              <Select onValueChange={field.onChange} defaultValue={field.value}>
+                              <Select onValueChange={field.onChange} value={field.value || ''}>
                                 <FormControl>
                                   <SelectTrigger data-testid="select-currency">
                                     <SelectValue placeholder="Select currency" />
                                   </SelectTrigger>
                                 </FormControl>
                                 <SelectContent>
-                                  <SelectItem value="AUD">AUD - Australian Dollar</SelectItem>
-                                  <SelectItem value="USD">USD - US Dollar</SelectItem>
-                                  <SelectItem value="NZD">NZD - New Zealand Dollar</SelectItem>
-                                  <SelectItem value="GBP">GBP - British Pound</SelectItem>
-                                  <SelectItem value="EUR">EUR - Euro</SelectItem>
+                                  {currencyOptions.map((code) => (
+                                    <SelectItem key={code} value={code}>{code}</SelectItem>
+                                  ))}
                                 </SelectContent>
                               </Select>
                               <FormMessage />
@@ -517,7 +531,7 @@ export default function WorkerInvoicesPage() {
                           name="amount"
                           render={({ field }) => (
                             <FormItem>
-                              <FormLabel>Amount (excluding GST)</FormLabel>
+                              <FormLabel>Amount (excluding GST/VAT)</FormLabel>
                               <FormControl>
                                 <Input 
                                   {...field} 
@@ -539,7 +553,7 @@ export default function WorkerInvoicesPage() {
                             name="gstAmount"
                             render={({ field }) => (
                               <FormItem>
-                                <FormLabel>GST Amount</FormLabel>
+                                <FormLabel>GST/VAT Amount</FormLabel>
                                 <FormControl>
                                   <Input 
                                     {...field} 
@@ -551,7 +565,7 @@ export default function WorkerInvoicesPage() {
                                   />
                                 </FormControl>
                                 <FormDescription>
-                                  Usually 10% of the amount for Australian GST
+                                  Tax on the amount if you are registered (for example 10% GST in Australia, 15% in New Zealand)
                                 </FormDescription>
                                 <FormMessage />
                               </FormItem>

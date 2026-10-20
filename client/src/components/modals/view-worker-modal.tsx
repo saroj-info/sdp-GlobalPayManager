@@ -107,10 +107,23 @@ export function ViewWorkerModal({ open, onOpenChange, worker, currentUserType }:
   };
 
   const updateWorkerMutation = useMutation({
-    mutationFn: async (data: any) => apiRequest('PATCH', `/api/workers/${worker.id}`, data),
-    onSuccess: () => {
+    mutationFn: async (data: any) => {
+      const res = await apiRequest('PATCH', `/api/workers/${worker.id}`, data);
+      return (await res.json()) as { invitation?: { resent: boolean; to: string } | null };
+    },
+    onSuccess: (data) => {
       invalidateWorkerFamily();
       setIsEditing(false);
+      // Changing the email of a worker who has not signed up re-issues the
+      // invitation to the new address (the old link stops working).
+      if (data?.invitation) {
+        if (data.invitation.resent) {
+          toast({ title: 'Saved', description: `Worker details updated. A new invitation was sent to ${data.invitation.to}; the previous link no longer works.` });
+        } else {
+          toast({ title: 'Saved, invitation not sent', description: `Worker details updated, but the invitation email to ${data.invitation.to} could not be sent. Use Resend Invitation.`, variant: 'destructive' });
+        }
+        return;
+      }
       toast({ title: 'Saved', description: 'Worker details updated.' });
     },
     onError: (error: any) => {
@@ -134,10 +147,14 @@ export function ViewWorkerModal({ open, onOpenChange, worker, currentUserType }:
   });
 
   const resendInvitationMutation = useMutation({
-    mutationFn: async () => apiRequest('POST', `/api/workers/${worker.id}/resend-invitation`, {}),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const res = await apiRequest('POST', `/api/workers/${worker.id}/resend-invitation`, {});
+      return (await res.json()) as { message?: string; expiresAt?: string };
+    },
+    onSuccess: (data) => {
       invalidateWorkerFamily();
-      toast({ title: 'Success', description: 'Invitation email sent successfully.' });
+      const until = data?.expiresAt ? ` The new link is valid until ${new Date(data.expiresAt).toLocaleString()}; earlier links no longer work.` : '';
+      toast({ title: 'Invitation sent', description: `${data?.message || 'Invitation email sent.'}${until}` });
     },
     onError: (error: any) => {
       toast({ title: 'Error', description: error?.message || 'Failed to send invitation email.', variant: 'destructive' });
@@ -194,11 +211,19 @@ export function ViewWorkerModal({ open, onOpenChange, worker, currentUserType }:
 
   const isThirdParty = worker.workerType === 'third_party_worker';
 
+  // Status plus, for an open invitation, whether its link is still valid.
   const getInvitationStatus = () => {
-    if (worker.onboardingCompleted) return { label: 'Active', color: 'text-green-600', icon: CheckCircle };
-    if (worker.userId) return { label: 'Accepted', color: 'text-blue-600', icon: CheckCircle };
-    if (worker.invitationSent) return { label: 'Invited', color: 'text-yellow-600', icon: Send };
-    return { label: 'Pending Invitation', color: 'text-gray-500', icon: Clock };
+    if (worker.onboardingCompleted) return { label: 'Active', color: 'text-green-600', icon: CheckCircle, detail: '' };
+    if (worker.userId) return { label: 'Accepted', color: 'text-blue-600', icon: CheckCircle, detail: '' };
+    if (worker.invitationSent) {
+      const expiresAt = worker.invitationTokenExpiresAt ? new Date(worker.invitationTokenExpiresAt) : null;
+      const expired = !!expiresAt && expiresAt < new Date();
+      const detail = expiresAt
+        ? (expired ? `link expired ${expiresAt.toLocaleDateString()}, resend` : `link expires ${expiresAt.toLocaleDateString()}`)
+        : '';
+      return { label: 'Invited', color: expired ? 'text-red-600' : 'text-yellow-600', icon: Send, detail };
+    }
+    return { label: 'Pending Invitation', color: 'text-gray-500', icon: Clock, detail: '' };
   };
   const status = getInvitationStatus();
   const StatusIcon = status.icon;
@@ -284,9 +309,10 @@ export function ViewWorkerModal({ open, onOpenChange, worker, currentUserType }:
                         Change Engagement Type
                       </Button>
                     )}
-                    <div className={`flex items-center space-x-1 ${status.color}`}>
+                    <div className={`flex items-center space-x-1 ${status.color}`} data-testid="worker-invitation-status">
                       <StatusIcon className="w-4 h-4" />
                       <span className="text-sm font-medium">{status.label}</span>
+                      {status.detail && <span className="text-xs font-normal">· {status.detail}</span>}
                     </div>
                   </div>
                 </div>

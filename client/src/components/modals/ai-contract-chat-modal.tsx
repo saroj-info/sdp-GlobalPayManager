@@ -731,6 +731,7 @@ export function AiContractChatModal({ open, onOpenChange }: AiContractChatModalP
       const qs = new URLSearchParams();
       qs.set("page", "1");
       qs.set("pageSize", "8");
+      qs.set("sortBy", "name"); // the list endpoint defaults to newest first
       if (mention?.query) qs.set("search", mention.query);
       if (mentionWorkerBiz) qs.set("businessId", mentionWorkerBiz);
       return (await apiRequest("GET", `/api/workers/list?${qs.toString()}`)).json();
