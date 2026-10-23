@@ -45,7 +45,10 @@ function handleAuthExpired() {
   try { localStorage.clear(); } catch {}
   try { sessionStorage.clear(); } catch {}
   try { queryClient.clear(); } catch {}
-  window.location.href = "/login?session=expired";
+  // Keep the page the user was on (e.g. a timesheet opened from an email) for after sign-in.
+  const target = `${window.location.pathname}${window.location.search}`;
+  const redirect = target && target !== "/" ? `&redirect=${encodeURIComponent(target)}` : "";
+  window.location.href = `/login?session=expired${redirect}`;
 }
 
 export async function apiRequest(

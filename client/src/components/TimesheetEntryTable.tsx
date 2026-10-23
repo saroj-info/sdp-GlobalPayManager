@@ -160,6 +160,7 @@ export function TimesheetEntryTable({
           ? dayEntries.some((e) => e.isPresent)
           : total > 0;
         const dayLabel = format(date, "EEE d MMM");
+        // Weekends are ordinary days here: same colours and controls as Mon–Fri, only a tag.
         const isWeekend = date.getDay() === 0 || date.getDay() === 6;
         // How many of the next 4 days (Tue–Fri) are in the period — drives both the
         // visibility of the copy button and what the click handler actually writes.
@@ -175,12 +176,12 @@ export function TimesheetEntryTable({
         return (
           <div
             key={dateStr}
-            className={`rounded-lg border ${hasData ? "border-primary/40 bg-primary/5" : isWeekend ? "border-muted bg-muted/30" : "border-border"}`}
+            className={`rounded-lg border ${hasData ? "border-primary/40 bg-primary/5" : "border-border"}`}
           >
             {/* Day header */}
-            <div className={`flex items-center justify-between px-3 py-2 ${hasData ? "bg-primary/10" : isWeekend ? "bg-muted/50" : "bg-muted/20"} rounded-t-lg`}>
+            <div className={`flex items-center justify-between px-3 py-2 ${hasData ? "bg-primary/10" : "bg-muted/20"} rounded-t-lg`}>
               <div className="flex items-center gap-2">
-                <span className={`text-sm font-semibold ${isWeekend ? "text-muted-foreground" : "text-foreground"}`}>
+                <span className="text-sm font-semibold text-foreground">
                   {dayLabel}
                   {isWeekend && <span className="ml-1 text-xs font-normal text-muted-foreground">(Weekend)</span>}
                 </span>

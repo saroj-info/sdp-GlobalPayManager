@@ -362,7 +362,7 @@ export interface IStorage {
   getTimesheetById(id: string): Promise<(Timesheet & { worker?: Worker; entries: TimesheetEntry[]; attachments: TimesheetAttachment[] }) | undefined>;
   createTimesheet(timesheet: InsertTimesheet): Promise<Timesheet>;
   createTimesheetWithEntries(data: any): Promise<Timesheet>;
-  updateTimesheetStatus(timesheetId: string, status: string, approvedBy?: string, rejectionReason?: string): Promise<void>;
+  updateTimesheetStatus(timesheetId: string, status: string, approvedBy?: string, rejectionReason?: string, decision?: { approvedVia?: string | null; approvedByEmail?: string | null }): Promise<void>;
   updateTimesheet(timesheetId: string, data: Partial<InsertTimesheet>): Promise<Timesheet>;
   deleteTimesheet(timesheetId: string): Promise<void>;
   createTimesheetEntry(entry: InsertTimesheetEntry): Promise<TimesheetEntry>;
@@ -2273,11 +2273,23 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updateTimesheetStatus(timesheetId: string, status: string, approvedBy?: string, rejectionReason?: string): Promise<void> {
+  async updateTimesheetStatus(
+    timesheetId: string,
+    status: string,
+    approvedBy?: string,
+    rejectionReason?: string,
+    // How the decision was made ('app' | 'email_link') and by which address — written on
+    // approve and reject alike; see modules/timesheet-approval/service.ts.
+    decision?: { approvedVia?: string | null; approvedByEmail?: string | null },
+  ): Promise<void> {
     const updateData: any = {
       status: status as any,
       updatedAt: new Date(),
     };
+    if (decision && (status === 'approved' || status === 'rejected')) {
+      if (decision.approvedVia !== undefined) updateData.approvedVia = decision.approvedVia;
+      if (decision.approvedByEmail !== undefined) updateData.approvedByEmail = decision.approvedByEmail;
+    }
 
     if (status === 'approved' && approvedBy) {
       updateData.approvedAt = new Date();

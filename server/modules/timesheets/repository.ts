@@ -49,6 +49,7 @@ function buildScopeAndFilters(
   }
 
   if (includeStatusFilter && query.status) conditions.push(eq(timesheets.status, query.status as any));
+  if (query.id)          conditions.push(eq(timesheets.id, query.id));
   if (query.businessId)  conditions.push(eq(timesheets.businessId, query.businessId));
   if (query.countryId)   conditions.push(eq(contracts.countryId, query.countryId));
   if (query.hostClientName) {

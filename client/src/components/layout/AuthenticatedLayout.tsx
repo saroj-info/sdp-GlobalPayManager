@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
 import { BusinessProfileReminder } from "./BusinessProfileReminder";
@@ -15,8 +16,21 @@ interface Country {
 
 function AuthenticatedLayoutContent({ children }: { children: ReactNode }) {
   const { headerMetadata, setCountries, commandBarOpen, setCommandBarOpen } = useAuthenticatedLayout();
-  const { user } = useAuth();
+  const { user, authReady, isAuthenticated } = useAuth();
+  const [, setLocation] = useLocation();
   const searchEnabled = (user as any)?.featureFlags?.aiSearchEnabled === true;
+
+  // Nobody signed in → go to /login and come back here afterwards. Links in emails
+  // (e.g. "Review timesheet") land on protected pages, which used to render an empty
+  // shell. A stored token that failed is bounced by `handleAuthExpired` instead.
+  useEffect(() => {
+    if (!authReady || isAuthenticated) return;
+    let hasToken = false;
+    try { hasToken = !!localStorage.getItem('authToken'); } catch {}
+    if (hasToken) return;
+    const target = `${window.location.pathname}${window.location.search}`;
+    setLocation(`/login?redirect=${encodeURIComponent(target)}`);
+  }, [authReady, isAuthenticated, setLocation]);
 
   const { data: countries = [] } = useQuery<Country[]>({
     queryKey: ['/api/countries'],

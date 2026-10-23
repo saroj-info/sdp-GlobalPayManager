@@ -6,7 +6,7 @@ import bcrypt from "bcrypt";
 import * as OTPAuth from "otpauth";
 import * as twoFactorAuth from "./twoFactorAuth";
 import { storage } from "./storage";
-import { registerTimesheetApprovalRoutes } from "./modules/timesheet-approval";
+import { registerTimesheetApprovalRoutes, issueApprovalToken, summarizeForApprover } from "./modules/timesheet-approval";
 import { registerWorkforceRoutes, findEmailConflict, describeEmailConflict, normalizeEmail, workerInvitations } from "./modules/workforce";
 import {
   upsertContractAssociation,
@@ -7727,33 +7727,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           if (approverEmail) {
-            const totalHoursNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.hoursWorked || '0') || 0), 0);
-            const totalDaysNum = (ts.entries || []).reduce((s: number, e: any) => s + (parseFloat(e.daysWorked || '0') || 0), 0);
-            const totalLabel = totalDaysNum > 0
-              ? `${totalDaysNum.toFixed(1)}d`
-              : totalHoursNum > 0
-                ? `${totalHoursNum.toFixed(1)}h`
-                : `${(ts.entries || []).filter((e: any) => e.isPresent).length} days present`;
-
             const contractLabel = contract?.contractName
               || contract?.customRoleTitle
               || (contract?.roleTitleId ? (await storage.getRoleTitle(contract.roleTitleId).catch(() => null))?.title : '')
               || 'Contract';
 
             const baseUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
-            const reviewLink = `${baseUrl}/timesheets`;
+            // Deep link to this timesheet. A visitor who is not signed in is sent to
+            // /login?redirect=… by AuthenticatedLayout and lands back here afterwards.
+            const reviewLink = `${baseUrl}/timesheets?open=${id}`;
 
-            await emailService.sendTimesheetSubmittedEmail({
+            // Every day of the period (weekends included) for the email body.
+            const summary = summarizeForApprover(ts, contract, worker);
+
+            // Single-use approve / reject links (modules/timesheet-approval/tokens.ts), issued
+            // BEFORE the send: a failed email leaves a harmless token behind, and a failed token
+            // (for example the table not pushed yet) must not cost the approver the email itself.
+            let approveLink: string | undefined;
+            let rejectLink: string | undefined;
+            let linksExpireAt: Date | undefined;
+            try {
+              const approverUser = await storage.getUserByEmail(approverEmail);
+              const issued = await issueApprovalToken({
+                timesheetId: id,
+                approverEmail,
+                approverUserId: approverUser?.id ?? null,
+                approverRole: approverRole || 'business',
+                submittedAt: ts.submittedAt ?? null,
+              });
+              approveLink = `${baseUrl}/timesheet-approval/${issued.rawToken}?action=approve`;
+              rejectLink = `${baseUrl}/timesheet-approval/${issued.rawToken}?action=reject`;
+              linksExpireAt = issued.expiresAt;
+            } catch (tokenError: any) {
+              console.error('[timesheet-submit] could not issue an approval link, sending the review link only:', tokenError?.message || tokenError);
+            }
+
+            const sent = await emailService.sendTimesheetSubmittedEmail({
               to: approverEmail,
               approverName,
               workerName,
               contractLabel,
               periodStart: ts.periodStart,
               periodEnd: ts.periodEnd,
-              totalLabel,
+              totalLabel: summary.totals.label,
               reviewLink,
+              rows: summary.rows,
+              approveLink,
+              rejectLink,
+              linksExpireAt,
             });
-            console.log(`[timesheet-submit] approval email sent to ${approverEmail} (${approverRole || 'business'}) for timesheet ${id}`);
+            console.log(`[timesheet-submit] approval email ${sent ? 'sent' : 'NOT sent'} to ${approverEmail} (${approverRole || 'business'}) for timesheet ${id}`);
           } else {
             console.warn(`[timesheet-submit] no approver email resolved for timesheet ${id} (approverRole=${approverRole}). Skipping notification.`);
           }

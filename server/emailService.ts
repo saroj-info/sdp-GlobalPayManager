@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { storage } from './storage';
+import type { ApproverDayRow } from './modules/timesheet-approval/types';
 
 // Initialize Resend with API key from environment variables (only if available)
 let resend: Resend | null = null;
@@ -753,8 +754,10 @@ class EmailService {
   }
 
   /**
-   * Sent to whoever has approval authority on a contract (business or host client) when
-   * a worker submits a timesheet for review.
+   * Sent to whoever has approval authority on a contract (business, host client or SDP) when
+   * a worker submits a timesheet for review. Lists every day of the period (weekends included)
+   * and, when `approveLink` / `rejectLink` are given, two buttons that open the public confirm
+   * page (no sign-in). `reviewLink` opens the timesheet in the app.
    */
   async sendTimesheetSubmittedEmail(opts: {
     to: string;
@@ -765,36 +768,101 @@ class EmailService {
     periodEnd: Date | string;
     totalLabel: string;         // e.g. "8.0h" or "5d"
     reviewLink: string;         // deep link into the timesheets page on the platform
+    rows?: ApproverDayRow[];    // one row per day of the period (plus one per extra entry)
+    approveLink?: string;       // public confirm page, action=approve
+    rejectLink?: string;        // public confirm page, action=reject
+    linksExpireAt?: Date;
   }): Promise<boolean> {
+    const esc = (v: unknown) => String(v ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const fmt = (d: Date | string) => new Date(d).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
     const period = `${fmt(opts.periodStart)} – ${fmt(opts.periodEnd)}`;
-    const html = `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Timesheet Awaiting Your Approval</title></head>
-<body style="font-family: Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 20px;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-    <div style="background-color: #1e3a5f; padding: 32px 40px; text-align: center;">
-      <h1 style="color: #ffffff; margin: 0; font-size: 22px;">SDP Global Pay</h1>
-      <p style="color: #93c5fd; margin: 8px 0 0 0; font-size: 14px;">Timesheet Awaiting Approval</p>
-    </div>
-    <div style="padding: 32px 40px;">
-      <p style="color: #111827; font-size: 16px; margin: 0 0 16px 0;">Hello ${opts.approverName},</p>
-      <p style="color: #374151; font-size: 14px; line-height: 1.6;">
-        <strong>${opts.workerName}</strong> has submitted a timesheet for your approval.
-      </p>
-      <table style="width: 100%; margin: 16px 0; border-collapse: collapse;">
-        <tr><td style="padding: 6px 0; color: #6b7280; font-size: 13px;">Contract</td><td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: 600;">${opts.contractLabel}</td></tr>
-        <tr><td style="padding: 6px 0; color: #6b7280; font-size: 13px;">Period</td><td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: 600;">${period}</td></tr>
-        <tr><td style="padding: 6px 0; color: #6b7280; font-size: 13px;">Total</td><td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: 600;">${opts.totalLabel}</td></tr>
+    const rows = opts.rows ?? [];
+    const hasLinks = Boolean(opts.approveLink && opts.rejectLink);
+    const expiry = opts.linksExpireAt ? fmt(opts.linksExpireAt) : null;
+    const cell = 'padding: 6px 8px; border-bottom: 1px solid #e5e7eb; font-size: 13px;';
+    const head = 'padding: 6px 8px; font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em;';
+
+    const rowsHtml = rows.map((r) => {
+      const color = r.hasEntry ? '#111827' : '#9ca3af';
+      const bg = r.isWeekend ? '#f9fafb' : '#ffffff';
+      const time = r.startTime && r.endTime
+        ? `${esc(r.startTime)} – ${esc(r.endTime)}${r.breakHours ? ` <span style="color:#b45309;">(${esc(r.breakHours)}h break)</span>` : ''}`
+        : '';
+      return `<tr style="background-color: ${bg};">
+          <td style="${cell} color: ${color}; white-space: nowrap;">${esc(r.label)}${r.isWeekend ? ' <span style="color:#9ca3af; font-size:11px;">(weekend)</span>' : ''}</td>
+          <td style="${cell} color: #6b7280; font-size: 12px;">${time}</td>
+          <td style="${cell} color: ${color}; font-weight: 600; text-align: right; white-space: nowrap;">${esc(r.valueLabel)}</td>
+          <td style="${cell} color: #374151; font-size: 12px;">${esc(r.description ?? '')}</td>
+        </tr>`;
+    }).join('');
+
+    const entriesTable = rows.length > 0 ? `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; margin: 8px 0 16px 0;">
+        <tr style="background-color: #f3f4f6;">
+          <th align="left" style="${head}">Day</th>
+          <th align="left" style="${head}">Time</th>
+          <th align="right" style="${head}">Hours / days</th>
+          <th align="left" style="${head}">Notes</th>
+        </tr>
+        ${rowsHtml}
+        <tr>
+          <td colspan="2" style="padding: 8px; font-size: 13px; font-weight: 600; color: #111827;">Total</td>
+          <td style="padding: 8px; font-size: 13px; font-weight: 700; color: #111827; text-align: right;">${esc(opts.totalLabel)}</td>
+          <td></td>
+        </tr>
+      </table>` : '';
+
+    const decisionButtons = hasLinks ? `
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 24px auto 8px auto;">
+        <tr>
+          <td style="padding: 0 8px;">
+            <a href="${opts.approveLink}" style="display: inline-block; background-color: #059669; color: #ffffff; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-size: 16px; font-weight: 600;">Approve timesheet</a>
+          </td>
+          <td style="padding: 0 8px;">
+            <a href="${opts.rejectLink}" style="display: inline-block; background-color: #dc2626; color: #ffffff; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-size: 16px; font-weight: 600;">Reject</a>
+          </td>
+        </tr>
       </table>
-      <div style="text-align: center; margin: 32px 0;">
+      <p style="color: #6b7280; font-size: 12px; text-align: center; margin: 0 0 24px 0;">
+        Each button opens a page where you confirm your decision. No sign-in is needed. The links can be used once${expiry ? ` and expire on ${esc(expiry)}` : ''}.
+      </p>` : '';
+
+    const reviewBlock = hasLinks
+      ? `<p style="color: #6b7280; font-size: 13px; line-height: 1.5; text-align: center;">
+        Prefer to review it in the app? <a href="${opts.reviewLink}" style="color: #2563eb;">Open the timesheet in SDP Global Pay</a> (sign-in required).
+      </p>`
+      : `<div style="text-align: center; margin: 32px 0;">
         <a href="${opts.reviewLink}" style="display: inline-block; background-color: #1e3a5f; color: #ffffff; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-size: 16px; font-weight: 600;">Review Timesheet</a>
       </div>
       <p style="color: #6b7280; font-size: 13px; line-height: 1.5;">
         If the button doesn't work, copy and paste this link into your browser:<br/>
         <span style="color: #2563eb; word-break: break-all;">${opts.reviewLink}</span>
+      </p>`;
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Timesheet Awaiting Your Approval</title></head>
+<body style="font-family: Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 20px;">
+  <div style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <div style="background-color: #1e3a5f; padding: 32px 40px; text-align: center;">
+      <h1 style="color: #ffffff; margin: 0; font-size: 22px;">SDP Global Pay</h1>
+      <p style="color: #93c5fd; margin: 8px 0 0 0; font-size: 14px;">Timesheet Awaiting Approval</p>
+    </div>
+    <div style="padding: 32px 40px;">
+      <p style="color: #111827; font-size: 16px; margin: 0 0 16px 0;">Hello ${esc(opts.approverName)},</p>
+      <p style="color: #374151; font-size: 14px; line-height: 1.6;">
+        <strong>${esc(opts.workerName)}</strong> has submitted a timesheet for your approval.
       </p>
+      <table style="width: 100%; margin: 16px 0; border-collapse: collapse;">
+        <tr><td style="padding: 6px 0; color: #6b7280; font-size: 13px;">Contract</td><td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: 600;">${esc(opts.contractLabel)}</td></tr>
+        <tr><td style="padding: 6px 0; color: #6b7280; font-size: 13px;">Period</td><td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: 600;">${period}</td></tr>
+        <tr><td style="padding: 6px 0; color: #6b7280; font-size: 13px;">Total</td><td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: 600;">${esc(opts.totalLabel)}</td></tr>
+      </table>
+      ${entriesTable}
+      ${decisionButtons}
+      ${reviewBlock}
     </div>
     <div style="background-color: #f3f4f6; padding: 16px 40px; text-align: center;">
       <p style="margin: 0; color: #9ca3af; font-size: 12px;">SDP Global Pay — Global Workforce Management</p>
@@ -802,7 +870,15 @@ class EmailService {
   </div>
 </body>
 </html>`;
-    const text = `Hello ${opts.approverName},\n\n${opts.workerName} has submitted a timesheet for your approval.\n\nContract: ${opts.contractLabel}\nPeriod: ${period}\nTotal: ${opts.totalLabel}\n\nReview at: ${opts.reviewLink}\n\nSDP Global Pay`;
+
+    const textRows = rows.map((r) => {
+      const time = r.startTime && r.endTime ? ` (${r.startTime}–${r.endTime}${r.breakHours ? `, ${r.breakHours}h break` : ''})` : '';
+      return `  ${r.label}${r.isWeekend ? ' (weekend)' : ''}: ${r.valueLabel}${time}${r.description ? ` — ${r.description}` : ''}`;
+    }).join('\n');
+    const textLinks = hasLinks
+      ? `\nApprove: ${opts.approveLink}\nReject: ${opts.rejectLink}\n(Each link opens a page to confirm, can be used once${expiry ? ` and expires on ${expiry}` : ''}.)\n\nOr review in the app: ${opts.reviewLink}`
+      : `\nReview at: ${opts.reviewLink}`;
+    const text = `Hello ${opts.approverName},\n\n${opts.workerName} has submitted a timesheet for your approval.\n\nContract: ${opts.contractLabel}\nPeriod: ${period}\nTotal: ${opts.totalLabel}\n${textRows ? `\n${textRows}\n` : ''}${textLinks}\n\nSDP Global Pay`;
 
     return this.sendEmail({
       to: opts.to,

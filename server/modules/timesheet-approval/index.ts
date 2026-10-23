@@ -8,4 +8,5 @@
 
 export { registerTimesheetApprovalRoutes } from "./controller";
 export { processStatusUpdate } from "./service";
-export type { AuthUser, StatusUpdateResult } from "./types";
+export { issueApprovalToken, summarizeForApprover, TIMESHEET_APPROVAL_TTL_MS } from "./tokens";
+export type { ApprovalActor, ApproverDayRow, ApproverSummary, AuthUser, StatusUpdateResult } from "./types";

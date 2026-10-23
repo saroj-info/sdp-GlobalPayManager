@@ -3,8 +3,8 @@
  *
  * Flow:
  *   1. Load timesheet + contract
- *   2. Authorize (pure)
- *   3. Persist new status
+ *   2. Authorize — by role for a signed-in user, or by consuming the single-use email token
+ *   3. Persist new status (+ how it was decided)
  *   4. If status === 'approved' → build a billing snapshot and route invoices
  *
  * Anything that's NOT this orchestrator (math, auth, DB writes) lives in its own
@@ -27,37 +27,77 @@ import {
   createSdpServicesInvoice,
   type InvoiceContext,
 } from "./invoices";
-import type { AuthUser, BillingSnapshot, StatusUpdateResult } from "./types";
+import { consumeApprovalToken, releaseApprovalToken } from "./tokens";
+import type { ApprovalActor, AuthUser, BillingSnapshot, StatusUpdateResult } from "./types";
 
 export async function processStatusUpdate(args: {
   timesheetId: string;
   status: string;
   rejectionReason?: string;
-  user: AuthUser;
+  /** Signed-in caller (the in-app route). Shorthand for `actor: { kind: 'user', user }`. */
+  user?: AuthUser;
+  /** Who decides; see `ApprovalActor`. */
+  actor?: ApprovalActor;
 }): Promise<StatusUpdateResult> {
-  const { timesheetId, status, rejectionReason, user } = args;
+  const { timesheetId, status, rejectionReason } = args;
+  const actor: ApprovalActor | null = args.actor ?? (args.user ? { kind: "user", user: args.user } : null);
+  if (!actor) return { ok: false, status: 401, message: "Unauthorized" };
 
   // 1. Load
-  const allTimesheets = await storage.getAllTimesheets();
-  const timesheet = allTimesheets.find(t => t.id === timesheetId);
+  const timesheet = await storage.getTimesheetById(timesheetId);
   if (!timesheet) return { ok: false, status: 404, message: "Timesheet not found" };
 
   const contract = await storage.getContractById(timesheet.contractId);
   if (!contract) return { ok: false, status: 404, message: "Contract not found" };
 
-  // 2. Authorize
-  const authz = await authorizeStatusUpdate({ contract, user });
-  if (!authz.allowed) return { ok: false, status: authz.status, message: authz.message };
+  // 2. Authorize, and work out who is recorded as the approver
+  let approvedBy: string | undefined;
+  let invoiceUserId: string | null;
+  let decision: { approvedVia: string; approvedByEmail: string | null };
+
+  if (actor.kind === "user") {
+    const authz = await authorizeStatusUpdate({ contract, user: actor.user });
+    if (!authz.allowed) return { ok: false, status: authz.status, message: authz.message };
+    approvedBy = actor.user.id;
+    invoiceUserId = actor.user.id;
+    decision = { approvedVia: "app", approvedByEmail: null };
+  } else {
+    const token = actor.token;
+    if (status !== "approved" && status !== "rejected") {
+      return { ok: false, status: 400, code: "INVALID_ACTION", message: "An email link can only approve or reject." };
+    }
+    if (token.timesheetId !== timesheetId) {
+      return { ok: false, status: 403, code: "APPROVAL_LINK_INVALID", message: "This link belongs to a different timesheet." };
+    }
+    if (timesheet.status !== "submitted") {
+      return { ok: false, status: 409, code: "TIMESHEET_NOT_PENDING", message: `This timesheet is no longer awaiting approval (it is ${timesheet.status}).` };
+    }
+    // Consume first: the conditional UPDATE is the lock against a second click.
+    const consumed = await consumeApprovalToken(token.id, status);
+    if (!consumed) {
+      return { ok: false, status: 409, code: "APPROVAL_LINK_USED", message: "This link has already been used." };
+    }
+    approvedBy = token.approverUserId ?? undefined;
+    // `sdp_invoices.createdBy` is NOT NULL: fall back to whoever set the contract up.
+    invoiceUserId = token.approverUserId ?? contract.createdByUserId ?? timesheet.createdBy ?? null;
+    decision = { approvedVia: "email_link", approvedByEmail: token.approverEmail };
+  }
 
   // 3. Persist
-  await storage.updateTimesheetStatus(timesheetId, status, user.id, rejectionReason);
-  console.log(`[invoice] PATCH /timesheets/${timesheetId}/status → status='${status}' contractId=${timesheet.contractId}`);
+  try {
+    await storage.updateTimesheetStatus(timesheetId, status, approvedBy, rejectionReason, decision);
+  } catch (err) {
+    if (actor.kind === "email_link") await releaseApprovalToken(actor.token.id).catch(() => undefined);
+    throw err;
+  }
+  console.log(`[invoice] timesheet ${timesheetId} → status='${status}' via=${decision.approvedVia} contractId=${timesheet.contractId}`);
 
   // 4. Side effects (only on approval). Best-effort — invoicing failures must not roll back the
   //    status change. We log and move on.
   if (status === "approved") {
     try {
-      await runAutoInvoiceForApproval({ contract, timesheet, userId: user.id });
+      if (!invoiceUserId) throw new Error("no user id available for invoice createdBy");
+      await runAutoInvoiceForApproval({ contract, timesheet, userId: invoiceUserId });
     } catch (err: any) {
       console.error("[invoice] FAILED to auto-generate invoice on timesheet approval:", err?.message);
       console.error("[invoice] stack:", err?.stack);

@@ -16,6 +16,7 @@ export interface TimesheetListQuery {
   page: number;
   pageSize: number;
   status?: string;          // 'draft' | 'submitted' | 'approved' | 'rejected'
+  id?: string;              // one timesheet only (deep link `?open=` from the approval email)
   search?: string;          // worker name
   countryId?: string;
   businessId?: string;

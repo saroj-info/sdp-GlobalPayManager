@@ -108,6 +108,63 @@ function blankEntry(date: Date): TimesheetEntryValue {
   };
 }
 
+// One row per day of a saved timesheet's period, Saturday and Sunday included, so the
+// approver sees the whole week and not only the days with time logged. Days without an
+// entry are rendered (never stored); a period over the 31-day cap falls back to entries.
+type TimesheetDayRow = {
+  key: string;
+  dayShort: string;
+  dayNum: string;
+  isWeekend: boolean;
+  entry: any | null;
+  valueLabel: string;
+};
+
+function buildDayRows(timesheet: any): TimesheetDayRow[] {
+  const entries: any[] = Array.isArray(timesheet?.entries) ? timesheet.entries : [];
+  const unit = getTrackingUnit(timesheet?.contract);
+  const valueLabelFor = (entry: any): string => {
+    const hours = parseFloat(entry.hoursWorked || '0') || 0;
+    const days = parseFloat(entry.daysWorked || '0') || 0;
+    if (hours > 0) return `${hours.toFixed(2)}h`;
+    if (days > 0) return `${days.toFixed(2)}d`;
+    // `isPresent` is not a stored column, so a saved annual entry with no numbers is a present day.
+    return entry.isPresent || unit === 'annual' ? 'Present' : '—';
+  };
+  const rowFor = (date: Date, entry: any | null): TimesheetDayRow => ({
+    key: format(date, 'yyyy-MM-dd'),
+    dayShort: date.toLocaleDateString('en-AU', { weekday: 'short' }),
+    dayNum: date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }),
+    isWeekend: date.getDay() === 0 || date.getDay() === 6,
+    entry,
+    valueLabel: entry ? valueLabelFor(entry) : '—',
+  });
+  const entriesOnly = () => entries.map((e) => rowFor(new Date(e.date), e));
+
+  const start = timesheet?.periodStart ? new Date(timesheet.periodStart) : null;
+  const end = timesheet?.periodEnd ? new Date(timesheet.periodEnd) : null;
+  if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return entriesOnly();
+
+  const byDay = new Map<string, any[]>();
+  for (const e of entries) {
+    const k = format(new Date(e.date), 'yyyy-MM-dd');
+    byDay.set(k, [...(byDay.get(k) ?? []), e]);
+  }
+  const rows: TimesheetDayRow[] = [];
+  let cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  let count = 0;
+  while (cursor <= last && count < 31) {
+    const list = byDay.get(format(cursor, 'yyyy-MM-dd'));
+    if (!list || list.length === 0) rows.push(rowFor(cursor, null));
+    else for (const e of list) rows.push(rowFor(cursor, e));
+    cursor = addDays(cursor, 1);
+    count++;
+  }
+  if (cursor <= last) return entriesOnly(); // longer than the cap
+  return rows;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-700 border-gray-200',
   submitted: 'bg-blue-100 text-blue-700 border-blue-200',
@@ -169,6 +226,11 @@ export default function Timesheets() {
       return next;
     });
   };
+  // `?open=<id>` from the approval email: the list is pinned to that one timesheet, which is
+  // expanded and scrolled to once loaded. Cleared by "Show all" or any filter change.
+  const [openTimesheetId, setOpenTimesheetId] = useState<string | null>(() => {
+    try { return new URLSearchParams(window.location.search).get('open'); } catch { return null; }
+  });
   const [expenseLines, setExpenseLines] = useState<ExpenseLine[]>([]);
   const [showExpenses, setShowExpenses] = useState(false);
   // Search & filter state
@@ -198,19 +260,24 @@ export default function Timesheets() {
 
   // Reset to page 1 when any filter / sort changes (otherwise the user might be stranded
   // on a now-empty page).
+  const filtersTouchedRef = useRef(false);
   useEffect(() => {
     setTimesheetsPage(1);
+    // The email deep link pins the list to one timesheet; the first filter change lifts it.
+    if (filtersTouchedRef.current) setOpenTimesheetId(null);
+    filtersTouchedRef.current = true;
   }, [statusFilter, searchQuery, countryFilter, hostClientFilter, businessFilter]);
 
   const timesheetsListParams = useMemo(() => ({
     page: timesheetsPage,
     pageSize: TIMESHEETS_PAGE_SIZE,
+    id: openTimesheetId || undefined,
     status: statusFilter !== 'all' ? statusFilter : undefined,
     search: searchQuery.trim() || undefined,
     countryId: countryFilter || undefined,
     hostClientName: hostClientFilter || undefined,
     businessId: businessFilter || undefined,
-  }), [timesheetsPage, statusFilter, searchQuery, countryFilter, hostClientFilter, businessFilter]);
+  }), [timesheetsPage, openTimesheetId, statusFilter, searchQuery, countryFilter, hostClientFilter, businessFilter]);
 
   const { data: timesheetListData, isLoading: isLoadingTimesheets } = useQuery<{
     items: any[];
@@ -224,6 +291,7 @@ export default function Timesheets() {
       const qs = new URLSearchParams();
       qs.set('page', String(timesheetsListParams.page));
       qs.set('pageSize', String(timesheetsListParams.pageSize));
+      if (timesheetsListParams.id) qs.set('id', timesheetsListParams.id);
       if (timesheetsListParams.status) qs.set('status', timesheetsListParams.status);
       if (timesheetsListParams.search) qs.set('search', timesheetsListParams.search);
       if (timesheetsListParams.countryId) qs.set('countryId', timesheetsListParams.countryId);
@@ -239,6 +307,25 @@ export default function Timesheets() {
 
   const timesheets = timesheetListData?.items ?? [];
   const totalTimesheets = timesheetListData?.total ?? 0;
+
+  // Once the pinned timesheet is on the page: expand it, switch to the right tab for a host
+  // client, scroll it into view, and drop the parameter from the address bar.
+  useEffect(() => {
+    if (!openTimesheetId || !timesheetListData) return;
+    const found = (timesheetListData.items as any[]).find((t) => t.id === openTimesheetId);
+    if (!found) return;
+    setExpandedTimesheetIds((prev) => {
+      if (prev.has(openTimesheetId)) return prev;
+      const next = new Set(prev);
+      next.add(openTimesheetId);
+      return next;
+    });
+    if (found.isProvided) setTimesheetTab('provided');
+    window.requestAnimationFrame(() => {
+      document.getElementById(`timesheet-${openTimesheetId}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+    if (window.location.search.includes('open=')) window.history.replaceState({}, '', '/timesheets');
+  }, [openTimesheetId, timesheetListData]);
   const totalTimesheetPages = Math.max(1, Math.ceil(totalTimesheets / TIMESHEETS_PAGE_SIZE));
   const serverStatusCounts = timesheetListData?.statusCounts;
 
@@ -981,7 +1068,7 @@ export default function Timesheets() {
     const totalDisplay = formatTimesheetTotal(timesheet);
 
     return (
-      <Card className={`flex flex-col h-full border-l-4 ${STATUS_LEFT[s] || 'border-l-gray-300'} ${provided ? 'bg-blue-50/30' : ''} hover:shadow-md transition-shadow`}>
+      <Card id={`timesheet-${timesheet.id}`} className={`flex flex-col h-full border-l-4 ${STATUS_LEFT[s] || 'border-l-gray-300'} ${provided ? 'bg-blue-50/30' : ''} hover:shadow-md transition-shadow`}>
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-3 flex-1 min-w-0">
@@ -1034,58 +1121,61 @@ export default function Timesheets() {
 
         {expanded && (
           <CardContent className="pt-0 space-y-4 flex-1">
-            {/* Entries summary */}
-            {timesheet.entries && timesheet.entries.length > 0 && (
-              <div className="rounded-lg border bg-secondary-50/40">
-                <div className="flex items-center justify-between px-3 py-2 border-b bg-white rounded-t-lg">
-                  <h4 className="text-xs font-semibold text-secondary-700 uppercase tracking-wide flex items-center gap-1.5">
-                    <Clock className="h-3.5 w-3.5" />
-                    Time Entries
-                  </h4>
-                  <span className="text-xs font-medium text-secondary-600">
-                    {timesheet.entries.length} {timesheet.entries.length === 1 ? 'entry' : 'entries'} · <span className="text-primary-700 font-semibold">{totalDisplay}</span>
-                  </span>
-                </div>
-                <div className="divide-y divide-secondary-200/60">
-                  {timesheet.entries.map((entry: any, i: number) => {
-                    const dt = new Date(entry.date);
-                    const dayShort = dt.toLocaleDateString('en-AU', { weekday: 'short' });
-                    const dayNum = dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
-                    const valueLabel = entry.hoursWorked
-                      ? `${parseFloat(entry.hoursWorked).toFixed(2)}h`
-                      : entry.daysWorked
-                      ? `${parseFloat(entry.daysWorked).toFixed(2)}d`
-                      : entry.isPresent
-                      ? 'Present'
-                      : '—';
-                    return (
-                      <div key={entry.id || i} className="flex items-center gap-3 px-3 py-2 hover:bg-white transition-colors">
+            {/* Entries by day — every day of the period, weekends included */}
+            {(() => {
+              const dayRows = buildDayRows(timesheet);
+              const entryCount = timesheet.entries?.length || 0;
+              if (dayRows.length === 0) return null;
+              return (
+                <div className="rounded-lg border bg-secondary-50/40" data-testid="timesheet-day-rows">
+                  <div className="flex items-center justify-between px-3 py-2 border-b bg-white rounded-t-lg">
+                    <h4 className="text-xs font-semibold text-secondary-700 uppercase tracking-wide flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5" />
+                      Time Entries
+                    </h4>
+                    <span className="text-xs font-medium text-secondary-600">
+                      {entryCount} {entryCount === 1 ? 'entry' : 'entries'} · <span className="text-primary-700 font-semibold">{totalDisplay}</span>
+                    </span>
+                  </div>
+                  <div className="divide-y divide-secondary-200/60">
+                    {dayRows.map((row, i) => (
+                      <div
+                        key={`${row.key}-${i}`}
+                        className={`flex items-center gap-3 px-3 py-2 transition-colors ${row.entry ? 'hover:bg-white' : ''}`}
+                        data-testid={`timesheet-day-${row.key}`}
+                      >
                         <div className="flex flex-col items-center w-12 flex-shrink-0">
-                          <span className="text-[10px] font-semibold text-secondary-500 uppercase">{dayShort}</span>
-                          <span className="text-xs font-medium text-secondary-800">{dayNum}</span>
+                          <span className={`text-[10px] font-semibold uppercase ${row.isWeekend ? 'text-amber-600' : 'text-secondary-500'}`}>{row.dayShort}</span>
+                          <span className={`text-xs font-medium ${row.entry ? 'text-secondary-800' : 'text-secondary-500'}`}>{row.dayNum}</span>
                         </div>
                         <div className="flex-1 min-w-0">
-                          {(entry.startTime || entry.endTime) && (
-                            <div className="text-[11px] text-secondary-500 inline-flex items-center gap-1">
-                              {entry.startTime} – {entry.endTime}
-                              {entry.breakHours && parseFloat(entry.breakHours) > 0 && (
-                                <span className="text-amber-600">· {entry.breakHours}h break</span>
+                          {row.entry ? (
+                            <>
+                              {(row.entry.startTime || row.entry.endTime) && (
+                                <div className="text-[11px] text-secondary-500 inline-flex items-center gap-1">
+                                  {row.entry.startTime} – {row.entry.endTime}
+                                  {row.entry.breakHours && parseFloat(row.entry.breakHours) > 0 && (
+                                    <span className="text-amber-600">· {row.entry.breakHours}h break</span>
+                                  )}
+                                </div>
                               )}
-                            </div>
-                          )}
-                          {entry.description && (
-                            <div className="text-xs text-secondary-700 truncate">{entry.description}</div>
+                              {row.entry.description && (
+                                <div className="text-xs text-secondary-700 truncate">{row.entry.description}</div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="text-xs text-secondary-400 italic">{row.isWeekend ? 'Weekend · no time logged' : 'No time logged'}</div>
                           )}
                         </div>
-                        <span className="text-sm font-semibold text-primary-700 tabular-nums flex-shrink-0">
-                          {valueLabel}
+                        <span className={`text-sm font-semibold tabular-nums flex-shrink-0 ${row.entry ? 'text-primary-700' : 'text-secondary-400'}`}>
+                          {row.valueLabel}
                         </span>
                       </div>
-                    );
-                  })}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Expenses summary */}
             <TimesheetExpensesView timesheetId={timesheet.id} />
@@ -1105,6 +1195,18 @@ export default function Timesheets() {
                   <XCircle className="h-3 w-3" />Rejection Reason
                 </div>
                 <div className="text-sm text-red-900">{timesheet.rejectionReason}</div>
+              </div>
+            )}
+
+            {/* Decided from the email link (no sign-in) — say so, and by which address */}
+            {timesheet.approvedVia === 'email_link' && (s === 'approved' || s === 'rejected') && (
+              <div className="text-xs text-secondary-600 flex items-center gap-1.5" data-testid="timesheet-decision-source">
+                <Info className="h-3 w-3 text-secondary-500" />
+                {s === 'approved' ? 'Approved' : 'Rejected'} via the email link
+                {timesheet.approvedByEmail ? ` by ${timesheet.approvedByEmail}` : ''}
+                {s === 'approved' && timesheet.approvedAt
+                  ? ` on ${new Date(timesheet.approvedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                  : ''}
               </div>
             )}
 
@@ -1234,7 +1336,7 @@ export default function Timesheets() {
     const pEnd = new Date(timesheet.periodEnd).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 
     return (
-      <div className={`flex items-center gap-3 px-4 py-3 border-b hover:bg-muted/30 transition-colors ${STATUS_LEFT[s] ? `border-l-4 ${STATUS_LEFT[s]}` : ''}`}>
+      <div id={`timesheet-${timesheet.id}`} className={`flex items-center gap-3 px-4 py-3 border-b hover:bg-muted/30 transition-colors ${STATUS_LEFT[s] ? `border-l-4 ${STATUS_LEFT[s]}` : ''}`}>
         <div className="flex-1 min-w-0">
           {!isWorker && <span className="text-sm font-medium">{timesheet.worker?.firstName} {timesheet.worker?.lastName} · </span>}
           <span className="text-sm text-muted-foreground">{pStart} – {pEnd}</span>
@@ -1729,6 +1831,20 @@ export default function Timesheets() {
             </div>
           )}
         </div>
+
+        {/* Pinned to one timesheet by the approval email's link */}
+        {openTimesheetId && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm" data-testid="notice-open-timesheet">
+            <span>
+              {timesheetListData && !isLoadingTimesheets && timesheets.length === 0
+                ? "That timesheet isn't available to your account."
+                : 'Showing the timesheet from your email link.'}
+            </span>
+            <Button variant="outline" size="sm" onClick={() => setOpenTimesheetId(null)} data-testid="button-show-all-timesheets">
+              Show all timesheets
+            </Button>
+          </div>
+        )}
 
         {/* Own timesheets list (extracted so it can be used inside the tab and standalone) */}
         {(() => {

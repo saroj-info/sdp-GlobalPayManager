@@ -22,6 +22,7 @@ function parseQuery(req: any): TimesheetListQuery {
     page: toPositiveInt(q.page, 1),
     pageSize: Math.min(MAX_PAGE_SIZE, toPositiveInt(q.pageSize, DEFAULT_PAGE_SIZE)),
     status: q.status ? String(q.status) : undefined,
+    id: q.id ? String(q.id) : undefined,
     search: q.search ? String(q.search).trim() || undefined : undefined,
     countryId: q.countryId ? String(q.countryId) : undefined,
     businessId: q.businessId ? String(q.businessId) : undefined,

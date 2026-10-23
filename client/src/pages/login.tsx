@@ -10,7 +10,20 @@ import { useLocation, Link } from "wouter";
 import { CheckCircle, AlertCircle, Info, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
+// Where to go after a successful sign-in (`?redirect=`), set by AuthenticatedLayout when a
+// visitor who is not signed in opens a protected page, e.g. from an email link. Only a path
+// on this site is accepted: no absolute or protocol-relative URL can send users elsewhere.
+export function sanitizeRedirect(raw: string | null): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return null;
+  if (raw.startsWith('/login')) return null;
+  return raw;
+}
+
 export default function Login() {
+  const [redirectTo] = useState<string | null>(() => {
+    try { return sanitizeRedirect(new URLSearchParams(window.location.search).get('redirect')); } catch { return null; }
+  });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -43,8 +56,8 @@ export default function Login() {
       params.has('verification_error') ||
       params.get('session') === 'expired';
     if (cameFromAuthEvent) return;
-    setLocation('/dashboard');
-  }, [authLoading, isAuthenticated, setLocation]);
+    setLocation(redirectTo || '/dashboard');
+  }, [authLoading, isAuthenticated, setLocation, redirectTo]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -66,6 +79,8 @@ export default function Login() {
       if (emailParam) setEmail(emailParam);
     } else if (verificationError === 'error') {
       setVerificationMessage({ type: 'error', text: 'Something went wrong while verifying your email. Please try again or request a new verification email.' });
+    } else if (redirectTo?.startsWith('/timesheets')) {
+      setVerificationMessage({ type: 'info', text: 'Sign in to review the timesheet.' });
     }
 
     if (verified || verificationError || sessionExpired) {
@@ -120,7 +135,7 @@ export default function Login() {
           localStorage.removeItem('pendingSigningToken');
           window.location.href = `/sign/${pendingSigningToken}`;
         } else {
-          window.location.href = '/dashboard';
+          window.location.href = redirectTo || '/dashboard';
         }
       } else {
         const error = await response.json();
@@ -174,7 +189,7 @@ export default function Login() {
       localStorage.removeItem('pendingSigningToken');
       window.location.href = `/sign/${pendingSigningToken}`;
     } else {
-      window.location.href = '/dashboard';
+      window.location.href = redirectTo || '/dashboard';
     }
   };
 

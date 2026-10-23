@@ -1022,6 +1022,10 @@ export const timesheets = pgTable("timesheets", {
   rejectedAt: timestamp("rejected_at"),
   rejectionReason: text("rejection_reason"),
   approvedBy: varchar("approved_by").references(() => users.id),
+  // How the submitted timesheet was decided (approved OR rejected): 'app' = a signed-in user,
+  // 'email_link' = the single-use link in the approval email (modules/timesheet-approval/tokens.ts).
+  approvedVia: varchar("approved_via", { length: 20 }),
+  approvedByEmail: varchar("approved_by_email", { length: 255 }),
   createdBy: varchar("created_by").references(() => users.id), // Track who created (worker or SDP user)
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -1053,6 +1057,27 @@ export const timesheetEntries = pgTable("timesheet_entries", {
 }, (table) => [
   // Composite index to prevent duplicate entries per day and speed up lookups
   index("idx_timesheet_entries_timesheet_date").on(table.timesheetId, table.date),
+]);
+
+// Single-use approve / reject links in the "timesheet awaiting approval" email. Only the sha256
+// of the raw token is stored; the raw token exists in the email link alone. One live token per
+// submission: re-submitting revokes the earlier ones, and a used or revoked token can never act
+// again. Issued and checked by server/modules/timesheet-approval/tokens.ts.
+export const timesheetApprovalTokens = pgTable("timesheet_approval_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  timesheetId: varchar("timesheet_id").references(() => timesheets.id, { onDelete: 'cascade' }).notNull(),
+  tokenHash: varchar("token_hash", { length: 64 }).notNull().unique(),
+  approverEmail: varchar("approver_email", { length: 255 }).notNull(),
+  approverUserId: varchar("approver_user_id").references(() => users.id), // null when no login has that address
+  approverRole: varchar("approver_role", { length: 20 }).notNull(), // 'host_client' | 'business' | 'sdp'
+  submittedAt: timestamp("submitted_at"), // the timesheet's submittedAt this link was issued for
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  usedAction: varchar("used_action", { length: 20 }), // 'approved' | 'rejected'
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_timesheet_approval_tokens_timesheet").on(table.timesheetId),
 ]);
 
 // Timesheet attachments for supporting documents
@@ -1682,6 +1707,9 @@ export type ContractInstance = typeof contractInstances.$inferSelect;
 export type InsertTimesheet = typeof timesheets.$inferInsert;
 export type Timesheet = typeof timesheets.$inferSelect;
 
+export type InsertTimesheetApprovalToken = typeof timesheetApprovalTokens.$inferInsert;
+export type TimesheetApprovalToken = typeof timesheetApprovalTokens.$inferSelect;
+
 export type InsertTimesheetEntry = typeof timesheetEntries.$inferInsert;
 export type TimesheetEntry = typeof timesheetEntries.$inferSelect;
 
@@ -1817,6 +1845,11 @@ export const insertWorkerApprovalSchema = createInsertSchema(workerApprovals).om
   id: true,
   createdAt: true,
   updatedAt: true,
+});
+
+export const insertTimesheetApprovalTokenSchema = createInsertSchema(timesheetApprovalTokens).omit({
+  id: true,
+  createdAt: true,
 });
 
 // Onboarding step schemas
@@ -2060,6 +2093,8 @@ export const insertTimesheetSchema = createInsertSchema(timesheets).omit({
   approvedAt: true,
   rejectedAt: true,
   approvedBy: true,
+  approvedVia: true,
+  approvedByEmail: true,
   createdAt: true,
   updatedAt: true,
 }).extend({

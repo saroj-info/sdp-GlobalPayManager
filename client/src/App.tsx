@@ -48,6 +48,7 @@ import TeamMembers from "@/pages/team-members";
 import InviteBusiness from "@/pages/invite-business";
 import NewClientInvoice from "@/pages/new-client-invoice";
 import InvoiceView from "@/pages/invoice-view";
+import TimesheetApproval from "@/pages/timesheet-approval";
 import PurchaseOrders from "@/pages/purchase-orders";
 import NotFound from "@/pages/not-found";
 import TermsOfService from "@/pages/terms-of-service";
@@ -110,6 +111,7 @@ function Router() {
       <Route path="/invite/business/:token" component={AcceptBusinessInvitation} />
       <Route path="/invite/:token" component={AcceptSdpInvite} />
       <Route path="/invoice/view/:token" component={InvoiceView} />
+      <Route path="/timesheet-approval/:token" component={TimesheetApproval} />
       <Route path="/terms-of-service" component={TermsOfService} />
       <Route path="/privacy-policy" component={PrivacyPolicy} />
       
