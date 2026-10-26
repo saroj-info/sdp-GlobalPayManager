@@ -35,6 +35,8 @@ import { registerDashboardRoutes } from "./modules/dashboard";
 import { registerBusinessProfileRoutes, checkBusinessProfileForContract, businessesService } from "./modules/businesses";
 import { registerBillingTermsRoutes, checkBillingTermsForCreate, checkBillingTermsForUpdate, recordBillingTermsAcceptance, hardDeleteContract } from "./modules/billingTerms";
 import { registerContractLifecycleRoutes } from "./modules/contractLifecycle";
+import { registerQuotesRoutes } from "./modules/quotes";
+import { registerFxRoutes } from "./modules/fx";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -7674,6 +7676,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // (end date only) and host client confirmation. Dedicated endpoints because
   // PUT /api/contracts/:id needs the whole row.
   registerContractLifecycleRoutes(app, authMiddleware);
+
+  // Quotes (SDP cost quotes) and the USD exchange rates they use. SDP users
+  // only; the fee schedule needs a super admin / admin.
+  registerFxRoutes(app, authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']));
+  registerQuotesRoutes(
+    app,
+    authMiddleware,
+    requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']),
+    requireSdpRole(['sdp_super_admin', 'sdp_admin']),
+  );
 
   // Convenient endpoint for workers to submit timesheets
   app.patch('/api/timesheets/:id/submit', authMiddleware, async (req: any, res) => {

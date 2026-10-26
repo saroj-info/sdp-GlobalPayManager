@@ -23,6 +23,8 @@ import WorkerInvoices from "@/pages/worker-invoices";
 import Benefits from "@/pages/benefits";
 import Admin from "@/pages/admin";
 import PayItems from "@/pages/pay-items";
+import Quotes from "@/pages/quotes";
+import QuoteEditor from "@/pages/quote-editor";
 import UserManagement from "@/pages/user-management";
 import BusinessUsers from "@/pages/business-users";
 import SdpBusinesses from "@/pages/sdp-businesses";
@@ -183,6 +185,18 @@ function Router() {
       <Route path="/platform-config" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;
         return <AuthenticatedLayout><Admin /></AuthenticatedLayout>;
+      }} />
+      <Route path="/quotes/new" component={() => {
+        if (!authReady) return <AuthLoadingSkeleton />;
+        return <AuthenticatedLayout><QuoteEditor /></AuthenticatedLayout>;
+      }} />
+      <Route path="/quotes/:id" component={() => {
+        if (!authReady) return <AuthLoadingSkeleton />;
+        return <AuthenticatedLayout><QuoteEditor /></AuthenticatedLayout>;
+      }} />
+      <Route path="/quotes" component={() => {
+        if (!authReady) return <AuthLoadingSkeleton />;
+        return <AuthenticatedLayout><Quotes /></AuthenticatedLayout>;
       }} />
       <Route path="/pay-items" component={() => {
         if (!authReady) return <AuthLoadingSkeleton />;

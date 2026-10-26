@@ -479,6 +479,7 @@ import { ObjectUploader } from "@/components/ObjectUploader";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { VariableHelper } from "@/components/VariableHelper";
 import { BillingTermsAdminPanel } from "@/components/admin/billing-terms-admin-panel";
+import { QuoteFeeDefaultsPanel } from "@/components/admin/quote-fee-defaults-panel";
 
 const templateFormSchema = z.object({
   name: z.string().min(1, "Template name is required"),
@@ -1496,6 +1497,7 @@ Use variables from the helper panel on the right to customize your template.`}
 
         <TabsContent value="settings" className="space-y-6">
           <BillingTermsAdminPanel />
+          <QuoteFeeDefaultsPanel />
         </TabsContent>
       </Tabs>
 

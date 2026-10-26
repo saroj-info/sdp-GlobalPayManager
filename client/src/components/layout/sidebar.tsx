@@ -99,6 +99,7 @@ export function Sidebar() {
   };
 
   const sdpInternalNavigation = [
+    { name: 'Quotes', href: '/quotes', icon: 'fas fa-money-check-alt' },
     { name: 'Payslips', href: '/payslips', icon: 'fas fa-receipt' },
     { name: 'Invoices', href: '/sdp-invoices', icon: 'fas fa-file-invoice-dollar' },
     { name: 'Reports', href: '/reports', icon: 'fas fa-chart-bar' },

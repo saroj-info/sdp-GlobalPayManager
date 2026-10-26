@@ -1,0 +1,286 @@
+SDP GLOBAL PAY — QUOTES FEATURE
+What was added on 26 October 2026 and how it works
+=====================================================
+
+STATUS
+------
+Built and verified (type-check, engine checks, browser checks, and a real-server
+check against the database). The schema was pushed on 26 October 2026 to the
+database named in .env. Before quoting customers, enter SDP's real fee schedule
+in Templates -> System Settings (see section 9).
+
+
+1. WHAT IT IS
+-------------
+A quote is the cost of hiring ONE worker in ONE country for a customer:
+
+   gross pay
+ + statutory and employer costs (superannuation, payroll tax, workers' comp, ...)
+ = total employer cost
+ + SDP fees
+ = total quote
+
+Every figure is shown in the country's local currency AND in US dollars, on the
+input side and in the preview, at the exchange rate recorded on the quote.
+Quotes are saved, numbered (Q-2026-0001, Q-2026-0002, ...), listed, duplicated,
+printed to PDF and can be marked Draft / Sent / Accepted / Declined.
+
+The fields a quote stores use the same names and values as a contract
+(engagement type, Internal Work / Host Client Work, billing mode, rate type,
+rate, currency, country), so a quote can later be turned into a contract.
+That "convert to contract" button is NOT built yet; the groundwork is.
+
+
+2. WHO CAN USE IT
+-----------------
+SDP internal users only (super admin, admin and agent). Business users, workers
+and host clients never see the menu item, and the pages and API refuse them.
+Editing the default SDP fee schedule needs a super admin or admin.
+
+
+3. WHERE TO FIND IT
+-------------------
+- Sidebar -> "Quotes" (first item in the SDP section) -> list of saved quotes.
+- "New quote" button -> the editor (/quotes/new). Opening a row -> /quotes/<id>.
+- Templates -> System Settings -> "Quote SDP fee defaults" -> the fee schedule.
+
+
+4. THE EDITOR, LEFT SIDE (what you enter)
+-----------------------------------------
+Quote details
+  Title, Prepared for (free text), Valid until, optional link to a business,
+  Status.
+
+Engagement
+  Country ............ one of the countries set up in the system (AU, NZ, US,
+                       UK, SG, IE, IN, PH, CA, JP). The currency follows it.
+  State / province ... for countries with state rules (Australia's eight
+                       states, five US states). A new Australian quote starts
+                       on New South Wales so state payroll tax is quoted.
+  Engagement category  Employment
+                       Independent Contractor (Standard Contractor)
+                       Independent Contractor (Contractor of Record Service)
+  Engagement type .... the same list the Create Contract wizard shows for the
+                       country: Permanent, Fixed Term, Casual Employee,
+                       Zero-Hours, At-Will, On-Call, Seasonal, Part-Time,
+                       Contractor, Gig Worker. The list depends on the
+                       country and on the category.
+  Where will the worker work?  Internal Work / Host Client Work.
+  Does SDP Global Pay act as billing agent?  Yes / No. Only asked for Host
+                       Client Work, because SDP's fees differ when SDP bills
+                       the host client itself.
+
+Pay and employer costs
+  Pay basis .......... Annual salary, Hourly rate or Daily rate.
+  Rate ............... in the local currency; the USD equivalent is shown
+                       next to it. Hourly / daily rates also take hours (or
+                       days) per week and weeks per year, which the quote uses
+                       to work out the annual figure.
+  Exchange rate ...... "AUD per 1 USD" (for example 1.52). Filled in
+                       automatically from the daily rate; type over it to use
+                       your own rate; "Use today's rate" puts the daily rate
+                       back. The source and date are printed on the quote.
+  Annual / monthly gross pay strip, in both currencies.
+  "Employer is above the payroll-tax threshold" switch (see section 6).
+  Statutory and employer cost items: one row per item with a tick (include
+  or not), description, type, rate and the amount per year in both
+  currencies. Items can be edited, removed or added.
+
+SDP fees and quote notes
+  Fee lines (tick, description, type, rate or USD amount, who pays, amount
+  per year in both currencies) and free-text notes that print on the quote.
+
+
+5. THE EDITOR, RIGHT SIDE (the preview)
+---------------------------------------
+The preview is the quote as the customer will see it, recalculated on every
+keystroke from the same figures as the left side, so the two can never
+disagree. It shows the quote header (number, country and state, engagement,
+work location, billing, pay basis, exchange rate with source and date, valid
+until), then Monthly and Annual columns for:
+  Gross pay
+  each statutory / employer cost item that applies, with its basis
+  Total employer cost (and on-costs as a % of pay)
+  each SDP fee line, with its basis and who pays it
+  Total SDP fees
+  Total quote per year and per month
+  Loaded cost per hour / per day (hourly and daily quotes only)
+followed by the notes and a one-line disclaimer. The "PDF" button downloads
+the same content as an A4 PDF in the house style (also available from the
+list without opening the quote).
+
+
+6. HOW THE NUMBERS ARE WORKED OUT
+---------------------------------
+Gross pay
+  Annual salary as entered; hourly = rate x hours per week x weeks per year;
+  daily = rate x days per week x weeks per year. Monthly = annual / 12.
+
+Statutory and employer cost items
+  Seeded automatically from the country cost data already used by the
+  Resources page calculator, plus the state rules kept under Templates ->
+  Jurisdiction Data:
+    Employment ................ the employer on-costs for the country
+                                (e.g. Australia: superannuation 11.5%,
+                                workers' compensation 1.2%, insurance and
+                                admin 1%).
+    Standard Contractor ....... the contractor on-costs (e.g. platform and
+                                admin 1%, insurances 1%, leave / allowance
+                                buffer 8%).
+    Contractor of Record ...... the contractor on-costs PLUS the employer
+                                items that apply when SDP engages the worker
+                                (Australia: superannuation).
+  State payroll tax (and US state unemployment insurance) is added for ALL
+  THREE categories; untick it on a quote where it should not apply.
+  Each item is one of: % of pay, % up to a cap, % above a threshold, or a
+  flat amount per year.
+
+  Payroll tax and the threshold switch
+  Payroll-tax thresholds (e.g. A$1,000,000 in NSW) apply to an employer's
+  TOTAL annual wages, not to one worker. Applying them to a single salary
+  always gave zero, which is why payroll tax "was not being calculated".
+  The switch "Employer is above the payroll-tax threshold" is ON by default:
+  "% above threshold" items are then applied to the whole wage (NSW: 5.45% of
+  A$120,000 = A$6,540). Switch it off for an employer below the threshold and
+  the threshold is subtracted first.
+
+SDP fees
+  Two kinds of line: "% of pay" (a percentage of annual gross pay) and
+  "Fixed / month" (a USD amount per month, converted to local currency at the
+  quote's rate). Each line records who pays it: the business or the host
+  client (host client is only offered for Host Client Work). New quotes start
+  from the default schedule for the chosen category and billing-agent answer
+  (section 9); every line can be changed on the quote.
+
+Exchange rate
+  The server fetches the day's USD rates from open.er-api.com (a free public
+  service, no key), keeps them for a day and stores each successful fetch. If
+  the service is unreachable the last stored rates are used and marked "last
+  known"; if nothing was ever stored the editor asks for a manual rate. The
+  rate, its source and its date are saved with the quote, so an old quote
+  keeps the rate it was prepared with. USD = local amount / rate.
+
+Totals
+  Total employer cost = gross pay + statutory items that apply.
+  Total SDP fees = fee lines that apply (split into paid-by-business and
+  paid-by-host-client).
+  Total quote = employer cost + SDP fees, per year and per month.
+  All rounding is to 2 decimals (0 for JPY and VND). The server recomputes
+  the totals on every save with the same calculation the preview uses.
+
+
+7. SEEDING AND "RELOAD DEFAULTS"
+--------------------------------
+Changing the country, state, category or billing-agent answer reloads the
+default cost items and fee lines, but only while you have not edited them.
+Once a line has been edited, the quote keeps your lines and shows a "Reload
+defaults" link instead of overwriting them. The same applies to the exchange
+rate once typed by hand ("Use today's rate" goes back to automatic).
+
+
+8. SAVING, NUMBERS, LIST, STATUS
+--------------------------------
+- Save stores the quote and gives it the next number for the year
+  (Q-<year>-<4 digits>); numbers never repeat, even when two people save at
+  the same moment.
+- The list shows number, title and client, country and state, engagement,
+  gross pay per year and total per year (both currencies), status and last
+  update, with search (number, title, client), status and country filters.
+  Row menu: Open, Duplicate, Download PDF, Delete.
+- Duplicate makes a new Draft with the next number and "(copy)" in the title.
+- Status is set by hand: Draft, Sent, Accepted, Declined. A Draft or Sent
+  quote whose "valid until" date has passed is shown as Expired.
+- Delete removes the quote permanently (confirmation asked).
+
+
+9. ADMIN: DEFAULT SDP FEE SCHEDULE
+----------------------------------
+Templates -> System Settings -> "Quote SDP fee defaults" (super admin / admin).
+Pick a category tab and set the "SDP acts as billing agent" switch; the rows
+shown are the fee lines a new quote of that kind starts with. Add, edit or
+remove rows and press "Save all fee defaults" (it saves every combination at
+once). "Load suggested placeholders" fills the current combination with
+indicative figures taken from the public pricing page (Employer of Record
+USD 399 / month, Contractor of Record USD 349 / month, Contractor management
+USD 49 / month, plus a 2% "billing agent fee" paid by the host client when
+SDP is the billing agent). These are placeholders: replace them with SDP's
+real schedule before quoting customers. Until a schedule is saved, new quotes
+start with no fee lines and the editor says so.
+
+
+10. RELATIONSHIP TO CONTRACTS
+-----------------------------
+A quote stores, with the contract's own names: country, engagement type,
+contractor compliance (blank = Employment, No = Standard Contractor,
+Yes = Contractor of Record), "is for client" (Host Client Work), billing mode
+(SDP Global Pay as Billing Agent / business invoices the host client /
+internal), rate type, rate and currency. The engagement-type list itself is
+now one shared list used by both the quote editor and the Create Contract
+wizard. A later "Create contract from this quote" action can prefill the
+wizard from these fields; it is not part of this release.
+
+
+11. BEFORE FIRST USE
+--------------------
+1. Schema: done for the database in .env (tables quotes, quote_fee_defaults,
+   fx_rate_snapshots; status enum). Any other environment needs
+   `npm run db:push` once.
+2. Enter the real SDP fee schedule (section 9).
+3. Check the state rules under Templates -> Jurisdiction Data: the built-in
+   Australian rates and thresholds are examples marked "edit to current".
+4. Production must be able to reach https://open.er-api.com for live rates;
+   otherwise users enter the rate by hand.
+
+
+12. KNOWN LIMITS AND ASSUMPTIONS
+--------------------------------
+- Exchange rates are indicative (daily, free service), not for invoicing.
+- Statutory rates are planning figures; payroll-tax grouping, regional rates
+  and industry-specific workers' compensation are not modelled.
+- Contractor of Record extras are defined for Australia only (superannuation);
+  other countries get the contractor on-costs plus state items until SDP
+  specifies more.
+- Fees are either % of gross pay or a fixed USD amount per month; there is no
+  "% of total employer cost" line type.
+- Quotes can be prepared for the ten countries set up in the system (the
+  Resources calculator covers seventeen).
+- No "send quote" email and no country-based restriction between SDP agents.
+
+
+13. TECHNICAL SUMMARY (for developers)
+--------------------------------------
+Shared
+  shared/quotes.ts ............. vocabulary and labels, computeQuote engine,
+                                 default cost lines, contract field mapping,
+                                 Zod schemas (saveQuoteSchema,
+                                 saveQuoteFeeDefaultsSchema), wire types.
+  shared/engagementTypes.ts .... getEngagementTypes(countryId, workerType),
+                                 moved out of the contract wizard.
+  shared/schema.ts ............. tables quotes (cost lines, fee lines and
+                                 totals as JSONB), quote_fee_defaults,
+                                 fx_rate_snapshots; enum quote_status.
+Server (SDP roles only; fee schedule super admin / admin)
+  server/modules/quotes/ ....... GET /api/quotes/defaults?countryId&category
+                                 &billingAgent&jurisdiction, GET /api/quotes
+                                 (page, pageSize, search, status, countryId,
+                                 sortBy), POST /api/quotes, GET / PUT / DELETE
+                                 /api/quotes/:id, POST /api/quotes/:id/duplicate,
+                                 GET / PUT /api/admin/quote-fee-defaults.
+                                 Numbering under a Postgres advisory lock.
+  server/modules/fx/ ........... GET /api/fx/rates (open.er-api.com, 24 h
+                                 memo, snapshot fallback, 503 FX_UNAVAILABLE).
+  Error codes: QUOTE_NOT_FOUND, QUOTE_INVALID (+ issues), COUNTRY_NOT_FOUND,
+  COUNTRY_UNSUPPORTED, FEE_DEFAULTS_INVALID, FX_UNAVAILABLE.
+Client
+  client/src/pages/quotes.tsx .............. list
+  client/src/pages/quote-editor.tsx ........ editor (/quotes/new, /quotes/:id)
+  client/src/components/quotes/ ............ engagement-card, pay-card,
+                                             fees-notes-card, cost-lines-table,
+                                             fee-lines-table,
+                                             quote-preview-panel, money
+                                             (MoneyPair), quote-draft
+  client/src/components/admin/quote-fee-defaults-panel.tsx
+  client/src/lib/generateQuotePdf.ts ....... PDF (jsPDF + autotable)
+  App.tsx routes, sidebar entry, admin.tsx mount, types/api.ts exports.
+Documentation: CLAUDE.md (glossary "Quotes"), server/CLAUDE.md (module
+registry, tables, error codes), client/CLAUDE.md ("Quotes (SDP cost quotes)").

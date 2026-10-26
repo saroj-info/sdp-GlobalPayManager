@@ -131,3 +131,7 @@ export interface AuthUser extends Omit<User, 'country'> {
     aiRoleSuggestEnabled?: boolean;
   };
 }
+
+// Quotes (SDP cost quotes) — see client/CLAUDE.md → Quotes
+export type { Quote, QuoteFeeDefault, FxRateSnapshot } from "@shared/schema";
+export type { QuoteListResult, QuoteDefaultsResponse, FxRatesResponse } from "@shared/quotes";

@@ -16,6 +16,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import type { QuoteCostLine, QuoteFeeLine, QuoteTotals } from "./quotes";
 
 // Session storage table.
 // (IMPORTANT) This table is mandatory for Replit Auth, don't drop it.
@@ -482,6 +483,10 @@ export const billingModeEnum = pgEnum('billing_mode', ['direct', 'invoice_throug
 
 export const contracts = pgTable("contracts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // Legacy, unused: left in the database by a removed "client quotes" feature that this repo never
+  // contained (every value is NULL). Declared here so `db:push` does not try to drop it; the current
+  // quotes feature lives in the `quotes` table (shared/quotes.ts).
+  sourceQuoteId: varchar("source_quote_id"),
   contractName: varchar("contract_name"), // human-friendly name shown in dropdowns/lists (nullable)
   businessId: varchar("business_id").references(() => businesses.id).notNull(),
   workerId: varchar("worker_id").references(() => workers.id).notNull(),
@@ -909,6 +914,96 @@ export type BillingTermsVersion = typeof billingTermsVersions.$inferSelect;
 export type InsertBillingTermsVersion = typeof billingTermsVersions.$inferInsert;
 export type ContractBillingTermsAcceptance = typeof contractBillingTermsAcceptances.$inferSelect;
 export type InsertContractBillingTermsAcceptance = typeof contractBillingTermsAcceptances.$inferInsert;
+
+// ─── Quotes (SDP cost quotes) ────────────────────────────────────────────────
+// One worker in one country, local currency + USD. `costLines` / `feeLines` are
+// JSONB documents validated by shared/quotes.ts; `totals` is a snapshot the
+// server recomputes on every save. The engagement / billing / rate columns use
+// the contract vocabulary so a quote can later be converted into a contract.
+// Server: modules/quotes. Admin fee schedule: quote_fee_defaults.
+export const quoteStatusEnum = pgEnum('quote_status', ['draft', 'sent', 'accepted', 'declined']);
+
+export const quotes = pgTable("quotes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  quoteNumber: varchar("quote_number", { length: 20 }).notNull().unique(), // Q-2026-0001
+  quoteYear: integer("quote_year").notNull(),
+  quoteSeq: integer("quote_seq").notNull(),
+  title: varchar("title", { length: 160 }).notNull(),
+  status: quoteStatusEnum("status").notNull().default('draft'),
+  countryId: varchar("country_id").references(() => countries.id).notNull(),
+  currency: varchar("currency", { length: 3 }).notNull(), // the country's currency at save time
+  jurisdiction: varchar("jurisdiction", { length: 120 }), // state / province name (jurisdictions.stateProvince)
+  engagementCategory: varchar("engagement_category", { length: 30 }).notNull(), // employment | contractor_standard | contractor_of_record
+  employmentType: employmentTypeEnum("employment_type").notNull(),
+  contractorCompliance: boolean("contractor_compliance"), // null (employment) | false (standard) | true (contractor of record)
+  isForClient: boolean("is_for_client").notNull().default(false), // Internal Work (false) | Host Client Work (true)
+  billingMode: billingModeEnum("billing_mode").notNull().default('direct'),
+  sdpIsBillingAgent: boolean("sdp_is_billing_agent").notNull().default(false),
+  rateType: rateTypeEnum("rate_type").notNull(),
+  rate: decimal("rate", { precision: 12, scale: 2 }).notNull(), // local currency
+  hoursPerWeek: decimal("hours_per_week", { precision: 5, scale: 2 }).notNull().default('38'),
+  daysPerWeek: integer("days_per_week").notNull().default(5),
+  weeksPerYear: integer("weeks_per_year").notNull().default(52),
+  aboveThreshold: boolean("above_threshold").notNull().default(true), // employer above the payroll-tax threshold
+  fxLocalPerUsd: decimal("fx_local_per_usd", { precision: 18, scale: 8 }).notNull(), // local units per 1 USD
+  fxRateSource: varchar("fx_rate_source", { length: 40 }).notNull(), // 'open.er-api.com' | 'manual'
+  fxRateAsOf: timestamp("fx_rate_as_of"),
+  costLines: jsonb("cost_lines").$type<QuoteCostLine[]>().notNull().default([]),
+  feeLines: jsonb("fee_lines").$type<QuoteFeeLine[]>().notNull().default([]),
+  totals: jsonb("totals").$type<QuoteTotals>().notNull(),
+  notes: text("notes"),
+  clientName: varchar("client_name", { length: 200 }), // "Prepared for"
+  businessId: varchar("business_id").references(() => businesses.id),
+  validUntil: timestamp("valid_until"),
+  convertedContractId: varchar("converted_contract_id").references(() => contracts.id), // reserved for a later convert action
+  createdByUserId: varchar("created_by_user_id").references(() => users.id).notNull(),
+  updatedByUserId: varchar("updated_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uniq_quotes_year_seq").on(table.quoteYear, table.quoteSeq),
+  index("idx_quotes_country").on(table.countryId),
+  index("idx_quotes_status").on(table.status),
+  index("idx_quotes_updated").on(table.updatedAt),
+]);
+
+// Admin-maintained default SDP fee lines per engagement category × billing agent.
+export const quoteFeeDefaults = pgTable("quote_fee_defaults", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  engagementCategory: varchar("engagement_category", { length: 30 }).notNull(),
+  sdpIsBillingAgent: boolean("sdp_is_billing_agent").notNull().default(false),
+  description: varchar("description", { length: 200 }).notNull(),
+  lineType: varchar("line_type", { length: 30 }).notNull(), // 'percentage_of_pay' | 'fixed_amount' (USD per month)
+  rate: decimal("rate", { precision: 8, scale: 4 }),
+  amountUsd: decimal("amount_usd", { precision: 12, scale: 2 }),
+  paidBy: varchar("paid_by", { length: 20 }).notNull().default('business'), // 'business' | 'host_client'
+  sortOrder: integer("sort_order").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  updatedByUserId: varchar("updated_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_quote_fee_defaults_key").on(table.engagementCategory, table.sdpIsBillingAgent),
+]);
+
+// One row per successful exchange-rate fetch (modules/fx). The latest row is
+// the fallback when the provider is unreachable.
+export const fxRateSnapshots = pgTable("fx_rate_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  base: varchar("base", { length: 3 }).notNull().default('USD'),
+  rates: jsonb("rates").$type<Record<string, number>>().notNull(),
+  source: varchar("source", { length: 60 }).notNull(),
+  providerAsOf: timestamp("provider_as_of"),
+  fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_fx_snapshots_fetched").on(table.fetchedAt),
+]);
+
+export type Quote = typeof quotes.$inferSelect;
+export type InsertQuote = typeof quotes.$inferInsert;
+export type QuoteFeeDefault = typeof quoteFeeDefaults.$inferSelect;
+export type InsertQuoteFeeDefault = typeof quoteFeeDefaults.$inferInsert;
+export type FxRateSnapshot = typeof fxRateSnapshots.$inferSelect;
 
 // Append-only audit log of worker profile edits. Same shape/purpose as
 // contractChangeLog. Rendered as "Change History" on the workforce details
@@ -1919,6 +2014,8 @@ export const insertContractSchema = createInsertSchema(contracts).omit({
   hostClientConfirmationDocumentPath: true,
   hostClientConfirmationUpdatedAt: true,
   hostClientConfirmationUpdatedByUserId: true,
+  // Legacy empty column (see the contracts table); never accepted from a payload.
+  sourceQuoteId: true,
 }).extend({
   rate: z.union([z.string(), z.number()]).refine(
     (val) => val !== '' && val !== null && val !== undefined && !isNaN(Number(val)),

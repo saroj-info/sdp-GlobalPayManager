@@ -24,6 +24,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { describeMissingBusinessDetails, getMissingBusinessDetails } from "@shared/businessProfile";
 import { requiresBillingTerms, type BillingTermsAcceptanceInput, type BillingTermsAcceptanceView, type RenderedBillingTerms } from "@shared/billingTerms";
 import { BillingTermsDialog, BILLING_TERMS_CURRENT_KEY } from "@/components/modals/billing-terms-dialog";
+import { getEngagementTypes } from "@shared/engagementTypes";
 
 interface ContractWizardModalProps {
   open: boolean;
@@ -954,99 +955,12 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
 
   const selectedCountry = countries.find(c => c.id === formData.countryId);
 
-  // Get country-specific engagement types
-  const getEngagementTypes = (countryId: string) => {
-    const selectedWorker = workers.find(w => w.id === formData.workerId);
-    const wType = selectedWorker?.workerType;
-
-    // Third-party worker — only one option
-    if (wType === 'third_party_worker') {
-      return [{ value: 'third_party_worker', label: '3rd Party Business Worker', description: 'Worker from another business' }];
-    }
-
-    // Contractor — only contractor-category types
-    if (wType === 'contractor') {
-      const contractorTypes = [
-        { value: 'contractor', label: 'Contractor', description: 'Independent services' },
-      ];
-      if (countryId === 'us') {
-        contractorTypes.push({ value: 'gig_worker', label: 'Gig Worker', description: 'Independent contractor for specific tasks' });
-      }
-      return contractorTypes;
-    }
-
-    // Employee — only employment-category types
-    if (wType === 'employee') {
-      const employeeTypes = [
-        { value: 'permanent', label: 'Permanent', description: 'Ongoing employment' },
-        { value: 'fixed_term', label: 'Fixed Term', description: 'Time-limited contract' },
-      ];
-      switch (countryId) {
-        case 'au':
-          employeeTypes.push({ value: 'casual', label: 'Casual Employee', description: 'Flexible hours with casual loading' });
-          break;
-        case 'nz':
-          employeeTypes.push({ value: 'casual', label: 'Casual Employee', description: 'Flexible employment' });
-          break;
-        case 'uk':
-        case 'gb':
-          employeeTypes.push({ value: 'zero_hours', label: 'Zero-Hours Contract', description: 'No guaranteed hours' });
-          break;
-        case 'ph':
-          employeeTypes.push({ value: 'casual', label: 'Casual Employee', description: 'Flexible engagement' });
-          break;
-        case 'us':
-          employeeTypes.push({ value: 'at_will', label: 'At-Will Employment', description: 'Employment at will of either party' });
-          break;
-        case 'ca':
-          employeeTypes.push({ value: 'on_call', label: 'On-Call Employee', description: 'Called to work as needed' });
-          employeeTypes.push({ value: 'seasonal', label: 'Seasonal Worker', description: 'Temporary seasonal employment' });
-          break;
-        case 'hk':
-        case 'sg':
-          employeeTypes.push({ value: 'part_time', label: 'Part-Time Employee', description: 'Reduced hours employment' });
-          break;
-        case 'jp':
-          employeeTypes.push({ value: 'part_time', label: 'Part-Time (パートタイム)', description: 'Reduced hours employment' });
-          break;
-      }
-      return employeeTypes;
-    }
-
-    // No worker selected yet — show all types so the list isn't empty
-    const allTypes = [
-      { value: 'contractor', label: 'Contractor', description: 'Independent services' },
-      { value: 'permanent', label: 'Permanent', description: 'Ongoing employment' },
-      { value: 'fixed_term', label: 'Fixed Term', description: 'Time-limited contract' },
-    ];
-    switch (countryId) {
-      case 'au':
-      case 'nz':
-      case 'ph':
-        allTypes.push({ value: 'casual', label: 'Casual Employee', description: 'Flexible hours' });
-        break;
-      case 'uk':
-      case 'gb':
-        allTypes.push({ value: 'zero_hours', label: 'Zero-Hours Contract', description: 'No guaranteed hours' });
-        break;
-      case 'us':
-        allTypes.push({ value: 'at_will', label: 'At-Will Employment', description: 'Employment at will' });
-        allTypes.push({ value: 'gig_worker', label: 'Gig Worker', description: 'Independent contractor for specific tasks' });
-        break;
-      case 'ca':
-        allTypes.push({ value: 'on_call', label: 'On-Call Employee', description: 'Called to work as needed' });
-        allTypes.push({ value: 'seasonal', label: 'Seasonal Worker', description: 'Temporary seasonal employment' });
-        break;
-      case 'hk':
-      case 'sg':
-      case 'jp':
-        allTypes.push({ value: 'part_time', label: 'Part-Time Employee', description: 'Reduced hours employment' });
-        break;
-    }
-    return allTypes;
-  };
-
-  const engagementTypes = getEngagementTypes(formData.countryId);
+  // Country-specific engagement types — one list shared with the Quotes editor
+  // (shared/engagementTypes.ts). Labels are quoted by the AI primers; edit them there.
+  const engagementTypes = getEngagementTypes(
+    formData.countryId,
+    workers.find((w: any) => w.id === formData.workerId)?.workerType ?? null,
+  );
 
   // Enhanced job description suggestions based on role titles
   const getJobDescriptionSuggestion = (roleTitle: string) => {
