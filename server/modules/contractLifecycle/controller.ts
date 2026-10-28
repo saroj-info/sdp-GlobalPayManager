@@ -5,6 +5,8 @@
  *   PUT  /api/contracts/:id/host-client-confirmation
  *   PUT  /api/contracts/host-client-confirmation/document          (SDP or business user: ACL on an uploaded file)
  *   GET  /api/contracts/:id/host-client-confirmation/document-url
+ *   GET  /api/contracts/:id/deletion-check                         (blockers, what cascades, signing state)
+ *   DELETE /api/contracts/:id                                      (204; 409 CONTRACT_HAS_ACTIVITY with blockers)
  */
 import type { Express, RequestHandler } from "express";
 import { storage } from "../../storage";
@@ -72,6 +74,33 @@ export function registerContractLifecycleRoutes(app: Express, authMiddleware: Re
     } catch (error: any) {
       console.error("[contract-lifecycle] host-client-confirmation failed:", error?.message ?? String(error));
       return res.status(500).json({ message: "Failed to save the host client confirmation" });
+    }
+  });
+
+  app.get("/api/contracts/:id/deletion-check", authMiddleware, async (req: any, res) => {
+    try {
+      const user = toAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const result = await svc.getDeletionCheck(user, req.params.id);
+      if (!result.ok) return sendError(res, result);
+      res.setHeader("Cache-Control", "no-store");
+      return res.json(result.data);
+    } catch (error: any) {
+      console.error("[contract-lifecycle] deletion-check failed:", error?.message ?? String(error));
+      return res.status(500).json({ message: "Failed to check the contract" });
+    }
+  });
+
+  app.delete("/api/contracts/:id", authMiddleware, async (req: any, res) => {
+    try {
+      const user = toAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const result = await svc.deleteContract(user, req.params.id);
+      if (!result.ok) return sendError(res, result);
+      return res.status(204).end();
+    } catch (error: any) {
+      console.error("[contract-lifecycle] delete failed:", error?.message ?? String(error));
+      return res.status(500).json({ message: "Failed to delete the contract" });
     }
   });
 

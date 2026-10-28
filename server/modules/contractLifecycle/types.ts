@@ -3,6 +3,7 @@
  * confirmation). The service returns tagged results like the other modules.
  */
 import type { Contract } from "@shared/schema";
+import type { ContractDeleteBlockers, ContractDeletionCheck } from "@shared/contractLifecycle";
 
 export interface AuthUser {
   id: string;
@@ -32,4 +33,30 @@ export interface ExtendResult {
 
 export interface ConfirmationResult {
   contract: Contract;
+}
+
+// ---- Deleting a contract -------------------------------------------------------
+
+export interface ContractActivityCounts extends ContractDeleteBlockers {
+  /** Cascades with the contract; shown in the confirmation, never a blocker. */
+  purchaseOrders: number;
+}
+
+export type DeletionCheck = ContractDeletionCheck;
+
+export interface ClearedAssociation {
+  workerId: string;
+  businessId: string;
+  status: string;
+}
+
+export type DeleteOutcome =
+  | { outcome: "deleted"; clearedAssociations: ClearedAssociation[] }
+  | { outcome: "missing" }
+  /** Postgres refused the delete (a non-cascading row appeared after the check). */
+  | { outcome: "in_use" };
+
+export interface DeleteContractResult {
+  deleted: true;
+  id: string;
 }

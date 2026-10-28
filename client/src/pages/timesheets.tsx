@@ -37,7 +37,18 @@ import {
 } from 'lucide-react';
 import { useAuth } from "@/hooks/useAuth";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, extractApiErrorMessage } from "@/lib/queryClient";
+import { generatePeriodDates, blankEntry, periodKeyOf, toDayKey, entriesFromSaved } from "@/lib/timesheetDraft";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   formatPaymentDate,
@@ -87,25 +98,12 @@ type TimesheetFormData = z.infer<typeof timesheetSchema>;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function generatePeriodDates(start: string, end: string): { dates: Date[]; isCapped: boolean } {
-  const dates: Date[] = [];
-  let cur = new Date(start);
-  const endDate = new Date(end);
-  let count = 0;
-  while (cur <= endDate && count < 31) {
-    dates.push(new Date(cur));
-    cur = addDays(cur, 1);
-    count++;
-  }
-  return { dates, isCapped: count >= 31 && cur <= endDate };
-}
+// generatePeriodDates / blankEntry live in lib/timesheetDraft.ts (shared with edit mode).
 
-function blankEntry(date: Date): TimesheetEntryValue {
-  return {
-    date: format(date, 'yyyy-MM-dd'),
-    hoursWorked: '', startTime: '', endTime: '', breakHours: '',
-    daysWorked: '0', description: '', projectRateLineId: '', isPresent: false,
-  };
+async function fetchTimesheetExpenses(timesheetId: string): Promise<any[]> {
+  const res = await apiRequest('GET', `/api/timesheets/${timesheetId}/expenses`);
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
 }
 
 // One row per day of a saved timesheet's period, Saturday and Sunday included, so the
@@ -187,6 +185,8 @@ function StatusIcon({ status }: { status: string }) {
 }
 
 interface ExpenseLine {
+  /** Set for an expense already saved on the timesheet (edit mode). */
+  id?: string;
   date: string;
   category: string;
   description: string;
@@ -209,6 +209,13 @@ const EXPENSE_CATEGORIES = [
 export default function Timesheets() {
   const [showCreateTimesheet, setShowCreateTimesheet] = useState(false);
   const [editingTimesheet, setEditingTimesheet] = useState<any>(null);
+  const isEditing = !!editingTimesheet;
+  // Set before form.reset() in edit mode so the period effect below does not replace the prefilled rows.
+  const prefilledPeriodKeyRef = useRef<string | null>(null);
+  // Expense ids loaded for the edited timesheet; the ones missing on save are deleted.
+  const originalExpenseIdsRef = useRef<string[]>([]);
+  // Draft delete confirmation (worker / business / SDP).
+  const [pendingDelete, setPendingDelete] = useState<any>(null);
   const [selectedWorkerId, setSelectedWorkerId] = useState('');
   const [selectedContractId, setSelectedContractId] = useState('');
   const [workerSelectedContractId, setWorkerSelectedContractId] = useState('');
@@ -358,6 +365,9 @@ export default function Timesheets() {
   const periodEnd = form.watch('periodEnd');
 
   useEffect(() => {
+    // Edit mode prefilled this exact period (possibly with two entries on one day,
+    // which the length check below would not recognise): leave the rows alone.
+    if (prefilledPeriodKeyRef.current && periodStart && periodEnd && prefilledPeriodKeyRef.current === periodKeyOf(periodStart, periodEnd)) return;
     if (periodStart && periodEnd) {
       const { dates, isCapped } = generatePeriodDates(periodStart, periodEnd);
       const currentEntries = form.getValues('entries');
@@ -393,6 +403,13 @@ export default function Timesheets() {
 
   // Active contract for worker
   const activeTimesheetContract = useMemo(() => {
+    if (editingTimesheet) {
+      // The list row carries the contract itself (and its country), so an edit
+      // never depends on the selectors or on the contract still being "eligible".
+      const fromLists = (isWorker ? workerContracts : selectedWorkerContracts).find((c: any) => c.id === editingTimesheet.contractId);
+      if (fromLists) return fromLists;
+      return editingTimesheet.contract ? { ...editingTimesheet.contract, country: editingTimesheet.country ?? editingTimesheet.contract.country } : null;
+    }
     if (isWorker) {
       if (workerSelectedContractId) {
         return workerTimesheetContracts.find((c: any) => c.id === workerSelectedContractId) || null;
@@ -403,7 +420,7 @@ export default function Timesheets() {
       return selectedWorkerContracts.find((c: any) => c.id === selectedContractId);
     }
     return null;
-  }, [isWorker, workerTimesheetContracts, workerSelectedContractId, selectedContractId, selectedWorkerContracts]);
+  }, [editingTimesheet, isWorker, workerContracts, workerTimesheetContracts, workerSelectedContractId, selectedContractId, selectedWorkerContracts]);
 
   // Suggested periods — filtered to exclude already-submitted ones
   // Format a period { startDate, endDate } as "Mon d – Mon d, yyyy"
@@ -433,9 +450,9 @@ export default function Timesheets() {
       paymentDaysAfterPeriod: c.paymentDaysAfterPeriod,
     }, c.endDate ? 200 : 24);
 
+    // Drafts included: a period with a draft is continued from the list (Edit), not created twice.
     const existingPeriodKeys = new Set(
       (timesheets as any[])
-        .filter((t) => t.status !== 'draft')
         .map((t) => `${format(new Date(t.periodStart), 'yyyy-MM-dd')}_${format(new Date(t.periodEnd), 'yyyy-MM-dd')}`)
     );
 
@@ -502,20 +519,47 @@ export default function Timesheets() {
     },
     onSuccess: (res: any) => {
       invalidateTimesheetQueries();
-      setShowCreateTimesheet(false);
-      setSelectedWorkerId('');
-      setSelectedContractId('');
-      setAttachments([]);
-      setExpenseLines([]);
-      setShowExpenses(false);
-      form.reset();
+      closeTimesheetDialog();
       toast({
-        title: res?.submitted ? "Timesheet submitted" : "Timesheet created",
-        description: res?.submitted ? "Timesheet submitted for approval." : "Timesheet saved as draft.",
+        title: res?.submitted ? "Timesheet submitted" : "Draft saved",
+        description: res?.submitted ? "Timesheet submitted for approval." : "Timesheet saved as a draft. Open it from the list to continue.",
       });
     },
     onError: (error: any) => {
-      toast({ title: "Error", description: error.message || "Failed to create timesheet.", variant: "destructive" });
+      invalidateTimesheetQueries();
+      toast({ title: "Error", description: extractApiErrorMessage(error, "Failed to create timesheet."), variant: "destructive" });
+    },
+  });
+
+  // Edit mode: PATCH the timesheet, sync expenses (removed → DELETE, new → POST), then submit if asked.
+  const updateTimesheetMutation = useMutation({
+    mutationFn: async ({ id, data, expenses, submitAfter }: { id: string; data: any; expenses: ExpenseLine[]; submitAfter: boolean }) => {
+      await apiRequest('PATCH', `/api/timesheets/${id}`, data);
+      const keptIds = new Set(expenses.filter((e) => e.id).map((e) => e.id as string));
+      for (const removedId of originalExpenseIdsRef.current.filter((eid) => !keptIds.has(eid))) {
+        await apiRequest('DELETE', `/api/timesheets/${id}/expenses/${removedId}`);
+      }
+      for (const exp of expenses) {
+        if (!exp.id && exp.description && exp.amount) {
+          const { id: _existing, ...body } = exp;
+          await apiRequest('POST', `/api/timesheets/${id}/expenses`, body);
+        }
+      }
+      if (submitAfter) await apiRequest('PATCH', `/api/timesheets/${id}/submit`, {});
+      return { submitted: submitAfter };
+    },
+    onSuccess: (res) => {
+      invalidateTimesheetQueries();
+      closeTimesheetDialog();
+      toast({
+        title: res.submitted ? "Timesheet submitted" : "Draft saved",
+        description: res.submitted ? "Timesheet submitted for approval." : "Your changes were saved.",
+      });
+    },
+    onError: (error: any) => {
+      // A partial save (timesheet saved, an expense call failed) is visible after the refetch; the dialog stays open.
+      invalidateTimesheetQueries();
+      toast({ title: "Could not save", description: extractApiErrorMessage(error, "Failed to save the timesheet."), variant: "destructive" });
     },
   });
 
@@ -601,6 +645,7 @@ export default function Timesheets() {
     },
     onSuccess: () => {
       invalidateTimesheetQueries();
+      setPendingDelete(null);
       toast({ title: "Deleted", description: "Timesheet deleted." });
     },
     onError: (error: any) => {
@@ -618,6 +663,58 @@ export default function Timesheets() {
     const { dates } = generatePeriodDates(start, end);
     form.setValue('entries', dates.map(blankEntry));
     toast({ title: "Period selected", description: formatPeriod(period) });
+  };
+
+  // Who may act on a timesheet from the list: SDP, the worker (own list), or the
+  // employing business on its own (not provided) rows. Status rules per action.
+  const canActOnTimesheet = (t: any, provided = false) => isSDP || isWorker || (isBusiness && !provided && !t?.isProvided);
+  const canEditTimesheet = (t: any, provided = false) => (t?.status === 'draft' || t?.status === 'rejected') && canActOnTimesheet(t, provided);
+  const canSubmitTimesheet = canEditTimesheet;
+  const canDeleteTimesheet = (t: any, provided = false) => t?.status === 'draft' && canActOnTimesheet(t, provided);
+
+  // One close path for Cancel, the dialog's own close and both save mutations,
+  // so an abandoned edit never leaks its values into the next create.
+  const closeTimesheetDialog = () => {
+    setShowCreateTimesheet(false);
+    setEditingTimesheet(null);
+    prefilledPeriodKeyRef.current = null;
+    originalExpenseIdsRef.current = [];
+    setSelectedWorkerId('');
+    setSelectedContractId('');
+    setAttachments([]);
+    setExpenseLines([]);
+    setShowExpenses(false);
+    form.reset({ periodStart: '', periodEnd: '', notes: '', entries: [] });
+  };
+
+  // Reopen a draft (or rejected) timesheet with its period, entries, notes and expenses.
+  const openEditTimesheet = (timesheet: any) => {
+    if (!canEditTimesheet(timesheet)) return;
+    const unit = getTrackingUnit(timesheet.contract);
+    const start = toDayKey(timesheet.periodStart);
+    const end = toDayKey(timesheet.periodEnd);
+    prefilledPeriodKeyRef.current = periodKeyOf(start, end);
+    form.reset({ periodStart: start, periodEnd: end, notes: timesheet.notes ?? '', entries: entriesFromSaved(timesheet, unit) });
+    setEditingTimesheet(timesheet);
+    setExpenseLines([]);
+    setShowExpenses(false);
+    originalExpenseIdsRef.current = [];
+    setShowCreateTimesheet(true);
+    fetchTimesheetExpenses(timesheet.id)
+      .then((rows) => {
+        originalExpenseIdsRef.current = rows.map((r) => r.id);
+        setExpenseLines(rows.map((r) => ({
+          id: r.id,
+          date: toDayKey(r.date),
+          category: r.category || 'other',
+          description: r.description || '',
+          amount: r.amount != null ? String(r.amount) : '',
+          currency: r.currency || timesheet.contract?.currency || 'AUD',
+          notes: r.notes ?? '',
+        })));
+        if (rows.length > 0) setShowExpenses(true);
+      })
+      .catch(() => { /* the expenses panel simply starts empty */ });
   };
 
   const submitAfterCreateRef = useRef(false);
@@ -664,11 +761,25 @@ export default function Timesheets() {
         return e.isPresent;
       });
 
-    if (normalizedEntries.length === 0) {
+    const submitAfter = submitAfterCreateRef.current;
+    submitAfterCreateRef.current = false;
+
+    // A draft may be saved empty (the point of a draft); a submission needs time logged.
+    if (normalizedEntries.length === 0 && submitAfter) {
       toast({
         title: "No entries",
         description: rateType === 'annual' ? "Mark at least one day as present." : "Log at least one entry with hours/days.",
         variant: "destructive",
+      });
+      return;
+    }
+
+    if (editingTimesheet) {
+      updateTimesheetMutation.mutate({
+        id: editingTimesheet.id,
+        data: { periodStart: data.periodStart, periodEnd: data.periodEnd, notes: data.notes ?? '', entries: normalizedEntries },
+        expenses: expenseLines,
+        submitAfter,
       });
       return;
     }
@@ -690,9 +801,8 @@ export default function Timesheets() {
       data: processedData,
       attachments,
       expenses: expenseLines,
-      submitAfterCreate: submitAfterCreateRef.current,
+      submitAfterCreate: submitAfter,
     });
-    submitAfterCreateRef.current = false;
   };
 
   // ── Derived data ───────────────────────────────────────────────────────────
@@ -782,6 +892,14 @@ export default function Timesheets() {
         }}
         className="space-y-5"
       >
+        {isEditing && editingTimesheet?.status === 'rejected' && (
+          <div className="rounded-lg border border-red-200 bg-red-50/70 p-3 text-sm text-red-900" data-testid="edit-rejection-banner">
+            <div className="text-[11px] font-semibold text-red-700 uppercase tracking-wide mb-1 flex items-center gap-1">
+              <XCircle className="h-3 w-3" />This timesheet was rejected
+            </div>
+            {editingTimesheet.rejectionReason || 'Correct the entries and submit it again.'}
+          </div>
+        )}
         {/* Period */}
         <div className="grid grid-cols-2 gap-4">
           <FormField control={form.control} name="periodStart" render={({ field }) => (
@@ -904,29 +1022,27 @@ export default function Timesheets() {
         )} />
 
         <div className="flex justify-end flex-wrap gap-2 pt-2">
-          <Button type="button" variant="outline" onClick={() => setShowCreateTimesheet(false)}>Cancel</Button>
-          {/* Workers can save as draft and submit later; business/SDP creating on behalf always submits */}
-          {isWorker && (
-            <Button
-              type="submit"
-              variant="outline"
-              disabled={createTimesheetMutation.isPending}
-              onClick={() => { submitAfterCreateRef.current = false; }}
-            >
-              <Save className="mr-2 h-4 w-4" />
-              {createTimesheetMutation.isPending && !submitAfterCreateRef.current ? 'Saving...' : 'Save as Draft'}
-            </Button>
-          )}
+          <Button type="button" variant="outline" onClick={closeTimesheetDialog}>Cancel</Button>
+          {/* Every role can save without submitting and come back to the draft from the list. */}
           <Button
             type="submit"
-            disabled={createTimesheetMutation.isPending}
+            variant="outline"
+            disabled={createTimesheetMutation.isPending || updateTimesheetMutation.isPending}
+            onClick={() => { submitAfterCreateRef.current = false; }}
+            data-testid="button-save-draft"
+          >
+            <Save className="mr-2 h-4 w-4" />
+            {isEditing ? 'Save Draft' : 'Save as Draft'}
+          </Button>
+          <Button
+            type="submit"
+            disabled={createTimesheetMutation.isPending || updateTimesheetMutation.isPending}
             onClick={() => { submitAfterCreateRef.current = true; }}
             className="bg-green-600 hover:bg-green-700"
+            data-testid="button-submit-timesheet"
           >
             <CheckCircle className="mr-2 h-4 w-4" />
-            {createTimesheetMutation.isPending && submitAfterCreateRef.current
-              ? (isWorker ? 'Submitting...' : 'Creating...')
-              : (isWorker ? 'Submit for Approval' : 'Create & Submit')}
+            {isWorker || isEditing ? 'Submit for Approval' : 'Create & Submit'}
           </Button>
         </div>
       </form>
@@ -1026,7 +1142,6 @@ export default function Timesheets() {
   // ── Timesheet Card (grid mode) ─────────────────────────────────────────────
 
   const TimesheetCard = ({ timesheet, provided = false }: { timesheet: any; provided?: boolean }) => {
-    console.log('Rendering card for timesheet', timesheet);
     const expanded = expandedTimesheetIds.has(timesheet.id);
     const s = timesheet.status;
     const pStart = new Date(timesheet.periodStart).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -1275,12 +1390,15 @@ export default function Timesheets() {
 
             {/* Actions */}
             <div className="flex flex-wrap gap-2 pt-1 border-t">
-              {isWorker && s === 'draft' && (
-                <>
-                  <Button size="sm" onClick={() => submitTimesheetMutation.mutate(timesheet.id)} disabled={submitTimesheetMutation.isPending}>
-                    {submitTimesheetMutation.isPending ? 'Submitting...' : 'Submit for Approval'}
-                  </Button>
-                </>
+              {canEditTimesheet(timesheet, provided) && (
+                <Button size="sm" variant="outline" onClick={() => openEditTimesheet(timesheet)} data-testid={`button-edit-timesheet-${timesheet.id}`}>
+                  <Edit className="h-4 w-4 mr-1" />Edit
+                </Button>
+              )}
+              {canSubmitTimesheet(timesheet, provided) && (
+                <Button size="sm" onClick={() => submitTimesheetMutation.mutate(timesheet.id)} disabled={submitTimesheetMutation.isPending} data-testid={`button-submit-timesheet-${timesheet.id}`}>
+                  {submitTimesheetMutation.isPending ? 'Submitting...' : (s === 'rejected' ? 'Resubmit for Approval' : 'Submit for Approval')}
+                </Button>
               )}
               {!isWorker && s === 'submitted' && !provided && canApproveByRole && (
                 <>
@@ -1311,15 +1429,10 @@ export default function Timesheets() {
                   Awaiting approval by {approverRole === 'sdp' ? 'SDP' : approverRole === 'business' ? 'Employing Business' : 'Host Client'}
                 </span>
               )}
-              {isSDP && s === 'draft' && (
-                <>
-                  <Button size="sm" onClick={() => submitTimesheetMutation.mutate(timesheet.id)} disabled={submitTimesheetMutation.isPending}>
-                    {submitTimesheetMutation.isPending ? 'Submitting...' : 'Submit for Approval'}
-                  </Button>
-                  <Button size="sm" variant="destructive" onClick={() => deleteTimesheetMutation.mutate(timesheet.id)} disabled={deleteTimesheetMutation.isPending}>
-                    <Trash2 className="h-4 w-4 mr-1" />{deleteTimesheetMutation.isPending ? 'Deleting...' : 'Delete'}
-                  </Button>
-                </>
+              {canDeleteTimesheet(timesheet, provided) && (
+                <Button size="sm" variant="destructive" onClick={() => setPendingDelete(timesheet)} disabled={deleteTimesheetMutation.isPending} data-testid={`button-delete-timesheet-${timesheet.id}`}>
+                  <Trash2 className="h-4 w-4 mr-1" />Delete
+                </Button>
               )}
             </div>
           </CardContent>
@@ -1348,9 +1461,14 @@ export default function Timesheets() {
           <span className="capitalize">{s}</span>
         </Badge>
         <div className="flex gap-1">
-          {isWorker && s === 'draft' && (
-            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => submitTimesheetMutation.mutate(timesheet.id)} disabled={submitTimesheetMutation.isPending}>
-              Submit
+          {canEditTimesheet(timesheet) && (
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => openEditTimesheet(timesheet)} data-testid={`button-edit-timesheet-${timesheet.id}`}>
+              <Edit className="h-3 w-3 mr-1" />Edit
+            </Button>
+          )}
+          {canSubmitTimesheet(timesheet) && (
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => submitTimesheetMutation.mutate(timesheet.id)} disabled={submitTimesheetMutation.isPending} data-testid={`button-submit-timesheet-${timesheet.id}`}>
+              {s === 'rejected' ? 'Resubmit' : 'Submit'}
             </Button>
           )}
           {!isWorker && s === 'submitted' && (
@@ -1359,8 +1477,8 @@ export default function Timesheets() {
               <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" onClick={() => rejectTimesheetMutation.mutate(timesheet.id)} disabled={rejectTimesheetMutation.isPending}>Reject</Button>
             </>
           )}
-          {isSDP && s === 'draft' && (
-            <Button size="sm" variant="ghost" className="h-7 text-xs text-red-500" onClick={() => deleteTimesheetMutation.mutate(timesheet.id)} disabled={deleteTimesheetMutation.isPending}>
+          {canDeleteTimesheet(timesheet) && (
+            <Button size="sm" variant="ghost" className="h-7 text-xs text-red-500" onClick={() => setPendingDelete(timesheet)} disabled={deleteTimesheetMutation.isPending} data-testid={`button-delete-timesheet-${timesheet.id}`}>
               <Trash2 className="h-3 w-3" />
             </Button>
           )}
@@ -1591,16 +1709,20 @@ export default function Timesheets() {
 
           {/* Worker Create Timesheet Dialog (opened from hero button) */}
           {isWorker && activeTimesheetContract && (
-            <Dialog open={showCreateTimesheet} onOpenChange={setShowCreateTimesheet}>
-              <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto">
+            <Dialog open={showCreateTimesheet} onOpenChange={(open) => { if (!open) closeTimesheetDialog(); }}>
+              <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto" data-testid="dialog-timesheet-form">
                 <DialogHeader>
-                  <DialogTitle>Create New Timesheet</DialogTitle>
-                  <DialogDescription>Select a suggested period or enter dates manually, then log your time entries below.</DialogDescription>
+                  <DialogTitle>{isEditing ? 'Edit Timesheet' : 'Create New Timesheet'}</DialogTitle>
+                  <DialogDescription>
+                    {isEditing
+                      ? 'Change the entries, then save the draft or submit it for approval.'
+                      : 'Select a suggested period or enter dates manually, then log your time entries below.'}
+                  </DialogDescription>
                 </DialogHeader>
 
                 <ContractSummaryPanel contract={activeTimesheetContract} />
 
-                {suggestedPeriods.length > 0 && (
+                {!isEditing && suggestedPeriods.length > 0 && (
                   <div className="space-y-2 mb-4">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Suggested Periods</p>
                     <div className="grid gap-2">
@@ -1621,8 +1743,8 @@ export default function Timesheets() {
                         </div>
                       ))}
                     </div>
-                    {timesheets.some((t: any) => t.status !== 'draft') && (
-                      <p className="text-xs text-muted-foreground">Already-submitted periods are hidden from suggestions.</p>
+                    {timesheets.length > 0 && (
+                      <p className="text-xs text-muted-foreground">Periods that already have a timesheet (drafts included) are hidden. Open a draft from the list to continue it.</p>
                     )}
                   </div>
                 )}
@@ -1634,21 +1756,33 @@ export default function Timesheets() {
 
           {(isSDP || isBusiness) && (
             <Dialog open={showCreateTimesheet} onOpenChange={(open) => {
-              setShowCreateTimesheet(open);
-              if (!open) { setSelectedWorkerId(''); setSelectedContractId(''); setAttachments([]); setExpenseLines([]); setShowExpenses(false); }
+              if (open) setShowCreateTimesheet(true);
+              else closeTimesheetDialog();
             }}>
               <DialogTrigger asChild>
                 <Button data-testid="button-create-timesheet-sdp">
                   <Plus className="mr-2 h-4 w-4" />Create Timesheet
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto">
+              <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto" data-testid="dialog-timesheet-form">
                 <DialogHeader>
-                  <DialogTitle>Create Timesheet on Behalf of Worker</DialogTitle>
-                  <DialogDescription>Select a worker and contract, then enter timesheet details.</DialogDescription>
+                  <DialogTitle>{isEditing ? 'Edit Timesheet' : 'Create Timesheet on Behalf of Worker'}</DialogTitle>
+                  <DialogDescription>
+                    {isEditing
+                      ? 'Change the entries, then save the draft or submit it for approval.'
+                      : 'Select a worker and contract, then enter timesheet details.'}
+                  </DialogDescription>
                 </DialogHeader>
 
+                {isEditing && (
+                  <div className="mb-4 rounded-lg border bg-muted/30 px-3 py-2 text-sm" data-testid="edit-timesheet-subject">
+                    <span className="font-medium">{editingTimesheet.worker?.firstName} {editingTimesheet.worker?.lastName}</span>
+                    <span className="text-muted-foreground"> · {editingTimesheet.contractName || editingTimesheet.contractCustomRoleTitle || editingTimesheet.contractRoleTitle || 'Contract'}</span>
+                  </div>
+                )}
+
                 {/* Worker + contract selectors */}
+                {!isEditing && (
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">Worker</label>
@@ -1692,11 +1826,12 @@ export default function Timesheets() {
                     </div>
                   )}
                 </div>
+                )}
 
-                {selectedWorkerId && selectedContractId && activeTimesheetContract && (
+                {activeTimesheetContract && (isEditing || (selectedWorkerId && selectedContractId)) && (
                   <>
                     <ContractSummaryPanel contract={activeTimesheetContract} />
-                    {suggestedPeriods.length > 0 && (
+                    {!isEditing && suggestedPeriods.length > 0 && (
                       <div className="space-y-2 mb-4">
                         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Suggested Periods</p>
                         <div className="grid gap-2">
@@ -1725,6 +1860,29 @@ export default function Timesheets() {
               </DialogContent>
             </Dialog>
           )}
+
+          <AlertDialog open={!!pendingDelete} onOpenChange={(open) => { if (!open) setPendingDelete(null); }}>
+            <AlertDialogContent data-testid="dialog-delete-timesheet">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete this draft timesheet?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {pendingDelete
+                    ? `${new Date(pendingDelete.periodStart).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })} – ${new Date(pendingDelete.periodEnd).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}: the entries and expenses saved on it will be removed. This cannot be undone.`
+                    : ''}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Keep it</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onClick={() => pendingDelete && deleteTimesheetMutation.mutate(pendingDelete.id)}
+                  data-testid="button-confirm-delete-timesheet"
+                >
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           </div>
 
           {/* Expandable filter panel */}
@@ -1957,12 +2115,7 @@ export default function Timesheets() {
 function TimesheetExpensesView({ timesheetId }: { timesheetId: string }) {
   const { data: expenses = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/timesheets', timesheetId, 'expenses'],
-    queryFn: async () => {
-      const res = await fetch(`/api/timesheets/${timesheetId}/expenses`, { credentials: 'include' });
-      if (!res.ok) return [];
-      const data = await res.json();
-      return Array.isArray(data) ? data : [];
-    },
+    queryFn: () => fetchTimesheetExpenses(timesheetId),
   });
 
   if (isLoading || expenses.length === 0) return null;

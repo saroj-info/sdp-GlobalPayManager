@@ -10,7 +10,7 @@
 
 import { db } from "../../db";
 import { timesheets, timesheetEntries, workers, businesses, contracts, countries } from "@shared/schema";
-import { and, or, eq, ilike, inArray, sql, asc, desc, type SQL } from "drizzle-orm";
+import { and, or, eq, ne, ilike, inArray, sql, asc, desc, type SQL } from "drizzle-orm";
 import type { SortKey, TimesheetListQuery, TimesheetListResult, TimesheetListScope } from "./types";
 
 function orderClause(sortBy: SortKey) {
@@ -40,10 +40,12 @@ function buildScopeAndFilters(
     conditions.push(eq(timesheets.workerId, scope.workerId));
   }
   if (scope.kind === "business") {
-    // Business sees timesheets where they're the employing business OR the host client on the contract.
+    // Business sees timesheets where they're the employing business OR the host
+    // client on the contract. A host client never sees drafts: they are private
+    // to the worker, the employing business and SDP until submitted.
     const scopeClause = or(
       eq(timesheets.businessId, scope.businessId),
-      eq(contracts.customerBusinessId, scope.businessId),
+      and(eq(contracts.customerBusinessId, scope.businessId), ne(timesheets.status, 'draft')),
     );
     if (scopeClause) conditions.push(scopeClause);
   }

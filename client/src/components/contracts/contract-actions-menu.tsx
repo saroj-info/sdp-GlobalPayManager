@@ -1,13 +1,13 @@
 /**
  * Triple-dot quick actions beside "View Details" / "View" on the contracts
- * page: host client confirmation, renewal and extension. The page decides who
+ * page: host client confirmation, renewal, extension and deletion. The page decides who
  * sees the menu (canUseContractActions in @shared/contractLifecycle); this
  * component only decides which items are enabled for the given contract.
  */
 import type { ReactNode } from "react";
-import { CalendarPlus, ClipboardCheck, MoreHorizontal, RefreshCw } from "lucide-react";
+import { CalendarPlus, ClipboardCheck, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface ContractActionsMenuProps {
@@ -15,6 +15,8 @@ interface ContractActionsMenuProps {
   onConfirmClient: (contract: any) => void;
   onRenew: (contract: any) => void;
   onExtend: (contract: any) => void;
+  /** When given, a "Delete Contract" item is added (the server decides whether it is allowed). */
+  onDelete?: (contract: any) => void;
   className?: string;
 }
 
@@ -25,9 +27,10 @@ interface ItemSpec {
   /** When set the item is disabled and the reason shows as a tooltip. */
   reason: string | null;
   onSelect: () => void;
+  className?: string;
 }
 
-export function ContractActionsMenu({ contract, onConfirmClient, onRenew, onExtend, className }: ContractActionsMenuProps) {
+export function ContractActionsMenu({ contract, onConfirmClient, onRenew, onExtend, onDelete, className }: ContractActionsMenuProps) {
   const confirmReason = contract?.isForClient ? null : "Only available on host-client (Customer Work) contracts";
   const extendReason = !contract?.endDate
     ? "This contract has no end date (ongoing)"
@@ -37,7 +40,7 @@ export function ContractActionsMenu({ contract, onConfirmClient, onRenew, onExte
 
   const renderItem = (spec: ItemSpec) => {
     const item = (
-      <DropdownMenuItem disabled={!!spec.reason} onSelect={() => spec.onSelect()} data-testid={spec.testId}>
+      <DropdownMenuItem disabled={!!spec.reason} onSelect={() => spec.onSelect()} data-testid={spec.testId} className={spec.className}>
         {spec.icon}
         <span>{spec.label}</span>
       </DropdownMenuItem>
@@ -91,6 +94,19 @@ export function ContractActionsMenu({ contract, onConfirmClient, onRenew, onExte
           reason: extendReason,
           onSelect: () => onExtend(contract),
         })}
+        {onDelete && (
+          <>
+            <DropdownMenuSeparator />
+            {renderItem({
+              testId: "menu-contract-delete",
+              icon: <Trash2 className="mr-2 h-4 w-4" />,
+              label: "Delete Contract",
+              reason: null,
+              className: "text-destructive focus:text-destructive",
+              onSelect: () => onDelete(contract),
+            })}
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

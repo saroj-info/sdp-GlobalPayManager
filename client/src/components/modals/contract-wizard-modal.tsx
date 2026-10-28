@@ -167,7 +167,6 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         paymentHolidayRule: existingContract.paymentHolidayRule !== undefined ? existingContract.paymentHolidayRule : true,
         noticePeriodDays: existingContract.noticePeriodDays ?? '',
         timesheetApproverRole: existingContract.timesheetApproverRole ?? '',
-        remunerationLines: existingContract.remunerationLines || [{ type: 'base_salary', description: 'Base Salary', amount: '', frequency: 'annual' }],
         // Client details
         isForClient: existingContract.isForClient || false,
         clientName: existingContract.clientName || '',
@@ -227,7 +226,6 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       paymentHolidayRule: true,
       noticePeriodDays: 30,
       timesheetApproverRole: 'business',
-      remunerationLines: [{ type: 'base_salary', description: 'Base Salary', amount: '', frequency: 'annual' }],
       // Client details
       isForClient: false,
       clientName: '',
@@ -606,7 +604,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
           const wId = data.workerId || formData.workerId;
           const tId = data.templateId || formData.templateId;
           const selectedWorker = workers.find((w: any) => w.id === wId);
-          const businessId = data.selectedBusinessId || data.businessId || selectedWorker?.businessId;
+          // In edit mode the employer is the contract's business (a shared SDP worker's
+          // home business is the SDP-owned row, which would render the wrong employer).
+          const businessId = (editMode && existingContract?.businessId) || data.selectedBusinessId || data.businessId || selectedWorker?.businessId;
           if (businessId) {
             const genResp = await apiRequest('POST', '/api/contracts/universal/preview', {
               templateId: tId,

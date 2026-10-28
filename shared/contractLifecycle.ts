@@ -214,6 +214,56 @@ export function canUseContractActions(
   return type === "business_user" && contract?.readOnly !== true;
 }
 
+// ---- Deleting a contract -------------------------------------------------------
+
+/** Records that stop a contract from being deleted (each is a count). */
+export interface ContractDeleteBlockers {
+  timesheets: number;
+  invoices: number;
+  sdpInvoices: number;
+  marginPayments: number;
+  renewals: number;
+}
+
+export const CONTRACT_DELETE_BLOCKER_LABELS: Record<keyof ContractDeleteBlockers, [string, string]> = {
+  timesheets: ["timesheet", "timesheets"],
+  invoices: ["worker invoice", "worker invoices"],
+  sdpInvoices: ["SDP invoice", "SDP invoices"],
+  marginPayments: ["margin payment", "margin payments"],
+  renewals: ["renewal", "renewals"],
+};
+
+/** ["3 timesheets", "1 worker invoice"] — zero counts omitted. */
+export function listContractDeleteBlockers(b: ContractDeleteBlockers): string[] {
+  return (Object.keys(CONTRACT_DELETE_BLOCKER_LABELS) as (keyof ContractDeleteBlockers)[])
+    .filter((k) => (b[k] ?? 0) > 0)
+    .map((k) => `${b[k]} ${CONTRACT_DELETE_BLOCKER_LABELS[k][b[k] === 1 ? 0 : 1]}`);
+}
+
+export function hasContractDeleteBlockers(b: ContractDeleteBlockers): boolean {
+  return listContractDeleteBlockers(b).length > 0;
+}
+
+/** Response of GET /api/contracts/:id/deletion-check. */
+export interface ContractDeletionCheck {
+  canDelete: boolean;
+  blockers: ContractDeleteBlockers;
+  /** Cascades with the contract; shown in the confirmation, never a blocker. */
+  related: { purchaseOrders: number };
+  /** `signedAt` is set. */
+  signed: boolean;
+  /** Sent for signing (signing token issued) and not signed yet. */
+  awaitingSignature: boolean;
+}
+
+/** The sentence used by the 409 and by the dialog. */
+export function describeContractDeleteBlock(b: ContractDeleteBlockers): string {
+  const parts = listContractDeleteBlockers(b);
+  if (parts.length === 0) return "This contract can be deleted.";
+  const joined = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return `This contract cannot be deleted: it has ${joined} recorded against it.`;
+}
+
 /** One-line description of a contract for the change log ("Renewal of" / "Renewed as"). */
 export function describeContractForLog(c: {
   id: string;

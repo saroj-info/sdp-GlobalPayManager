@@ -25,7 +25,7 @@ import {
 import { contractChangeLog, workerChangeLog, users as usersTable, workers as workersTable } from "@shared/schema";
 import { desc, eq as drizzleEq } from "drizzle-orm";
 import { db as drizzleDb } from "./db";
-import { registerTimesheetsListRoutes } from "./modules/timesheets";
+import { registerTimesheetsListRoutes, resolveTimesheetAccess, isTimesheetEditable } from "./modules/timesheets";
 import { registerAiContractRoutes, isAiEnabled } from "./modules/ai";
 import { registerAiSearchRoutes, isAiSearchEnabled } from "./modules/ai/search";
 import { registerAiCountryIntelRoutes, isAiCountryIntelEnabled } from "./modules/ai/countryIntel";
@@ -35,6 +35,7 @@ import { registerDashboardRoutes } from "./modules/dashboard";
 import { registerBusinessProfileRoutes, checkBusinessProfileForContract, businessesService } from "./modules/businesses";
 import { registerBillingTermsRoutes, checkBillingTermsForCreate, checkBillingTermsForUpdate, recordBillingTermsAcceptance, hardDeleteContract } from "./modules/billingTerms";
 import { registerContractLifecycleRoutes } from "./modules/contractLifecycle";
+import { followRateOnRemunerationLines } from "@shared/contractLifecycle";
 import { registerQuotesRoutes } from "./modules/quotes";
 import { registerFxRoutes } from "./modules/fx";
 
@@ -111,6 +112,7 @@ import {
   insertCountryAdvisorFeeSchema,
   insertCountryDocumentSchema,
   type InsertRemunerationLineType,
+  insertRemunerationLineSchema,
   insertPayItemSchema,
   insertPurchaseOrderSchema,
   updateWorkerSchema,
@@ -140,6 +142,53 @@ import {
   addRateLinesToContracts,
   addBillingLinesToContracts,
 } from "./modules/contracts";
+
+/**
+ * Remuneration lines sent with PUT /api/contracts/:id. Rows echoed back from the
+ * list carry id / contractId / createdAt / updatedAt (ISO strings), which the
+ * timestamp columns reject, so strip them; skip rows without an amount (POST
+ * semantics); '' on enum / FK columns becomes null. Validated before any write.
+ */
+function parseRemunerationLinesForReplace(
+  raw: unknown,
+  contractId: string,
+): { ok: true; lines: InsertRemunerationLineType[] } | { ok: false; message: string } {
+  if (!Array.isArray(raw)) return { ok: false, message: "remunerationLines must be an array" };
+  const nullable = (v: unknown) => (v === '' || v === undefined ? null : v);
+  const lines: InsertRemunerationLineType[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') return { ok: false, message: "Each remuneration line must be an object" };
+    const { id, contractId: _c, createdAt, updatedAt, amount, ...rest } = row as Record<string, unknown>;
+    void id; void _c; void createdAt; void updatedAt;
+    // A blank amount is the wizard's empty placeholder row: skip it. Anything
+    // else that is not a number is a bad request, never a silent drop.
+    if (amount === '' || amount === null || amount === undefined) continue;
+    if (Number.isNaN(Number(amount))) return { ok: false, message: `Remuneration line amount "${String(amount)}" is not a number` };
+    const parsed = insertRemunerationLineSchema.safeParse({
+      ...rest,
+      amount,
+      contractId,
+      payItemId: nullable(rest.payItemId),
+      type: nullable(rest.type),
+      description: nullable(rest.description),
+      frequency: nullable(rest.frequency),
+      paymentTrigger: nullable(rest.paymentTrigger),
+    });
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      return { ok: false, message: `Remuneration line ${issue?.path?.join('.') || 'field'}: ${issue?.message ?? 'invalid'}` };
+    }
+    lines.push(parsed.data);
+  }
+  return { ok: true, lines };
+}
+
+/** True when both values are finite numbers and differ. */
+function rateChanged(before: unknown, after: unknown): boolean {
+  const a = Number(before);
+  const b = Number(after);
+  return Number.isFinite(a) && Number.isFinite(b) && a !== b;
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup session middleware FIRST before any routes
@@ -6237,6 +6286,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(termsUpdate.status).json({ message: termsUpdate.message, code: termsUpdate.code, ...(termsUpdate.extra ?? {}) });
       }
 
+      // Remuneration lines are SDP-managed (the line routes are sdpOnly). A sent
+      // list is validated here, before any write; a non-SDP caller's list is
+      // ignored rather than applied (the list endpoint hides lines from some
+      // business users, so echoing [] back must never wipe them).
+      let replacementLines: InsertRemunerationLineType[] | null = null;
+      if (req.body.remunerationLines !== undefined) {
+        if (userType !== 'sdp_internal') {
+          console.warn(`[contracts] PUT /api/contracts/${id}: remunerationLines ignored for ${userType} (SDP-managed)`);
+        } else {
+          const parsedLines = parseRemunerationLinesForReplace(req.body.remunerationLines, id);
+          if (!parsedLines.ok) {
+            return res.status(400).json({ message: parsedLines.message, code: 'REMUNERATION_LINES_INVALID' });
+          }
+          replacementLines = parsedLines.lines;
+        }
+      }
+
       // If contractDocument is provided alongside other fields, include it in the update
       const updateData = contractDocument !== undefined
         ? { ...data, contractDocument }
@@ -6275,20 +6341,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Failed to write contract change-log:", logErr);
       }
 
-      // Handle remuneration lines if provided
-      const remunerationLines = req.body.remunerationLines;
-      if (remunerationLines !== undefined) {
+      // Remuneration lines: replace in one transaction (a failed insert keeps the
+      // previous lines). Without a sent list, a line equal to the old rate follows
+      // a changed rate on an unsigned contract (the renewal rule), so the base pay
+      // line and the regenerated document do not contradict the new rate.
+      if (replacementLines !== null) {
         try {
-          await storage.deleteRemunerationLinesByContractId(id);
-          if (Array.isArray(remunerationLines) && remunerationLines.length > 0) {
-            const linesWithContractId: InsertRemunerationLineType[] = remunerationLines.map(line => ({
-              ...line,
-              contractId: id,
-            }));
-            await storage.createRemunerationLines(linesWithContractId);
+          await storage.replaceRemunerationLines(id, replacementLines);
+        } catch (remunError: any) {
+          console.error('[contracts] remuneration lines not replaced, previous lines kept:', remunError?.message ?? String(remunError));
+        }
+      } else if (!existingContract.signedAt && rateChanged(existingContract.rate, (updatedContract as any)?.rate)) {
+        try {
+          const lines = await storage.getRemunerationLinesByContractId(id);
+          const followed = followRateOnRemunerationLines(lines, { oldRate: existingContract.rate, newRate: (updatedContract as any).rate });
+          for (let i = 0; i < lines.length; i++) {
+            if (followed[i].amount !== lines[i].amount) {
+              await storage.updateRemunerationLine(lines[i].id, { amount: followed[i].amount });
+            }
           }
         } catch (remunError: any) {
-          console.error('Failed to update remuneration lines:', remunError);
+          console.error('[contracts] base pay line did not follow the new rate:', remunError?.message ?? String(remunError));
         }
       }
 
@@ -7693,6 +7766,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const userId = req.user?.id;
 
+      // Who may submit, and from which state: the worker, the employing
+      // business or SDP; only a draft or a rejected timesheet, with entries.
+      const current = await storage.getTimesheetById(id);
+      if (!current) return res.status(404).json({ message: "Timesheet not found" });
+      const access = await resolveTimesheetAccess(req.user, current, 'manage');
+      if (!access.allowed) return res.status(access.status).json({ message: access.message });
+      if (!isTimesheetEditable(current.status)) {
+        return res.status(409).json({
+          code: 'TIMESHEET_NOT_SUBMITTABLE',
+          message: current.status === 'submitted'
+            ? "This timesheet has already been submitted and is awaiting approval."
+            : "An approved timesheet cannot be submitted again.",
+        });
+      }
+      if (!current.entries || current.entries.length === 0) {
+        return res.status(400).json({ code: 'TIMESHEET_EMPTY', message: "Log at least one entry before submitting." });
+      }
+
       await storage.updateTimesheetStatus(id, 'submitted', userId);
 
       // Notify the approver (business / host client) by email so they don't have to poll the UI.
@@ -7805,66 +7896,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update timesheet (only draft timesheets)
+  // Edit a draft or rejected timesheet: period, notes and the whole entry list.
   app.patch('/api/timesheets/:id', authMiddleware, async (req: any, res) => {
     try {
       const { id } = req.params;
-      const userId = req.user?.id;
-      const userType = req.user?.userType;
-      
-      // Get the timesheet to verify access and status
       const timesheet = await storage.getTimesheetById(id);
-      if (!timesheet) {
-        return res.status(404).json({ message: "Timesheet not found" });
+      if (!timesheet) return res.status(404).json({ message: "Timesheet not found" });
+      const access = await resolveTimesheetAccess(req.user, timesheet, 'manage');
+      if (!access.allowed) return res.status(access.status).json({ message: access.message });
+      if (!isTimesheetEditable(timesheet.status)) {
+        return res.status(409).json({ code: 'TIMESHEET_NOT_EDITABLE', message: "Only draft or rejected timesheets can be edited." });
       }
-      
-      // Only draft timesheets can be edited
-      if (timesheet.status !== 'draft') {
-        return res.status(400).json({ message: "Only draft timesheets can be edited" });
-      }
-      
-      // Authorization check
-      if (userType === 'worker') {
-        const worker = await storage.getWorkerByUserId(userId);
-        if (!worker || worker.id !== timesheet.workerId) {
-          return res.status(403).json({ message: "Unauthorized to edit this timesheet" });
-        }
-      } else if (userType === 'business_user') {
-        const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
-        const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
-        const hasAccess = (ownedBusiness && ownedBusiness.id === timesheet.businessId) || 
-                         accessibleBusinessIds.includes(timesheet.businessId);
-        
-        if (!hasAccess) {
-          return res.status(403).json({ message: "Unauthorized to edit this timesheet" });
-        }
-      } else if (userType !== 'sdp_internal') {
-        return res.status(403).json({ message: "Unauthorized to edit timesheets" });
-      }
-      
-      // Validate and whitelist only editable fields
+
+      const decimalish = z.union([z.string(), z.number(), z.null()]).optional();
+      const isoDay = z.string().min(1).refine((v) => !Number.isNaN(new Date(v).getTime()), 'Invalid date');
       const updateTimesheetSchema = z.object({
-        periodStart: z.string().optional(),
-        periodEnd: z.string().optional(),
-        notes: z.string().optional(),
+        periodStart: isoDay.optional(),
+        periodEnd: isoDay.optional(),
+        notes: z.string().nullable().optional(),
         entries: z.array(z.object({
-          date: z.string(),
-          hoursWorked: z.string().optional(),
-          startTime: z.string().optional(),
-          endTime: z.string().optional(),
-          breakHours: z.string().optional(),
-          description: z.string().optional(),
-        })).optional(),
-      });
-      
-      const validatedData = updateTimesheetSchema.parse(req.body);
-      const updatedTimesheet = await storage.updateTimesheet(id, validatedData as any);
-      res.json(updatedTimesheet);
+          date: isoDay,
+          hoursWorked: decimalish,
+          daysWorked: decimalish,
+          breakHours: decimalish,
+          startTime: z.string().nullable().optional(),
+          endTime: z.string().nullable().optional(),
+          description: z.string().nullable().optional(),
+          projectRateLineId: z.string().nullable().optional(),
+        })).optional(), // unknown keys such as isPresent are stripped
+      }).refine(
+        (d) => !(d.periodStart && d.periodEnd) || new Date(d.periodStart) <= new Date(d.periodEnd),
+        { message: 'Period end must be on or after period start', path: ['periodEnd'] },
+      );
+
+      const validated = updateTimesheetSchema.parse(req.body ?? {});
+      const updated = await storage.updateTimesheet(id, validated);
+      res.json(updated);
     } catch (error: any) {
-      console.error("Error updating timesheet:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: "Invalid input", errors: error.errors });
       }
-      res.status(400).json({ message: "Failed to update timesheet" });
+      console.error("Error updating timesheet:", error?.message ?? String(error));
+      res.status(500).json({ message: "Failed to update timesheet" });
     }
   });
 
@@ -7872,9 +7945,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete('/api/timesheets/:id', authMiddleware, async (req: any, res) => {
     try {
       const { id } = req.params;
-      const userId = req.user?.id;
-      const userType = req.user?.userType;
-      
+
       // Get the timesheet to verify access and status
       const timesheet = await storage.getTimesheetById(id);
       if (!timesheet) {
@@ -7886,25 +7957,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Only draft timesheets can be deleted" });
       }
       
-      // Authorization check
-      if (userType === 'worker') {
-        const worker = await storage.getWorkerByUserId(userId);
-        if (!worker || worker.id !== timesheet.workerId) {
-          return res.status(403).json({ message: "Unauthorized to delete this timesheet" });
-        }
-      } else if (userType === 'business_user') {
-        const accessibleBusinessIds = req.user?.accessibleBusinessIds || [];
-        const ownedBusiness = await storage.getPrimaryBusinessForUser(userId);
-        const hasAccess = (ownedBusiness && ownedBusiness.id === timesheet.businessId) || 
-                         accessibleBusinessIds.includes(timesheet.businessId);
-        
-        if (!hasAccess) {
-          return res.status(403).json({ message: "Unauthorized to delete this timesheet" });
-        }
-      } else if (userType !== 'sdp_internal') {
-        return res.status(403).json({ message: "Unauthorized to delete timesheets" });
-      }
-      
+      const access = await resolveTimesheetAccess(req.user, timesheet, 'manage');
+      if (!access.allowed) return res.status(access.status).json({ message: access.message });
+
       await storage.deleteTimesheet(id);
       res.json({ message: "Timesheet deleted successfully" });
     } catch (error: any) {
@@ -8048,9 +8103,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Timesheet Expense routes
+  // Timesheet Expense routes. Reading needs read access (the host client of
+  // the contract included); adding, changing or removing needs manage access
+  // (worker / employing business / SDP) and a draft or rejected timesheet.
+  const loadTimesheetForExpenses = async (req: any, res: any, access: 'read' | 'manage') => {
+    const timesheet = await storage.getTimesheetById(req.params.id);
+    if (!timesheet) { res.status(404).json({ message: "Timesheet not found" }); return null; }
+    const result = await resolveTimesheetAccess(req.user, timesheet, access);
+    if (!result.allowed) { res.status(result.status).json({ message: result.message }); return null; }
+    if (access === 'manage' && !isTimesheetEditable(timesheet.status)) {
+      res.status(409).json({ code: 'TIMESHEET_NOT_EDITABLE', message: "Expenses can only be changed on a draft or rejected timesheet." });
+      return null;
+    }
+    return timesheet;
+  };
+
   app.get('/api/timesheets/:id/expenses', authMiddleware, async (req: any, res) => {
     try {
+      if (!(await loadTimesheetForExpenses(req, res, 'read'))) return;
       const expenses = await storage.getExpensesByTimesheetId(req.params.id);
       res.json(expenses);
     } catch (error: any) {
@@ -8060,9 +8130,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/timesheets/:id/expenses', authMiddleware, async (req: any, res) => {
     try {
-      const { date, category, description, amount, currency, receiptUrl, notes } = req.body;
+      if (!(await loadTimesheetForExpenses(req, res, 'manage'))) return;
+      const { date, category, description, amount, currency, receiptUrl, notes } = req.body ?? {};
       if (!description || !amount || !date) {
         return res.status(400).json({ message: "date, description and amount are required" });
+      }
+      if (Number.isNaN(Number(amount)) || Number.isNaN(new Date(date).getTime())) {
+        return res.status(400).json({ message: "amount must be a number and date a valid date" });
       }
       const expense = await storage.createTimesheetExpense({
         timesheetId: req.params.id,
@@ -8076,14 +8150,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       res.json(expense);
     } catch (error: any) {
-      console.error("Error creating expense:", error);
+      console.error("Error creating expense:", error?.message ?? String(error));
       res.status(500).json({ message: "Failed to create expense" });
     }
   });
 
   app.patch('/api/timesheets/:id/expenses/:expenseId', authMiddleware, async (req: any, res) => {
     try {
-      const expense = await storage.updateTimesheetExpense(req.params.expenseId, req.body);
+      if (!(await loadTimesheetForExpenses(req, res, 'manage'))) return;
+      const body = req.body ?? {};
+      const patch: Record<string, unknown> = {};
+      for (const key of ['category', 'description', 'currency', 'receiptUrl', 'notes'] as const) {
+        if (body[key] !== undefined) patch[key] = body[key];
+      }
+      if (body.amount !== undefined) {
+        if (Number.isNaN(Number(body.amount))) return res.status(400).json({ message: "amount must be a number" });
+        patch.amount = String(body.amount);
+      }
+      if (body.date !== undefined) {
+        const d = new Date(body.date);
+        if (Number.isNaN(d.getTime())) return res.status(400).json({ message: "date must be a valid date" });
+        patch.date = d;
+      }
+      const expense = await storage.updateTimesheetExpense(req.params.expenseId, patch as any, req.params.id);
+      if (!expense) return res.status(404).json({ message: "Expense not found on this timesheet" });
       res.json(expense);
     } catch (error: any) {
       res.status(500).json({ message: "Failed to update expense" });
@@ -8092,7 +8182,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete('/api/timesheets/:id/expenses/:expenseId', authMiddleware, async (req: any, res) => {
     try {
-      await storage.deleteTimesheetExpense(req.params.expenseId);
+      if (!(await loadTimesheetForExpenses(req, res, 'manage'))) return;
+      await storage.deleteTimesheetExpense(req.params.expenseId, req.params.id);
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete expense" });

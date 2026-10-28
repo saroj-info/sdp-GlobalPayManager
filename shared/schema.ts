@@ -2022,8 +2022,13 @@ export const insertContractSchema = createInsertSchema(contracts).omit({
     { message: 'Rate is required and must be a valid number' }
   ).transform((val) => String(val)),
   startDate: z.string().transform((val) => new Date(val)),
-  endDate: z.string().optional().transform((val) => val ? new Date(val) : undefined),
-  firstTimesheetStartDate: z.string().optional().transform((val) => val ? new Date(val) : undefined),
+  // Empty / missing → null (not undefined), so clearing an end date on edit is
+  // saved; drizzle skips undefined and would keep the old value.
+  endDate: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) => val ? new Date(val) : null),
+  firstTimesheetStartDate: z.union([z.string(), z.null(), z.undefined()]).optional().transform((val) => val ? new Date(val) : null),
+  // The signing columns (emailSentAt, signedAt, signingToken, signatureText, …) have no
+  // transform on purpose: the wizard never sends them and drizzle skips undefined, which
+  // is what preserves the signing audit on an edit. Do not add a ''→null transform to them.
   // Handle numeric fields that might be empty strings
   totalPackageValue: z.union([z.string(), z.number(), z.null(), z.undefined()]).optional().transform((val) =>
     val === '' || val === null || val === undefined ? null : val

@@ -187,7 +187,8 @@ export async function fetchTimesheetStatusCounts(
       .leftJoin(contracts, eq(timesheets.contractId, contracts.id))
       .where(or(
         eq(timesheets.businessId, scope.businessId),
-        eq(contracts.customerBusinessId, scope.businessId),
+        // Host clients never see drafts (same rule as the list module)
+        and(eq(contracts.customerBusinessId, scope.businessId), ne(timesheets.status, 'draft')),
       ))
       .groupBy(timesheets.status);
   }

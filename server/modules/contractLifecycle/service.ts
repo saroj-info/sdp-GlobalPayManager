@@ -1,6 +1,7 @@
 /**
  * Contract lifecycle service: renewal (clone a contract into a new row and
- * copy its lines), extension (end date only) and host client confirmation.
+ * copy its lines), extension (end date only), host client confirmation and
+ * deletion (only when nothing has been recorded against the contract).
  * Built through a factory so the logic can be exercised without a database.
  *
  * Why dedicated endpoints: PUT /api/contracts/:id validates the whole row
@@ -25,7 +26,9 @@ import type {
 import {
   dateToDay,
   dayToDate,
+  describeContractDeleteBlock,
   describeContractForLog,
+  hasContractDeleteBlockers,
   extendContractSchema,
   followRateOnRemunerationLines,
   hostClientConfirmationSchema,
@@ -35,10 +38,21 @@ import {
 } from "@shared/contractLifecycle";
 import { storage } from "../../storage";
 import { checkBusinessProfileForContract, type ContractProfileBlock } from "../businesses";
-import { isWorkerLinkedToBusiness, upsertContractAssociation } from "../workforce/associations";
+import { deactivateAssociation, isWorkerLinkedToBusiness, upsertContractAssociation } from "../workforce/associations";
 import { logContractChanges } from "../contracts/changeLog";
 import { notifySalaryContract, notifySdpOfContractRequest } from "./notifications";
-import type { AuthUser, ConfirmationResult, ExtendResult, RenewResult, Result } from "./types";
+import { countContractActivity, countContractsForWorkerAndBusiness, deleteContractWithLinks } from "./repository";
+import type {
+  AuthUser,
+  ConfirmationResult,
+  ContractActivityCounts,
+  DeleteContractResult,
+  DeleteOutcome,
+  DeletionCheck,
+  ExtendResult,
+  RenewResult,
+  Result,
+} from "./types";
 
 export interface ContractLifecycleDeps {
   getContract(id: string): Promise<Contract | undefined>;
@@ -64,6 +78,11 @@ export interface ContractLifecycleDeps {
   logContractChanges(params: { contractId: string; before: Record<string, any>; after: Record<string, any>; changedBy: string | null }): Promise<unknown>;
   notifySdpOfContractRequest(contract: Contract, business: Business, worker: Worker, requesterUserId: string): Promise<void>;
   notifySalaryContract(contract: Contract, business: Business, worker: Worker): Promise<void>;
+  // Deletion (repository.ts); behind deps so the factory stays DB-free in tests.
+  countContractActivity(contractId: string): Promise<ContractActivityCounts>;
+  deleteContractWithLinks(contractId: string): Promise<DeleteOutcome>;
+  countContractsForWorkerAndBusiness(workerId: string, businessId: string): Promise<number>;
+  deactivateAssociation(workerId: string, businessId: string): Promise<void>;
   now?: () => Date;
 }
 
@@ -137,6 +156,39 @@ export function createContractLifecycleService(deps: ContractLifecycleDeps) {
       return { ok: true, data: { business, worker } };
     }
     return fail(403, "Your account cannot renew contracts.", 'NOT_AUTHORIZED');
+  }
+
+  // Deletion is destructive, so it is stricter than authorizeWrite: SDP
+  // admins may delete any contract; an SDP agent only one on a business in
+  // their accessibleBusinessIds (an empty list refuses, as POST /api/contracts
+  // does, unlike canAccessBusiness which reads empty as "all"); a business user
+  // only their own contract (the host-client view never matches businessId).
+  async function authorizeDelete(user: AuthUser, contract: Contract): Promise<Result<true>> {
+    if (user.userType === 'sdp_internal') {
+      const isAdmin = user.sdpRole === 'sdp_super_admin' || user.sdpRole === 'sdp_admin';
+      if (isAdmin) return { ok: true, data: true };
+      const accessible = user.accessibleBusinessIds ?? [];
+      if (!accessible.includes(contract.businessId)) {
+        return fail(403, "You do not have access to this contract's business.", 'BUSINESS_NOT_ACCESSIBLE');
+      }
+      return { ok: true, data: true };
+    }
+    if (user.userType === 'business_user') {
+      const business = await deps.getPrimaryBusinessForUser(user.id);
+      if (business && business.id === contract.businessId) return { ok: true, data: true };
+    }
+    return fail(403, "You cannot delete this contract.", 'NOT_AUTHORIZED');
+  }
+
+  function buildDeletionCheck(contract: Contract, counts: ContractActivityCounts): DeletionCheck {
+    const { purchaseOrders, ...blockers } = counts;
+    return {
+      canDelete: !hasContractDeleteBlockers(blockers),
+      blockers,
+      related: { purchaseOrders },
+      signed: !!contract.signedAt,
+      awaitingSignature: !!contract.signingToken && !contract.signedAt,
+    };
   }
 
   async function regenerateDocument(contract: Contract): Promise<{ contract: Contract; regenerated: boolean }> {
@@ -433,7 +485,61 @@ export function createContractLifecycleService(deps: ContractLifecycleDeps) {
     return { ok: true, data: { contract: updated } };
   }
 
-  return { renewContract, extendContract, setHostClientConfirmation };
+  // ---- Deletion -----------------------------------------------------------------
+
+  /** What a delete would do: blockers (timesheets, invoices, …), what cascades, signing state. */
+  async function getDeletionCheck(user: AuthUser, contractId: string): Promise<Result<DeletionCheck>> {
+    const contract = await deps.getContract(contractId);
+    if (!contract) return fail(404, "Contract not found", 'CONTRACT_NOT_FOUND');
+    const auth = await authorizeDelete(user, contract);
+    if (!auth.ok) return auth;
+    const counts = await deps.countContractActivity(contractId);
+    return { ok: true, data: buildDeletionCheck(contract, counts) };
+  }
+
+  /**
+   * Delete a contract that has no activity. Signed contracts are allowed (the
+   * caller confirms in the dialog). The change log cascades with the contract,
+   * so the server log line below is the only trace of who deleted what.
+   */
+  async function deleteContract(user: AuthUser, contractId: string): Promise<Result<DeleteContractResult>> {
+    const contract = await deps.getContract(contractId);
+    if (!contract) return fail(404, "Contract not found", 'CONTRACT_NOT_FOUND');
+    const auth = await authorizeDelete(user, contract);
+    if (!auth.ok) return auth;
+
+    const blocked = (counts: ContractActivityCounts) => {
+      const check = buildDeletionCheck(contract, counts);
+      return fail(409, describeContractDeleteBlock(check.blockers), 'CONTRACT_HAS_ACTIVITY', { blockers: check.blockers });
+    };
+
+    const counts = await deps.countContractActivity(contractId);
+    if (hasContractDeleteBlockers(buildDeletionCheck(contract, counts).blockers)) return blocked(counts);
+
+    const outcome = await deps.deleteContractWithLinks(contractId);
+    if (outcome.outcome === 'missing') return fail(404, "Contract not found", 'CONTRACT_NOT_FOUND');
+    if (outcome.outcome === 'in_use') return blocked(await deps.countContractActivity(contractId));
+
+    // After commit: an association this contract created stays only while the
+    // pair still has a contract (of any status). Best effort, never fails the delete.
+    for (const assoc of outcome.clearedAssociations) {
+      if (assoc.status !== 'active') continue;
+      try {
+        const remaining = await deps.countContractsForWorkerAndBusiness(assoc.workerId, assoc.businessId);
+        if (remaining === 0) await deps.deactivateAssociation(assoc.workerId, assoc.businessId);
+      } catch (error) {
+        logError(`association cleanup after deleting ${contractId}`, error);
+      }
+    }
+
+    console.log(
+      `[contract-lifecycle] contract ${contractId} deleted by ${user.id} (${user.userType}${user.sdpRole ? '/' + user.sdpRole : ''}): ` +
+      `${describeContractForLog(contract)}; signed=${!!contract.signedAt}; status=${contract.status}`,
+    );
+    return { ok: true, data: { deleted: true, id: contractId } };
+  }
+
+  return { renewContract, extendContract, setHostClientConfirmation, getDeletionCheck, deleteContract };
 }
 
 export const contractLifecycleService = createContractLifecycleService({
@@ -474,4 +580,8 @@ export const contractLifecycleService = createContractLifecycleService({
   logContractChanges,
   notifySdpOfContractRequest,
   notifySalaryContract,
+  countContractActivity,
+  deleteContractWithLinks,
+  countContractsForWorkerAndBusiness,
+  deactivateAssociation,
 });

@@ -30,6 +30,7 @@ import { ContractActionsMenu } from "@/components/contracts/contract-actions-men
 import { HostClientConfirmationDialog } from "@/components/modals/host-client-confirmation-dialog";
 import { ContractRenewalDialog } from "@/components/modals/contract-renewal-dialog";
 import { ContractExtendDialog } from "@/components/modals/contract-extend-dialog";
+import { DeleteContractDialog } from "@/components/modals/delete-contract-dialog";
 import { canUseContractActions, HOST_CLIENT_CONFIRMATION_LABELS, type HostClientConfirmationStatus } from "@shared/contractLifecycle";
 
 interface ContractInstance {
@@ -1351,6 +1352,8 @@ export default function ContractsPage() {
   const [activeAction, setActiveAction] = useState<'confirm' | 'renew' | 'extend' | null>(null);
   // After a renewal: open the new contract's details once the refreshed list has it.
   const [pendingOpenContractId, setPendingOpenContractId] = useState<string | null>(null);
+  // "Delete Contract" (details footer / hidden quick-actions menu): the contract the confirm dialog is for.
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [showContractDetails, setShowContractDetails] = useState(false);
   const [showContractDocument, setShowContractDocument] = useState(false);
   const [isEditingContract, setIsEditingContract] = useState(false);
@@ -1498,6 +1501,7 @@ export default function ContractsPage() {
             onConfirmClient={(c) => openQuickAction(c, 'confirm')}
             onRenew={(c) => openQuickAction(c, 'renew')}
             onExtend={(c) => openQuickAction(c, 'extend')}
+            onDelete={(c) => setDeleteTarget(c)}
           />
         )}
       </div>
@@ -2112,6 +2116,18 @@ export default function ContractsPage() {
         }}
       />
       <ContractExtendDialog open={activeAction === 'extend'} onOpenChange={closeQuickAction} contract={actionContract} />
+      <DeleteContractDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+        contract={deleteTarget}
+        onDeleted={(id) => {
+          // Close the details modal and drop the snapshot, or the derived
+          // selectedContract would fall back to the deleted row after the refetch.
+          setShowContractDetails(false);
+          setSelectedContract(null);
+          if (pendingOpenContractId === id) setPendingOpenContractId(null);
+        }}
+      />
 
       {/* Contract Details Modal - Comprehensive Summary */}
       <Dialog open={showContractDetails} onOpenChange={setShowContractDetails}>
@@ -2632,6 +2648,23 @@ export default function ContractsPage() {
                     const isFullySigned = sigStatus === 'fully_signed' || !!selectedContract?.signedAt;
                     return (
                       <>
+                        {/* Delete sits apart at the left edge (mr-auto); the other actions form
+                            one right-aligned group that wraps as a block, never one stray button.
+                            Every signing state; the server refuses once timesheets / invoices exist. */}
+                        {canUseContractActions(user as any, selectedContract) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="mr-auto border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => setDeleteTarget(selectedContract)}
+                            title="Delete this contract"
+                            data-testid="button-delete-contract"
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete
+                          </Button>
+                        )}
+                        <div className="flex flex-wrap items-center justify-end gap-2">
                         {/* Edit or Recall based on lock state */}
                         {isFullySigned ? (
                           <>
@@ -2758,6 +2791,7 @@ export default function ContractsPage() {
                             Close
                           </Button>
                         )}
+                        </div>
                       </>
                     );
                   })()

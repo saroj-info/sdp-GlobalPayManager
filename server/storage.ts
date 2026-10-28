@@ -118,7 +118,7 @@ import {
   type InsertPurchaseOrder,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, inArray, sql, isNull, isNotNull, desc, gt } from "drizzle-orm";
+import { eq, ne, and, or, inArray, sql, isNull, isNotNull, desc, gt } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 // Interface for storage operations
@@ -295,6 +295,8 @@ export interface IStorage {
   createRemunerationLines(lines: InsertRemunerationLineType[]): Promise<void>;
   getRemunerationLinesByContractId(contractId: string): Promise<RemunerationLine[]>;
   deleteRemunerationLinesByContractId(contractId: string): Promise<void>;
+  /** Delete + insert in one transaction: a failed insert keeps the previous lines. */
+  replaceRemunerationLines(contractId: string, lines: InsertRemunerationLineType[]): Promise<RemunerationLine[]>;
   createRemunerationLine(line: InsertRemunerationLineType): Promise<RemunerationLine>;
   updateRemunerationLine(id: string, data: Partial<InsertRemunerationLineType>): Promise<RemunerationLine>;
   deleteRemunerationLine(id: string): Promise<void>;
@@ -363,7 +365,8 @@ export interface IStorage {
   createTimesheet(timesheet: InsertTimesheet): Promise<Timesheet>;
   createTimesheetWithEntries(data: any): Promise<Timesheet>;
   updateTimesheetStatus(timesheetId: string, status: string, approvedBy?: string, rejectionReason?: string, decision?: { approvedVia?: string | null; approvedByEmail?: string | null }): Promise<void>;
-  updateTimesheet(timesheetId: string, data: Partial<InsertTimesheet>): Promise<Timesheet>;
+  /** Period, notes and the whole entry list; totalHours recomputed; status never written. */
+  updateTimesheet(timesheetId: string, data: UpdateTimesheetInput): Promise<Timesheet>;
   deleteTimesheet(timesheetId: string): Promise<void>;
   createTimesheetEntry(entry: InsertTimesheetEntry): Promise<TimesheetEntry>;
   updateTimesheetEntry(entryId: string, hoursWorked: string, description?: string): Promise<void>;
@@ -376,8 +379,9 @@ export interface IStorage {
   // Timesheet expense operations
   getExpensesByTimesheetId(timesheetId: string): Promise<TimesheetExpense[]>;
   createTimesheetExpense(data: Omit<InsertTimesheetExpense, 'date'> & { date: Date | string }): Promise<TimesheetExpense>;
-  updateTimesheetExpense(id: string, data: Partial<InsertTimesheetExpense>): Promise<TimesheetExpense>;
-  deleteTimesheetExpense(id: string): Promise<void>;
+  /** With `timesheetId`, only an expense of that timesheet is touched (undefined otherwise). */
+  updateTimesheetExpense(id: string, data: Partial<InsertTimesheetExpense>, timesheetId?: string): Promise<TimesheetExpense | undefined>;
+  deleteTimesheetExpense(id: string, timesheetId?: string): Promise<void>;
   
   // Leave request operations  
   getLeaveRequestsByWorker(workerId: string): Promise<LeaveRequest[]>;
@@ -504,6 +508,39 @@ export interface IStorage {
   createPasswordResetToken(userId: string, token: string, expiresAt: Date): Promise<void>;
   resetPassword(token: string, newPasswordHash: string): Promise<boolean>;
   clearPasswordResetToken(userId: string): Promise<void>;
+}
+
+/** Body of PATCH /api/timesheets/:id after validation (modules/timesheets + routes.ts). */
+export interface UpdateTimesheetInput {
+  periodStart?: string | Date;
+  periodEnd?: string | Date;
+  notes?: string | null;
+  entries?: any[];
+}
+
+/** One timesheet_entries row from an API entry (strings, numbers, '' or null in any field). */
+export function toTimesheetEntryRow(entry: any, timesheetId: string): InsertTimesheetEntry {
+  const dec = (v: unknown) => (v === undefined || v === null || v === '' ? null : String(v));
+  return {
+    timesheetId,
+    date: new Date(entry.date),
+    hoursWorked: dec(entry.hoursWorked),
+    daysWorked: dec(entry.daysWorked),
+    breakHours: dec(entry.breakHours),
+    startTime: entry.startTime || null,
+    endTime: entry.endTime || null,
+    description: entry.description || null,
+    projectRateLineId: entry.projectRateLineId || null,
+  };
+}
+
+/** `timesheets.totalHours` from the entries: the sum of the numeric hoursWorked values. */
+export function sumEntryHours(entries: any[]): string {
+  const total = (entries ?? []).reduce((sum: number, entry: any) => {
+    const h = parseFloat(entry?.hoursWorked);
+    return sum + (Number.isNaN(h) ? 0 : h);
+  }, 0);
+  return total > 0 ? total.toString() : '0';
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1863,6 +1900,17 @@ export class DatabaseStorage implements IStorage {
       .where(eq(remunerationLines.contractId, contractId));
   }
 
+  async replaceRemunerationLines(contractId: string, lines: InsertRemunerationLineType[]): Promise<RemunerationLine[]> {
+    return await db.transaction(async (tx) => {
+      await tx.delete(remunerationLines).where(eq(remunerationLines.contractId, contractId));
+      if (lines.length === 0) return [];
+      return await tx
+        .insert(remunerationLines)
+        .values(lines.map((line) => ({ ...line, contractId })))
+        .returning();
+    });
+  }
+
   async createRemunerationLine(line: InsertRemunerationLineType): Promise<RemunerationLine> {
     const [created] = await db.insert(remunerationLines).values(line).returning();
     return created;
@@ -2232,7 +2280,8 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(workers, eq(timesheets.workerId, workers.id))
       .leftJoin(timesheetEntries, eq(timesheets.id, timesheetEntries.timesheetId))
       .leftJoin(timesheetAttachments, eq(timesheets.id, timesheetAttachments.timesheetId))
-      .where(inArray(timesheets.businessId, [...businessIdSet]));
+      // Drafts are private to the worker, the employing business and SDP.
+      .where(and(inArray(timesheets.businessId, [...businessIdSet]), ne(timesheets.status, 'draft')));
 
     // Filter to only timesheets for workers provided to this customer
     const filteredTimesheetData = timesheetData.filter(row =>
@@ -2299,6 +2348,14 @@ export class DatabaseStorage implements IStorage {
       updateData.rejectionReason = rejectionReason;
     } else if (status === 'submitted') {
       updateData.submittedAt = new Date();
+      // A resubmission (after a rejection) starts clean so the earlier decision
+      // is not shown next to the new submission.
+      updateData.rejectedAt = null;
+      updateData.rejectionReason = null;
+      updateData.approvedAt = null;
+      updateData.approvedBy = null;
+      updateData.approvedVia = null;
+      updateData.approvedByEmail = null;
     }
 
     await db
@@ -2323,37 +2380,30 @@ export class DatabaseStorage implements IStorage {
       .where(eq(timesheetEntries.id, entryId));
   }
 
-  async updateTimesheet(timesheetId: string, data: Partial<InsertTimesheet>): Promise<Timesheet> {
+  async updateTimesheet(timesheetId: string, data: UpdateTimesheetInput): Promise<Timesheet> {
     return await db.transaction(async (tx) => {
-      // Extract entries if present to handle separately
-      const { entries, ...timesheetData } = data as any;
-      
-      // Update the timesheet itself
+      // Explicit set: dates coerced (timestamp columns reject strings), totals
+      // recomputed, status and the audit columns never touched here.
+      const set: Record<string, unknown> = { updatedAt: new Date() };
+      if (data.periodStart !== undefined) set.periodStart = new Date(data.periodStart);
+      if (data.periodEnd !== undefined) set.periodEnd = new Date(data.periodEnd);
+      if (data.notes !== undefined) set.notes = data.notes;
+      const entries = Array.isArray(data.entries) ? data.entries : null;
+      if (entries) set.totalHours = sumEntryHours(entries);
+
       const [updatedTimesheet] = await tx
         .update(timesheets)
-        .set({
-          ...timesheetData,
-          updatedAt: new Date(),
-        })
+        .set(set as any)
         .where(eq(timesheets.id, timesheetId))
         .returning();
-      
-      // If entries are provided, update them by deleting old ones and inserting new ones
-      if (entries && Array.isArray(entries)) {
-        // Delete existing entries
+
+      if (entries) {
         await tx.delete(timesheetEntries).where(eq(timesheetEntries.timesheetId, timesheetId));
-        
-        // Insert new entries
         if (entries.length > 0) {
-          await tx.insert(timesheetEntries).values(
-            entries.map((entry: any) => ({
-              ...entry,
-              timesheetId,
-            }))
-          );
+          await tx.insert(timesheetEntries).values(entries.map((entry) => toTimesheetEntryRow(entry, timesheetId)));
         }
       }
-      
+
       return updatedTimesheet;
     });
   }
@@ -2363,7 +2413,9 @@ export class DatabaseStorage implements IStorage {
       // Delete related entries and attachments first (due to foreign key constraints)
       await tx.delete(timesheetEntries).where(eq(timesheetEntries.timesheetId, timesheetId));
       await tx.delete(timesheetAttachments).where(eq(timesheetAttachments.timesheetId, timesheetId));
-      
+      // Expenses do not cascade either (approval tokens do)
+      await tx.delete(timesheetExpenses).where(eq(timesheetExpenses.timesheetId, timesheetId));
+
       // Delete the timesheet
       await tx.delete(timesheets).where(eq(timesheets.id, timesheetId));
     });
@@ -2428,13 +2480,7 @@ export class DatabaseStorage implements IStorage {
 
   async createTimesheetWithEntries(data: any): Promise<Timesheet> {
     return await db.transaction(async (tx) => {
-      // Calculate total hours from entries (only count non-null hoursWorked values)
-      const totalHours = data.entries.reduce((sum: number, entry: any) => {
-        const h = parseFloat(entry.hoursWorked);
-        return sum + (isNaN(h) ? 0 : h);
-      }, 0);
-
-      // Calculate total days from entries (only count non-null daysWorked values)
+      const entries: any[] = Array.isArray(data.entries) ? data.entries : [];
 
       // Create the timesheet
       const [timesheet] = await tx.insert(timesheets).values({
@@ -2443,33 +2489,15 @@ export class DatabaseStorage implements IStorage {
         businessId: data.businessId,
         periodStart: new Date(data.periodStart),
         periodEnd: new Date(data.periodEnd),
-        totalHours: totalHours > 0 ? totalHours.toString() : '0',
+        totalHours: sumEntryHours(entries),
         status: 'draft',
         notes: data.notes,
         createdBy: data.createdBy,
       }).returning();
 
       // Create the timesheet entries
-      if (data.entries && data.entries.length > 0) {
-        const entryData = data.entries.map((entry: any) => ({
-          timesheetId: timesheet.id,
-          date: new Date(entry.date),
-          hoursWorked: (entry.hoursWorked !== undefined && entry.hoursWorked !== null)
-            ? entry.hoursWorked.toString()
-            : null,
-          daysWorked: (entry.daysWorked !== undefined && entry.daysWorked !== null)
-            ? entry.daysWorked.toString()
-            : null,
-          description: entry.description || null,
-          startTime: entry.startTime || null,
-          endTime: entry.endTime || null,
-          breakHours: (entry.breakHours !== undefined && entry.breakHours !== null)
-            ? entry.breakHours.toString()
-            : null,
-          projectRateLineId: entry.projectRateLineId || null,
-        }));
-        
-        await tx.insert(timesheetEntries).values(entryData);
+      if (entries.length > 0) {
+        await tx.insert(timesheetEntries).values(entries.map((entry) => toTimesheetEntryRow(entry, timesheet.id)));
       }
       
       return timesheet;
@@ -2503,17 +2531,23 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updateTimesheetExpense(id: string, data: Partial<InsertTimesheetExpense>): Promise<TimesheetExpense> {
+  async updateTimesheetExpense(id: string, data: Partial<InsertTimesheetExpense>, timesheetId?: string): Promise<TimesheetExpense | undefined> {
+    const where = timesheetId
+      ? and(eq(timesheetExpenses.id, id), eq(timesheetExpenses.timesheetId, timesheetId))
+      : eq(timesheetExpenses.id, id);
     const [updated] = await db
       .update(timesheetExpenses)
       .set({ ...data, updatedAt: new Date() })
-      .where(eq(timesheetExpenses.id, id))
+      .where(where)
       .returning();
     return updated;
   }
 
-  async deleteTimesheetExpense(id: string): Promise<void> {
-    await db.delete(timesheetExpenses).where(eq(timesheetExpenses.id, id));
+  async deleteTimesheetExpense(id: string, timesheetId?: string): Promise<void> {
+    const where = timesheetId
+      ? and(eq(timesheetExpenses.id, id), eq(timesheetExpenses.timesheetId, timesheetId))
+      : eq(timesheetExpenses.id, id);
+    await db.delete(timesheetExpenses).where(where);
   }
 
   async getTimesheetById(id: string): Promise<(Timesheet & { worker?: Worker; entries: TimesheetEntry[]; attachments: TimesheetAttachment[] }) | undefined> {

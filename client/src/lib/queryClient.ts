@@ -22,6 +22,23 @@ export function extractApiErrorMessage(err: unknown, fallback = "Something went 
   return body || fallback;
 }
 
+/**
+ * The server's JSON error body ({ message, code, ... }) from a thrown
+ * "<status>: <body>" error, or null when the body was not JSON. Use it when a
+ * handler needs `code` or extra fields (e.g. the deletion blockers on a 409).
+ */
+export function extractApiErrorBody(err: unknown): Record<string, any> | null {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  const match = raw.match(/^\d{3}:\s*([\s\S]*)$/);
+  const body = match ? match[1] : raw;
+  try {
+    const parsed = JSON.parse(body);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 // Triggered whenever a request to a protected endpoint comes back 401.
 // Reasons this fires: JWT in localStorage expired, JWT was tampered with, or
 // the server returned 401 for any other reason. We clear the stale token and
