@@ -38,7 +38,6 @@ import {
   countryPartyContacts,
   countryAdvisorFees,
   countryDocuments,
-  jurisdictions,
   userTwoFactorAuth,
   type User,
   type UpsertUser,
@@ -106,8 +105,6 @@ import {
   type InsertCountryPartyContactType,
   type InsertCountryAdvisorFeeType,
   type InsertCountryDocumentType,
-  type InsertJurisdictionType,
-  type SelectJurisdictionType,
   type SelectContractRateLine,
   type InsertContractRateLine,
   type SelectContractBillingLine,
@@ -239,13 +236,6 @@ export interface IStorage {
   // Country entity notes
   updateCountryNotes(countryId: string, notes: string): Promise<Country>;
 
-  // Jurisdiction management
-  getJurisdictions(): Promise<SelectJurisdictionType[]>;
-  getJurisdictionsByCountry(countryId: string): Promise<SelectJurisdictionType[]>;
-  getJurisdictionById(id: string): Promise<SelectJurisdictionType | undefined>;
-  createJurisdiction(jurisdiction: InsertJurisdictionType): Promise<SelectJurisdictionType>;
-  updateJurisdiction(id: string, updates: Partial<InsertJurisdictionType>): Promise<SelectJurisdictionType>;
-  deleteJurisdiction(id: string): Promise<void>;
   
   // Role title operations
   getRoleTitle(id: string): Promise<RoleTitle | undefined>;
@@ -1401,49 +1391,6 @@ export class DatabaseStorage implements IStorage {
     }
     
     return country;
-  }
-
-  // Jurisdiction management
-  async getJurisdictions(): Promise<SelectJurisdictionType[]> {
-    return await db.select().from(jurisdictions).where(eq(jurisdictions.isActive, true));
-  }
-
-  async getJurisdictionsByCountry(countryId: string): Promise<SelectJurisdictionType[]> {
-    return await db.select().from(jurisdictions).where(
-      and(eq(jurisdictions.countryId, countryId), eq(jurisdictions.isActive, true))
-    );
-  }
-
-  async getJurisdictionById(id: string): Promise<SelectJurisdictionType | undefined> {
-    const [jurisdiction] = await db.select().from(jurisdictions).where(eq(jurisdictions.id, id));
-    return jurisdiction;
-  }
-
-  async createJurisdiction(jurisdiction: InsertJurisdictionType): Promise<SelectJurisdictionType> {
-    const [newJurisdiction] = await db.insert(jurisdictions).values(jurisdiction).returning();
-    return newJurisdiction;
-  }
-
-  async updateJurisdiction(id: string, updates: Partial<InsertJurisdictionType>): Promise<SelectJurisdictionType> {
-    const [updatedJurisdiction] = await db
-      .update(jurisdictions)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(jurisdictions.id, id))
-      .returning();
-    
-    if (!updatedJurisdiction) {
-      throw new Error(`Jurisdiction with id ${id} not found`);
-    }
-    
-    return updatedJurisdiction;
-  }
-
-  async deleteJurisdiction(id: string): Promise<void> {
-    // Soft delete by setting isActive to false
-    await db
-      .update(jurisdictions)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(jurisdictions.id, id));
   }
 
   // Role title operations

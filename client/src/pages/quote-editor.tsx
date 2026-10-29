@@ -2,7 +2,7 @@
  * /quotes/new and /quotes/:id — the quote editor. One draft object feeds the
  * inputs on the left and the live preview on the right through
  * `computeQuote`, so both always show the same figures in the local currency
- * and USD. SDP internal users only.
+ * (and the comparison currency, when the quote has one). SDP internal users only.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useParams } from "wouter";
@@ -27,6 +27,7 @@ import type { Country, Quote } from "@shared/schema";
 import {
   QUOTE_STATUSES,
   QUOTE_STATUS_LABELS,
+  comparisonCurrencyOptions,
   computeQuote,
   type QuoteCostLine,
   type QuoteDefaultsResponse,
@@ -38,7 +39,7 @@ import { PayCard } from "@/components/quotes/pay-card";
 import { FeesNotesCard } from "@/components/quotes/fees-notes-card";
 import { QuotePreviewPanel } from "@/components/quotes/quote-preview-panel";
 import {
-  draftFx, draftProblem, draftToInput, draftToPayload, emptyDraft, fxFieldsFor, quoteRowToDraft, type QuoteDraft,
+  defaultComparisonFor, draftFx, draftProblem, draftToInput, draftToPayload, emptyDraft, fxFieldsFor, quoteRowToDraft, type QuoteDraft,
 } from "@/components/quotes/quote-draft";
 
 const QUOTES_PREFIX = "/api/quotes";
@@ -58,7 +59,7 @@ export default function QuoteEditor() {
   const queryClient = useQueryClient();
   const isSdp = (user as any)?.userType === "sdp_internal";
 
-  usePageHeader(quoteId ? "Quote" : "New quote", "Cost of hiring one worker in a country, in the local currency and USD");
+  usePageHeader(quoteId ? "Quote" : "New quote", "Cost of hiring one worker in a country, in the local currency and an optional comparison currency");
 
   const { data: countries = [] } = useQuery<Country[]>({ queryKey: ["/api/countries"], enabled: isSdp });
   const { data: quoteData, isLoading: quoteLoading, error: quoteError } = useQuery<{ quote: Quote }>({
@@ -114,8 +115,11 @@ export default function QuoteEditor() {
       if (defaults.country.id === next.countryId && defaults.country.currency !== next.currency) {
         next = { ...next, currency: defaults.country.currency };
       }
+      if (next.comparisonCurrency && next.comparisonCurrency === next.currency) {
+        next = { ...next, comparisonCurrency: defaultComparisonFor(next.currency), fxLocalPerComparison: "" };
+      }
       if (!fxTouched) {
-        const f = fxFieldsFor(defaults.fx, defaults.country.currency);
+        const f = fxFieldsFor(defaults.fx, next.currency, next.comparisonCurrency);
         if (f) next = { ...next, ...f };
       }
       if (next.jurisdiction && !defaults.jurisdictions.includes(next.jurisdiction)) next = { ...next, jurisdiction: "" };
@@ -131,10 +135,26 @@ export default function QuoteEditor() {
   const result = useMemo(() => (draft ? computeQuote(draftToInput(draft), draftFx(draft)) : null), [draft]);
 
   const update = (patch: Partial<QuoteDraft>) => {
-    if ("fxLocalPerUsd" in patch) setFxTouched(true);
+    if ("fxLocalPerComparison" in patch || "fxLocalPerUsd" in patch) setFxTouched(true);
     if ("jurisdiction" in patch && !("countryId" in patch)) setJurisdictionTouched(true);
-    if ("countryId" in patch) setJurisdictionTouched(false);
+    if ("countryId" in patch) {
+      setJurisdictionTouched(false);
+      setFxTouched(false);
+    }
     setDraft((d) => (d ? { ...d, ...patch } : d));
+  };
+  // Picking a comparison currency applies today's cross rate when the provider has it; otherwise the rate is typed by hand.
+  const onComparisonChange = (code: string) => {
+    setDraft((d) => {
+      if (!d) return d;
+      const live = fxFieldsFor(defaults?.fx, d.currency, code);
+      if (live) {
+        setFxTouched(false);
+        return { ...d, comparisonCurrency: code, ...live };
+      }
+      setFxTouched(true);
+      return { ...d, comparisonCurrency: code, fxLocalPerComparison: "", fxRateSource: "manual", fxRateAsOf: null };
+    });
   };
   const onCostLinesChange = (lines: QuoteCostLine[]) => {
     setCostLinesTouched(true);
@@ -152,7 +172,8 @@ export default function QuoteEditor() {
     setFeeLinesTouched(false);
     if (defaults) setDraft((d) => (d ? { ...d, feeLines: defaults.feeLines } : d));
   };
-  const liveFx = draft ? fxFieldsFor(defaults?.fx, draft.currency) : null;
+  const liveFx = draft ? fxFieldsFor(defaults?.fx, draft.currency, draft.comparisonCurrency) : null;
+  const liveRateAvailable = !!liveFx && (!draft?.comparisonCurrency || liveFx.fxLocalPerComparison !== "");
   const useLiveRate = () => {
     if (!liveFx) return;
     setFxTouched(false);
@@ -308,16 +329,21 @@ export default function QuoteEditor() {
             result={result}
             fx={defaults?.fx ?? null}
             fxLoading={defaultsLoading}
-            liveRateAvailable={!!liveFx}
+            liveRateAvailable={liveRateAvailable}
+            comparisonOptions={comparisonCurrencyOptions(countries, draft.currency)}
             onChange={update}
+            onComparisonChange={onComparisonChange}
             onUseLiveRate={useLiveRate}
             onCostLinesChange={onCostLinesChange}
             costLinesTouched={costLinesTouched}
+            costItemsConfigured={defaults ? defaults.costItemsConfigured : true}
             onReloadCostDefaults={reloadCostDefaults}
           />
           <FeesNotesCard
             draft={draft}
             result={result}
+            fx={defaults?.fx ?? null}
+            fxLoading={defaultsLoading}
             onChange={update}
             onFeeLinesChange={onFeeLinesChange}
             feeLinesTouched={feeLinesTouched}

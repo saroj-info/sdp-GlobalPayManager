@@ -38,6 +38,7 @@ import { registerContractLifecycleRoutes } from "./modules/contractLifecycle";
 import { followRateOnRemunerationLines } from "@shared/contractLifecycle";
 import { registerQuotesRoutes } from "./modules/quotes";
 import { registerFxRoutes } from "./modules/fx";
+import { registerCountryCostsRoutes } from "./modules/countryCosts";
 
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
@@ -805,172 +806,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error('Error fetching email templates:', error);
       res.status(500).json({ error: 'Failed to fetch email templates' });
-    }
-  });
-
-  // Jurisdiction Management Routes (SDP Super Admin Only)
-  // =====================================================
-
-  // Get all jurisdictions
-  app.get('/api/admin/jurisdictions', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
-    try {
-      const jurisdictions = await storage.getJurisdictions();
-      res.json(jurisdictions);
-    } catch (error: any) {
-      console.error('Error fetching jurisdictions:', error);
-      res.status(500).json({ error: 'Failed to fetch jurisdictions' });
-    }
-  });
-
-  // Get all jurisdictions (public access for resources calculator)
-  app.get('/api/jurisdictions/all', async (req, res) => {
-    try {
-      const jurisdictions = await storage.getJurisdictions();
-      res.json(jurisdictions);
-    } catch (error: any) {
-      console.error('Error fetching all jurisdictions:', error);
-      res.status(500).json({ error: 'Failed to fetch jurisdictions' });
-    }
-  });
-
-  // Get jurisdictions by country
-  app.get('/api/jurisdictions/:countryId', async (req, res) => {
-    try {
-      const { countryId } = req.params;
-      const jurisdictions = await storage.getJurisdictionsByCountry(countryId);
-      res.json(jurisdictions);
-    } catch (error: any) {
-      console.error('Error fetching jurisdictions by country:', error);
-      res.status(500).json({ error: 'Failed to fetch jurisdictions' });
-    }
-  });
-
-  // Get specific jurisdiction
-  app.get('/api/admin/jurisdictions/:id', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const jurisdiction = await storage.getJurisdictionById(id);
-      if (!jurisdiction) {
-        return res.status(404).json({ error: 'Jurisdiction not found' });
-      }
-      res.json(jurisdiction);
-    } catch (error: any) {
-      console.error('Error fetching jurisdiction:', error);
-      res.status(500).json({ error: 'Failed to fetch jurisdiction' });
-    }
-  });
-
-  // Create new jurisdiction
-  app.post('/api/admin/jurisdictions', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
-    try {
-      const jurisdictionData = req.body;
-      const jurisdiction = await storage.createJurisdiction(jurisdictionData);
-      res.status(201).json(jurisdiction);
-    } catch (error: any) {
-      console.error('Error creating jurisdiction:', error);
-      res.status(400).json({ error: 'Failed to create jurisdiction', details: error.message });
-    }
-  });
-
-  // Update jurisdiction
-  app.patch('/api/admin/jurisdictions/:id', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const updates = req.body;
-      const jurisdiction = await storage.updateJurisdiction(id, updates);
-      res.json(jurisdiction);
-    } catch (error: any) {
-      console.error('Error updating jurisdiction:', error);
-      res.status(400).json({ error: 'Failed to update jurisdiction', details: error.message });
-    }
-  });
-
-  // Delete jurisdiction
-  app.delete('/api/admin/jurisdictions/:id', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
-    try {
-      const { id } = req.params;
-      await storage.deleteJurisdiction(id);
-      res.json({ message: 'Jurisdiction deleted successfully' });
-    } catch (error: any) {
-      console.error('Error deleting jurisdiction:', error);
-      res.status(400).json({ error: 'Failed to delete jurisdiction', details: error.message });
-    }
-  });
-
-  // Seed jurisdiction data (SDP super admin only)
-  app.post('/api/admin/jurisdictions/seed', authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']), async (req, res) => {
-    try {
-      const DEFAULT_JURISDICTIONS = {
-        Australia: {
-          "New South Wales": [
-            { id: "nsw_payroll_tax", name: "Payroll tax (NSW)", type: "percent_above_threshold", value: 5.45, thresholdAmount: 1000000, note: "Example: 5.45% above A$1m — edit to current" },
-          ],
-          Victoria: [
-            { id: "vic_payroll_tax", name: "Payroll tax (VIC)", type: "percent_above_threshold", value: 4.85, thresholdAmount: 700000, note: "Example — edit to current" },
-          ],
-          Queensland: [
-            { id: "qld_payroll_tax", name: "Payroll tax (QLD)", type: "percent_above_threshold", value: 4.75, thresholdAmount: 1300000, note: "Example — edit to current" },
-          ],
-          "South Australia": [
-            { id: "sa_payroll_tax", name: "Payroll tax (SA)", type: "percent_above_threshold", value: 4.95, thresholdAmount: 1200000, note: "Example — edit to current" },
-          ],
-          "Western Australia": [
-            { id: "wa_payroll_tax", name: "Payroll tax (WA)", type: "percent_above_threshold", value: 5.5, thresholdAmount: 1000000, note: "Example — edit to current" },
-          ],
-          Tasmania: [
-            { id: "tas_payroll_tax", name: "Payroll tax (TAS)", type: "percent_above_threshold", value: 4, thresholdAmount: 1250000, note: "Example — edit to current" },
-          ],
-          "Australian Capital Territory": [
-            { id: "act_payroll_tax", name: "Payroll tax (ACT)", type: "percent_above_threshold", value: 6.85, thresholdAmount: 2200000, note: "Example — edit to current" },
-          ],
-          "Northern Territory": [
-            { id: "nt_payroll_tax", name: "Payroll tax (NT)", type: "percent_above_threshold", value: 5.5, thresholdAmount: 1500000, note: "Example — edit to current" },
-          ],
-        },
-        USA: {
-          "California": [
-            { id: "ca_suta", name: "CA UI (SUTA)", type: "percent_with_cap", value: 3.4, capAmount: 7000, note: "New employers; experience-rated thereafter" },
-            { id: "ca_edi", name: "CA ETT/SDI (employer portion)", type: "flat", value: 0, note: "Typically employee-paid; leave at 0 or add flat" },
-          ],
-          "New York": [
-            { id: "ny_suta", name: "NY UI (SUTA)", type: "percent_with_cap", value: 4.1, capAmount: 12000, note: "Illustrative; edit for actual rate" },
-          ],
-          Texas: [
-            { id: "tx_suta", name: "TX UI (SUTA)", type: "percent_with_cap", value: 2.7, capAmount: 9000, note: "Illustrative; edit for actual rate" },
-          ],
-          Florida: [
-            { id: "fl_suta", name: "FL UI (SUTA)", type: "percent_with_cap", value: 2.7, capAmount: 7000, note: "Illustrative; edit for actual rate" },
-          ],
-          "Washington": [
-            { id: "wa_suta", name: "WA UI (SUTA)", type: "percent_with_cap", value: 1.2, capAmount: 68000, note: "Wage base much higher; illustrative" },
-          ],
-        },
-      };
-
-      let seedCount = 0;
-      for (const [countryId, states] of Object.entries(DEFAULT_JURISDICTIONS)) {
-        for (const [stateProvince, rules] of Object.entries(states)) {
-          for (const rule of rules) {
-            await storage.createJurisdiction({
-              countryId,
-              stateProvince,
-              name: rule.name,
-              calculationType: rule.type as 'flat' | 'percent' | 'percent_with_cap' | 'percent_above_threshold',
-              value: rule.value,
-              capAmount: rule.capAmount || null,
-              thresholdAmount: rule.thresholdAmount || null,
-              note: rule.note,
-              isActive: true
-            });
-            seedCount++;
-          }
-        }
-      }
-
-      res.json({ message: `Successfully seeded ${seedCount} jurisdiction rules` });
-    } catch (error: any) {
-      console.error('Error seeding jurisdiction data:', error);
-      res.status(500).json({ error: 'Failed to seed jurisdiction data', details: error.message });
     }
   });
 
@@ -7752,6 +7587,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Quotes (SDP cost quotes) and the USD exchange rates they use. SDP users
   // only; the fee schedule needs a super admin / admin.
+  registerCountryCostsRoutes(
+    app,
+    authMiddleware,
+    requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']),
+    requireSdpRole(['sdp_super_admin', 'sdp_admin']),
+  );
   registerFxRoutes(app, authMiddleware, requireSdpRole(['sdp_super_admin', 'sdp_admin', 'sdp_agent']));
   registerQuotesRoutes(
     app,

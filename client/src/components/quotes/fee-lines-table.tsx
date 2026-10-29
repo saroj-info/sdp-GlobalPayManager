@@ -31,6 +31,7 @@ interface FeeLinesTableProps {
   /** Quote mode only. */
   computed?: QuoteComputedFeeLine[];
   currency?: string;
+  comparisonCurrency?: string | null;
   /** Host Client Work: the "Paid by" column is shown. Internal Work: every fee is paid by the business. */
   showPaidBy?: boolean;
   subtotal?: QuoteMoney;
@@ -50,6 +51,7 @@ export function FeeLinesTable({
   mode = "quote",
   computed = [],
   currency = "USD",
+  comparisonCurrency = null,
   showPaidBy = true,
   subtotal,
   addLabel = "Add fee line",
@@ -178,8 +180,9 @@ export function FeeLinesTable({
                     <MoneyPair
                       size="xs"
                       local={c?.annual.local ?? 0}
-                      usd={c?.annual.usd ?? 0}
+                      comparison={c?.annual.comparison ?? null}
                       currency={currency}
+                      comparisonCurrency={comparisonCurrency}
                       muted={!line.applies}
                       data-testid="fee-line-amount"
                     />
@@ -209,7 +212,7 @@ export function FeeLinesTable({
         {isQuote && subtotal && (
           <div className="flex items-center gap-4">
             <span className="text-sm text-secondary-600">SDP fees</span>
-            <MoneyPair local={subtotal.local} usd={subtotal.usd} currency={currency} data-testid="fee-lines-subtotal" />
+            <MoneyPair local={subtotal.local} comparison={subtotal.comparison} currency={currency} comparisonCurrency={comparisonCurrency} data-testid="fee-lines-subtotal" />
           </div>
         )}
       </div>

@@ -1,15 +1,18 @@
 /**
- * A money figure in the quote's local currency with the USD equivalent under
- * it. Every amount on the Quotes editor (inputs side AND preview) renders
- * through this so the two currencies always appear together.
+ * A money figure in the quote's local currency with the comparison-currency
+ * equivalent under it (one line when the quote has no comparison currency).
+ * Every amount on the Quotes editor (inputs side AND preview) renders through
+ * this so the two currencies always appear together.
  */
 import { cn } from "@/lib/utils";
 import { fmtQuoteMoney } from "@shared/quotes";
 
 interface MoneyPairProps {
   local: number;
-  usd: number;
+  /** Amount in the comparison currency; null / undefined = no second line. */
+  comparison?: number | null;
   currency: string;
+  comparisonCurrency?: string | null;
   size?: "xs" | "sm" | "md" | "lg";
   align?: "left" | "right";
   /** Greyed and struck through (a line that does not apply). */
@@ -25,8 +28,9 @@ const SIZES: Record<NonNullable<MoneyPairProps["size"]>, [string, string]> = {
   lg: ["text-xl", "text-sm"],
 };
 
-export function MoneyPair({ local, usd, currency, size = "sm", align = "right", muted = false, className, ...rest }: MoneyPairProps) {
-  const [localCls, usdCls] = SIZES[size];
+export function MoneyPair({ local, comparison, currency, comparisonCurrency, size = "sm", align = "right", muted = false, className, ...rest }: MoneyPairProps) {
+  const [localCls, cmpCls] = SIZES[size];
+  const showComparison = comparison != null && !!comparisonCurrency;
   return (
     <div
       className={cn(
@@ -38,7 +42,11 @@ export function MoneyPair({ local, usd, currency, size = "sm", align = "right", 
       data-testid={rest["data-testid"]}
     >
       <span className={cn(localCls, "whitespace-nowrap font-medium tabular-nums text-secondary-900")}>{fmtQuoteMoney(local, currency)}</span>
-      <span className={cn(usdCls, "whitespace-nowrap tabular-nums text-secondary-500")}>{fmtQuoteMoney(usd, "USD")}</span>
+      {showComparison && (
+        <span className={cn(cmpCls, "whitespace-nowrap tabular-nums text-secondary-500")} data-testid="money-comparison">
+          {fmtQuoteMoney(comparison as number, comparisonCurrency as string)}
+        </span>
+      )}
     </div>
   );
 }

@@ -24,7 +24,6 @@ import type {
   BusinessInvitation,
   SelectSdpInvoiceType as SdpInvoice,
   SelectSdpInvoiceLineItemType as SdpInvoiceLineItem,
-  SelectJurisdictionType as Jurisdiction,
 } from '@shared/schema';
 
 export type {
@@ -49,7 +48,6 @@ export type {
   BusinessInvitation,
   SdpInvoice,
   SdpInvoiceLineItem,
-  Jurisdiction,
 };
 
 // ---- Enriched variants the API returns ---------------------------------

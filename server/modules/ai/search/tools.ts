@@ -17,10 +17,7 @@ import { listWorkers } from "../../workforce";
 import { listContracts } from "../../contracts";
 import { listTimesheets } from "../../timesheets";
 import { getPrimer, listPrimersForRole } from "./primerRegistry";
-import {
-  COUNTRY_LIST,
-  estimateEmploymentCost as estimateEmploymentCostShared,
-} from "@shared/countryEmploymentData";
+import { computeCostBreakdown, costItemsFor } from "@shared/countryCosts";
 import { buildCountryEmploymentContext } from "../countryEmploymentContext";
 import type { AuthUser, CallerRole, ToolCallRecord } from "./types";
 
@@ -222,7 +219,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     function: {
       name: "getCountryEmploymentRules",
       description:
-        "MANDATORY first call for any question about pay, tax, statutory contributions, on-costs, minimum wage, working hours, notice periods, contractor rules, or hiring practices in a named country. Returns the country's employer / contractor on-cost defaults (SDP-maintained), jurisdiction overlays where applicable, currency, and a narrative summary of the local employment regime. Numbers in your answer MUST come from this call — never from memory.",
+        "MANDATORY first call for any question about pay, tax, statutory contributions, on-costs, minimum wage, working hours, notice periods, contractor rules, or hiring practices in a named country. Returns the country's statutory / employer cost items from SDP's Cost Settings (country-wide and per state, each with a description and the engagement categories it applies to), the available states, currency, and a narrative summary of the local employment regime. Numbers in your answer MUST come from this call — never from memory.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -235,7 +232,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
           jurisdiction: {
             type: "string",
             description:
-              "Optional state / province name to include the overlay (e.g. 'California', 'New South Wales'). Applies only where SDP has an overlay defined.",
+              "Optional state / province name to include that state's items (e.g. 'California', 'New South Wales'). Applies only where SDP has state items defined.",
           },
         },
         required: ["country"],
@@ -247,7 +244,7 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     function: {
       name: "estimateEmploymentCost",
       description:
-        "Deterministic cost estimator — runs the same math as the /resources Employment Cost Calculator. Use when the user asks 'what would it cost to hire X for $Y in <country>?' or 'employer on-cost for $Y in <country>'. Chain AFTER getCountryEmploymentRules if the country has jurisdictional overlays the user should choose from.",
+        "Deterministic cost estimator — runs the same math as the Quotes page and the /resources calculator over SDP's Cost Settings items. Use when the user asks 'what would it cost to hire X for $Y in <country>?' or 'employer on-cost for $Y in <country>'. Chain AFTER getCountryEmploymentRules if the country has state items the user should choose from.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -738,20 +735,35 @@ export async function runTool(
         const payload = { error: "invalid_salary", input: args.annualSalary ?? null };
         return { result: payload, record: record(name, args, payload) };
       }
-      const estimate = estimateEmploymentCostShared({
-        country,
-        employmentType,
-        annualSalary: salary,
-        jurisdiction,
-      });
-      if (!estimate) {
-        const payload = { error: "unknown_country", input: country, supported: COUNTRY_LIST };
+      const context = await buildCountryEmploymentContext({ country, jurisdiction });
+      if ("error" in context) {
+        const payload = { error: "unknown_country", input: country, supported: context.supported };
         return { result: payload, record: record(name, args, payload) };
       }
+      const category = employmentType === "Contractor" ? "contractor_standard" : "employment";
+      const jurisdictionApplied = context.jurisdictionItems ? context.jurisdictionRequested : undefined;
+      const items = costItemsFor(context.costItems, { category, jurisdiction: jurisdictionApplied ?? null });
+      const breakdown = computeCostBreakdown(items, salary);
       const payload = {
-        ...estimate,
+        country: context.country.name,
+        countryCode: context.country.code,
+        currency: context.country.currency,
+        employmentType,
+        baseSalary: breakdown.base,
+        jurisdictionApplied,
+        onCostBreakdown: breakdown.lines.map((l) => ({
+          id: l.itemKey,
+          name: l.name,
+          description: l.description,
+          stateProvince: l.stateProvince,
+          type: l.calcType,
+          ratePct: l.calcType === "flat" ? undefined : l.value,
+          amount: l.amount,
+        })),
+        onCostTotal: breakdown.onCostTotal,
+        totalEmployerCost: breakdown.totalEmployerCost,
         sourceNote:
-          "SDP calculator math — same numbers appear on /resources when the same inputs are entered.",
+          "SDP Cost Settings math — the same items and rates the Quotes page and the /resources calculator use.",
       };
       return { result: payload, record: record(name, args, payload) };
     }

@@ -51,8 +51,8 @@ export const countryPartyTypeEnum = pgEnum('country_party_type', ['shareholder',
 // Fee period enum for tax advisor fees
 export const feePeriodEnum = pgEnum('fee_period', ['monthly', 'annual']);
 
-// Jurisdiction calculation type enum
-export const jurisdictionCalculationTypeEnum = pgEnum('jurisdiction_calculation_type', ['percent', 'flat', 'percent_with_cap', 'percent_above_threshold']);
+// Cost Settings calculation type (country_cost_items)
+export const costCalcTypeEnum = pgEnum('cost_calc_type', ['percent', 'percent_with_cap', 'flat']);
 
 // User storage table.
 // (IMPORTANT) This table is mandatory for Replit Auth, don't drop it.
@@ -932,7 +932,7 @@ export const quotes = pgTable("quotes", {
   status: quoteStatusEnum("status").notNull().default('draft'),
   countryId: varchar("country_id").references(() => countries.id).notNull(),
   currency: varchar("currency", { length: 3 }).notNull(), // the country's currency at save time
-  jurisdiction: varchar("jurisdiction", { length: 120 }), // state / province name (jurisdictions.stateProvince)
+  jurisdiction: varchar("jurisdiction", { length: 120 }), // state / province name (country_cost_items.stateProvince)
   engagementCategory: varchar("engagement_category", { length: 30 }).notNull(), // employment | contractor_standard | contractor_of_record
   employmentType: employmentTypeEnum("employment_type").notNull(),
   contractorCompliance: boolean("contractor_compliance"), // null (employment) | false (standard) | true (contractor of record)
@@ -944,8 +944,10 @@ export const quotes = pgTable("quotes", {
   hoursPerWeek: decimal("hours_per_week", { precision: 5, scale: 2 }).notNull().default('38'),
   daysPerWeek: integer("days_per_week").notNull().default(5),
   weeksPerYear: integer("weeks_per_year").notNull().default(52),
-  aboveThreshold: boolean("above_threshold").notNull().default(true), // employer above the payroll-tax threshold
-  fxLocalPerUsd: decimal("fx_local_per_usd", { precision: 18, scale: 8 }).notNull(), // local units per 1 USD
+  rateIncludesOnCosts: boolean("rate_includes_on_costs").notNull().default(false), // the rate is the all-inclusive amount; gross pay is derived
+  comparisonCurrency: varchar("comparison_currency", { length: 3 }), // second currency shown next to every figure; null = none
+  fxLocalPerComparison: decimal("fx_local_per_comparison", { precision: 18, scale: 8 }), // local units per 1 comparison unit
+  fxLocalPerUsd: decimal("fx_local_per_usd", { precision: 18, scale: 8 }), // local units per 1 USD — converts the fixed USD fee lines
   fxRateSource: varchar("fx_rate_source", { length: 40 }).notNull(), // 'open.er-api.com' | 'manual'
   fxRateAsOf: timestamp("fx_rate_as_of"),
   costLines: jsonb("cost_lines").$type<QuoteCostLine[]>().notNull().default([]),
@@ -1004,6 +1006,35 @@ export type InsertQuote = typeof quotes.$inferInsert;
 export type QuoteFeeDefault = typeof quoteFeeDefaults.$inferSelect;
 export type InsertQuoteFeeDefault = typeof quoteFeeDefaults.$inferInsert;
 export type FxRateSnapshot = typeof fxRateSnapshots.$inferSelect;
+
+// Cost Settings: statutory / employer cost items per country, country-wide
+// (state_province null) or per state. Seeded at boot from
+// shared/countryCostSeed.ts for a country with no rows; edited on
+// /platform-config → Cost Settings (server: modules/countryCosts). Read by the
+// quote defaults, the AI country tools, the wizard's country panel and the
+// /resources calculator. Vocabulary + Zod: shared/countryCosts.ts.
+export const countryCostItems = pgTable("country_cost_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  countryId: varchar("country_id").references(() => countries.id).notNull(),
+  stateProvince: varchar("state_province", { length: 120 }), // null = country-wide
+  itemKey: varchar("item_key", { length: 60 }).notNull(), // seed id (super, nsw_payroll_tax) or custom_<rand>
+  name: varchar("name", { length: 120 }).notNull(),
+  description: text("description").notNull().default(''),
+  appliesTo: text("applies_to").array().notNull().default([]), // employment | contractor_standard | contractor_of_record
+  calcType: costCalcTypeEnum("calc_type").notNull(),
+  value: decimal("value", { precision: 10, scale: 4 }).notNull(), // percent, or the annual local amount for flat
+  capAmount: decimal("cap_amount", { precision: 14, scale: 2 }), // percent_with_cap: annual wage cap, local currency
+  sortOrder: integer("sort_order").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  updatedByUserId: varchar("updated_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_country_cost_items_country").on(table.countryId, table.stateProvince, table.sortOrder),
+]);
+
+export type CountryCostItemRow = typeof countryCostItems.$inferSelect;
+export type InsertCountryCostItem = typeof countryCostItems.$inferInsert;
 
 // Append-only audit log of worker profile edits. Same shape/purpose as
 // contractChangeLog. Rendered as "Change History" on the workforce details
@@ -2439,37 +2470,6 @@ export const insertEmailSettingsSchema = createInsertSchema(emailSettings).omit(
   updatedAt: true,
 });
 
-// Jurisdiction management table
-export const jurisdictions = pgTable("jurisdictions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  countryId: varchar("country_id").notNull(),
-  stateProvince: varchar("state_province").notNull(), // e.g., "New South Wales", "California"
-  name: varchar("name").notNull(), // e.g., "Payroll tax (NSW)", "CA UI (SUTA)"
-  calculationType: jurisdictionCalculationTypeEnum("calculation_type").notNull(),
-  value: decimal("value", { precision: 10, scale: 4 }), // percentage or flat amount
-  capAmount: decimal("cap_amount", { precision: 12, scale: 2 }), // for percent_with_cap
-  thresholdAmount: decimal("threshold_amount", { precision: 12, scale: 2 }), // for percent_above_threshold
-  note: text("note"), // Additional notes for the jurisdiction rule
-  isActive: boolean("is_active").default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Jurisdiction insert schema
-export const insertJurisdictionSchema = createInsertSchema(jurisdictions).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-// Jurisdiction relations
-export const jurisdictionsRelations = relations(jurisdictions, ({ one }) => ({
-  country: one(countries, {
-    fields: [jurisdictions.countryId],
-    references: [countries.id],
-  }),
-}));
-
 // Email template select types
 export type SelectEmailTemplateDefinitionType = typeof emailTemplateDefinitions.$inferSelect;
 export type SelectEmailTemplateType = typeof emailTemplates.$inferSelect;
@@ -2533,6 +2533,3 @@ export type SelectSdpInvoiceLineItemType = typeof sdpInvoiceLineItems.$inferSele
 export type InsertMarginPaymentType = z.infer<typeof insertMarginPaymentSchema>;
 export type SelectMarginPaymentType = typeof marginPayments.$inferSelect;
 
-// Jurisdiction types
-export type InsertJurisdictionType = z.infer<typeof insertJurisdictionSchema>;
-export type SelectJurisdictionType = typeof jurisdictions.$inferSelect;

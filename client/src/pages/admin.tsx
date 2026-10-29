@@ -480,6 +480,7 @@ import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { VariableHelper } from "@/components/VariableHelper";
 import { BillingTermsAdminPanel } from "@/components/admin/billing-terms-admin-panel";
 import { QuoteFeeDefaultsPanel } from "@/components/admin/quote-fee-defaults-panel";
+import { CountryCostSettingsPanel } from "@/components/admin/country-cost-settings-panel";
 
 const templateFormSchema = z.object({
   name: z.string().min(1, "Template name is required"),
@@ -521,13 +522,6 @@ export default function AdminPage() {
   const [editingEmailTemplate, setEditingEmailTemplate] = useState<any>(null);
   const [isEmailPreviewOpen, setIsEmailPreviewOpen] = useState(false);
   const [previewEmailHtml, setPreviewEmailHtml] = useState<string>('');
-  const [isJurisdictionDialogOpen, setIsJurisdictionDialogOpen] = useState(false);
-  const [selectedJurisdiction, setSelectedJurisdiction] = useState<any>(null);
-  const [jurisdictionForm, setJurisdictionForm] = useState({
-    countryId: '',
-    calculationType: 'percent'
-  });
-  const [jurisdictionCountryFilter, setJurisdictionCountryFilter] = useState<string>('all');
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -552,11 +546,6 @@ export default function AdminPage() {
   // Fetch email template definitions
   const { data: emailDefinitions, isLoading: isLoadingEmailDefinitions } = useQuery<any[]>({
     queryKey: ['/api/admin/email-template-definitions'],
-  });
-
-  // Fetch jurisdictions
-  const { data: jurisdictions, isLoading: isLoadingJurisdictions } = useQuery<any[]>({
-    queryKey: ['/api/admin/jurisdictions'],
   });
 
   // Create/Update template mutation
@@ -630,84 +619,6 @@ export default function AdminPage() {
     }
   };
 
-  // Jurisdiction mutations
-  const saveJurisdictionMutation = useMutation({
-    mutationFn: (data: any) => {
-      const url = selectedJurisdiction 
-        ? `/api/admin/jurisdictions/${selectedJurisdiction.id}` 
-        : '/api/admin/jurisdictions';
-      const method = selectedJurisdiction ? 'PATCH' : 'POST';
-      return apiRequest(method, url, data);
-    },
-    onSuccess: () => {
-      toast({
-        title: selectedJurisdiction ? "Jurisdiction Updated" : "Jurisdiction Created",
-        description: selectedJurisdiction 
-          ? "Jurisdiction rule has been updated successfully." 
-          : "Jurisdiction rule has been created successfully.",
-      });
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/jurisdictions'] });
-      setIsJurisdictionDialogOpen(false);
-      setSelectedJurisdiction(null);
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to save jurisdiction",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const deleteJurisdictionMutation = useMutation({
-    mutationFn: (jurisdictionId: string) =>
-      apiRequest('DELETE', `/api/admin/jurisdictions/${jurisdictionId}`),
-    onSuccess: () => {
-      toast({
-        title: "Jurisdiction Deleted",
-        description: "Jurisdiction rule has been deleted successfully.",
-      });
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/jurisdictions'] });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to delete jurisdiction",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const handleDeleteJurisdiction = (jurisdictionId: string) => {
-    if (confirm("Are you sure you want to delete this jurisdiction rule?")) {
-      deleteJurisdictionMutation.mutate(jurisdictionId);
-    }
-  };
-
-  const handleSaveJurisdiction = () => {
-    const formData = {
-      countryId: jurisdictionForm.countryId,
-      stateProvince: (document.getElementById('stateProvince') as HTMLInputElement)?.value || '',
-      name: (document.getElementById('name') as HTMLInputElement)?.value || '',
-      calculationType: jurisdictionForm.calculationType,
-      value: parseFloat((document.getElementById('value') as HTMLInputElement)?.value) || null,
-      capAmount: parseFloat((document.getElementById('capAmount') as HTMLInputElement)?.value) || null,
-      thresholdAmount: parseFloat((document.getElementById('thresholdAmount') as HTMLInputElement)?.value) || null,
-      note: (document.getElementById('note') as HTMLTextAreaElement)?.value || '',
-    };
-
-    saveJurisdictionMutation.mutate(formData);
-  };
-
-  const handleOpenJurisdictionDialog = (jurisdiction: any = null) => {
-    setSelectedJurisdiction(jurisdiction);
-    setJurisdictionForm({
-      countryId: jurisdiction?.countryId || '',
-      calculationType: jurisdiction?.calculationType || 'percent'
-    });
-    setIsJurisdictionDialogOpen(true);
-  };
-
   const getEmploymentTypeBadge = (type: string) => {
     const variants: Record<string, { variant: "default" | "secondary" | "outline", color: string }> = {
       contractor: { variant: "outline", color: "text-blue-600" },
@@ -738,7 +649,7 @@ export default function AdminPage() {
         <TabsList>
           <TabsTrigger value="templates">Contract Templates</TabsTrigger>
           <TabsTrigger value="email-templates">Email Templates</TabsTrigger>
-          <TabsTrigger value="jurisdiction-data">Jurisdiction Data</TabsTrigger>
+          <TabsTrigger value="cost-settings">Cost Settings</TabsTrigger>
           <TabsTrigger value="settings">System Settings</TabsTrigger>
         </TabsList>
 
@@ -1355,144 +1266,8 @@ Use variables from the helper panel on the right to customize your template.`}
           </DialogContent>
         </Dialog>
 
-        <TabsContent value="jurisdiction-data" className="space-y-6">
-          {/* Jurisdiction Data Header */}
-          <div className="flex justify-between items-center">
-            <div>
-              <h2 className="text-2xl font-semibold">Jurisdiction Data Management</h2>
-              <p className="text-muted-foreground">
-                Manage employment cost calculation rules for different countries and states/provinces
-              </p>
-            </div>
-            <Button onClick={() => handleOpenJurisdictionDialog()}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Jurisdiction Rule
-            </Button>
-          </div>
-
-          {/* Country Filter */}
-          <div className="flex items-center gap-4">
-            <Label htmlFor="countryFilter">Filter by Country:</Label>
-            <Select value={jurisdictionCountryFilter} onValueChange={setJurisdictionCountryFilter}>
-              <SelectTrigger id="countryFilter" className="w-64" data-testid="select-jurisdiction-filter">
-                <SelectValue placeholder="All countries" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Countries</SelectItem>
-                <SelectItem value="au">Australia</SelectItem>
-                <SelectItem value="nz">New Zealand</SelectItem>
-                <SelectItem value="us">United States</SelectItem>
-                <SelectItem value="uk">United Kingdom</SelectItem>
-                <SelectItem value="sg">Singapore</SelectItem>
-                <SelectItem value="ie">Ireland</SelectItem>
-                <SelectItem value="in">India</SelectItem>
-                <SelectItem value="ph">Philippines</SelectItem>
-                <SelectItem value="ca">Canada</SelectItem>
-                <SelectItem value="jp">Japan</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Jurisdictions List */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MapPin className="h-5 w-5" />
-                Jurisdiction Rules
-                {jurisdictionCountryFilter !== 'all' && (
-                  <Badge variant="secondary" className="ml-2">
-                    Filtered
-                  </Badge>
-                )}
-              </CardTitle>
-              <CardDescription>
-                Employment cost calculation rules by country and state/province
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {isLoadingJurisdictions ? (
-                <div className="animate-pulse space-y-4">
-                  {[...Array(6)].map((_, i) => (
-                    <div key={i} className="h-16 bg-gray-200 rounded"></div>
-                  ))}
-                </div>
-              ) : (jurisdictions?.length ?? 0) > 0 ? (
-                (() => {
-                  const filteredJurisdictions = jurisdictions!.filter((j: any) =>
-                    jurisdictionCountryFilter === 'all' || j.countryId === jurisdictionCountryFilter
-                  );
-                  
-                  return filteredJurisdictions.length > 0 ? (
-                    <div className="space-y-4">
-                      {filteredJurisdictions.map((jurisdiction: any) => (
-                        <div key={jurisdiction.id} className="flex items-center justify-between p-4 border rounded-lg">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Badge variant="outline" className="text-xs">
-                                {jurisdiction.countryId}
-                              </Badge>
-                              <span className="font-medium">{jurisdiction.stateProvince}</span>
-                            </div>
-                            <p className="text-sm font-medium text-gray-900">{jurisdiction.name}</p>
-                            <p className="text-xs text-gray-500">{jurisdiction.note}</p>
-                            <div className="flex items-center gap-4 mt-1 text-xs text-gray-500">
-                              <span>Type: {jurisdiction.calculationType}</span>
-                              {jurisdiction.value && <span>Value: {jurisdiction.value}%</span>}
-                              {jurisdiction.capAmount && <span>Cap: ${jurisdiction.capAmount}</span>}
-                              {jurisdiction.thresholdAmount && <span>Threshold: ${jurisdiction.thresholdAmount}</span>}
-                            </div>
-                          </div>
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleOpenJurisdictionDialog(jurisdiction)}
-                              data-testid={`button-edit-jurisdiction-${jurisdiction.id}`}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleDeleteJurisdiction(jurisdiction.id)}
-                              className="text-red-600 hover:text-red-700"
-                              data-testid={`button-delete-jurisdiction-${jurisdiction.id}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-12">
-                      <Filter className="mx-auto h-12 w-12 text-muted-foreground/50 mb-4" />
-                      <h3 className="text-lg font-medium mb-2">No Rules for Selected Country</h3>
-                      <p className="text-muted-foreground mb-4">
-                        No jurisdiction rules found for the selected country filter
-                      </p>
-                      <Button variant="outline" onClick={() => setJurisdictionCountryFilter('all')}>
-                        Clear Filter
-                      </Button>
-                    </div>
-                  );
-                })()
-                
-              ) : (
-                <div className="text-center py-12">
-                  <MapPin className="mx-auto h-12 w-12 text-muted-foreground/50 mb-4" />
-                  <h3 className="text-lg font-medium mb-2">No Jurisdiction Rules</h3>
-                  <p className="text-muted-foreground mb-4">
-                    Create jurisdiction rules to power the employment cost calculator
-                  </p>
-                  <Button onClick={() => handleOpenJurisdictionDialog()}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add First Rule
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+        <TabsContent value="cost-settings" className="space-y-6">
+          <CountryCostSettingsPanel />
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-6">
@@ -1501,140 +1276,6 @@ Use variables from the helper panel on the right to customize your template.`}
         </TabsContent>
       </Tabs>
 
-      {/* Jurisdiction Dialog */}
-      <Dialog open={isJurisdictionDialogOpen} onOpenChange={setIsJurisdictionDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {selectedJurisdiction ? 'Edit Jurisdiction Rule' : 'Add Jurisdiction Rule'}
-            </DialogTitle>
-            <DialogDescription>
-              {selectedJurisdiction ? 'Update the jurisdiction calculation rule.' : 'Create a new jurisdiction calculation rule.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="countryId">Country</Label>
-                <Select 
-                  value={jurisdictionForm.countryId} 
-                  onValueChange={(value) => setJurisdictionForm({...jurisdictionForm, countryId: value})}
-                >
-                  <SelectTrigger id="countryId" data-testid="select-jurisdiction-country">
-                    <SelectValue placeholder="Select country" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="au">Australia</SelectItem>
-                    <SelectItem value="nz">New Zealand</SelectItem>
-                    <SelectItem value="us">United States</SelectItem>
-                    <SelectItem value="uk">United Kingdom</SelectItem>
-                    <SelectItem value="sg">Singapore</SelectItem>
-                    <SelectItem value="ie">Ireland</SelectItem>
-                    <SelectItem value="in">India</SelectItem>
-                    <SelectItem value="ph">Philippines</SelectItem>
-                    <SelectItem value="ca">Canada</SelectItem>
-                    <SelectItem value="jp">Japan</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label htmlFor="stateProvince">State/Province</Label>
-                <Input
-                  id="stateProvince"
-                  placeholder="e.g., New South Wales"
-                  defaultValue={selectedJurisdiction?.stateProvince || ''}
-                  data-testid="input-jurisdiction-state"
-                />
-              </div>
-            </div>
-            <div>
-              <Label htmlFor="name">Rule Name</Label>
-              <Input
-                id="name"
-                placeholder="e.g., Payroll tax (NSW)"
-                defaultValue={selectedJurisdiction?.name || ''}
-                data-testid="input-jurisdiction-name"
-              />
-            </div>
-            <div>
-              <Label htmlFor="calculationType">Calculation Type</Label>
-              <Select 
-                value={jurisdictionForm.calculationType}
-                onValueChange={(value) => setJurisdictionForm({...jurisdictionForm, calculationType: value})}
-              >
-                <SelectTrigger data-testid="select-jurisdiction-type">
-                  <SelectValue placeholder="Select calculation type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="flat">Flat Amount</SelectItem>
-                  <SelectItem value="percent">Percentage</SelectItem>
-                  <SelectItem value="percent_with_cap">Percentage with Cap</SelectItem>
-                  <SelectItem value="percent_above_threshold">Percentage Above Threshold</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <Label htmlFor="value">Value (%)</Label>
-                <Input
-                  id="value"
-                  type="number"
-                  step="0.01"
-                  placeholder="5.45"
-                  defaultValue={selectedJurisdiction?.value || ''}
-                  data-testid="input-jurisdiction-value"
-                />
-              </div>
-              <div>
-                <Label htmlFor="capAmount">Cap Amount</Label>
-                <Input
-                  id="capAmount"
-                  type="number"
-                  placeholder="7000"
-                  defaultValue={selectedJurisdiction?.capAmount || ''}
-                  data-testid="input-jurisdiction-cap"
-                />
-              </div>
-              <div>
-                <Label htmlFor="thresholdAmount">Threshold</Label>
-                <Input
-                  id="thresholdAmount"
-                  type="number"
-                  placeholder="1000000"
-                  defaultValue={selectedJurisdiction?.thresholdAmount || ''}
-                  data-testid="input-jurisdiction-threshold"
-                />
-              </div>
-            </div>
-            <div>
-              <Label htmlFor="note">Note</Label>
-              <Textarea
-                id="note"
-                placeholder="Example: 5.45% above A$1m — edit to current"
-                defaultValue={selectedJurisdiction?.note || ''}
-                data-testid="input-jurisdiction-note"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setIsJurisdictionDialogOpen(false);
-              setSelectedJurisdiction(null);
-            }}>
-              Cancel
-            </Button>
-            <Button 
-              onClick={handleSaveJurisdiction}
-              disabled={saveJurisdictionMutation.isPending}
-              data-testid="button-save-jurisdiction"
-            >
-              {saveJurisdictionMutation.isPending 
-                ? 'Saving...' 
-                : (selectedJurisdiction ? 'Update' : 'Create')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

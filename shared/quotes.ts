@@ -4,9 +4,15 @@
  * PDF. Pure: no DB, no Date, no React.
  *
  * A quote prices ONE worker in ONE country: gross pay + statutory / employer
- * on-costs (from shared/countryEmploymentData.ts and the DB `jurisdictions`
- * rows) + SDP fees (from the admin schedule in `quote_fee_defaults`), every
- * figure in the local currency AND in USD at the quote's exchange rate.
+ * on-costs (seeded from the `country_cost_items` table — Cost Settings — see
+ * shared/countryCosts.ts) + SDP fees (from the admin schedule in
+ * `quote_fee_defaults`), every figure in the local currency and, when the quote
+ * has a comparison currency, in that currency too at the quote's exchange rate.
+ *
+ * Two pay modes: the rate is the worker's gross pay (default), or the rate is
+ * the ALL-INCLUSIVE amount agreed with the client (`rateIncludesOnCosts`) and
+ * the gross pay is solved from it so that pay + on-costs = the amount. SDP fees
+ * are always on top.
  *
  * The stored fields use the contract vocabulary (`employmentType`,
  * `contractorCompliance`, `isForClient`, `billingMode`, `rateType`, `rate`,
@@ -15,13 +21,14 @@
  */
 import { z } from "zod";
 import {
-  DEFAULT_EMPLOYER_ONCOSTS,
-  DEFAULT_CONTRACTOR_ONCOSTS,
-  DEFAULT_JURISDICTIONS_OVERLAY,
-  COUNTRY_CURRENCIES,
-  canonicaliseCountry,
-  type OnCostItem,
-} from "./countryEmploymentData";
+  COST_CALC_TYPES,
+  COST_CALC_TYPE_LABELS,
+  calcCostAmount,
+  costItemsFor,
+  type CostCalcInput,
+  type CostCalcType,
+  type CountryCostItem,
+} from "./countryCosts";
 import {
   CONTRACTOR_ENGAGEMENT_TYPE_VALUES,
   EMPLOYEE_ENGAGEMENT_TYPE_VALUES,
@@ -77,6 +84,11 @@ export const QUOTE_RATE_TYPE_SHORT_LABELS: Record<QuoteRateType, string> = {
   daily: "Daily",
   annual: "Annual",
 };
+export const QUOTE_RATE_UNIT_LABELS: Record<QuoteRateType, string> = {
+  hourly: "per hour",
+  daily: "per day",
+  annual: "per year",
+};
 
 export type QuoteBillingMode = "direct" | "invoice_through_platform" | "invoice_separately";
 export const QUOTE_BILLING_MODE_LABELS: Record<QuoteBillingMode, string> = {
@@ -91,14 +103,10 @@ export function resolveQuoteBillingMode(isForClient: boolean, sdpIsBillingAgent:
   return sdpIsBillingAgent ? "invoice_through_platform" : "invoice_separately";
 }
 
-export const QUOTE_CALC_TYPES = ["percent", "percent_with_cap", "percent_above_threshold", "flat"] as const;
-export type QuoteCalcType = (typeof QUOTE_CALC_TYPES)[number];
-export const QUOTE_CALC_TYPE_LABELS: Record<QuoteCalcType, string> = {
-  percent: "% of pay",
-  percent_with_cap: "% up to cap",
-  percent_above_threshold: "% above threshold",
-  flat: "Flat per year",
-};
+/** Cost line calculation types = the Cost Settings types (shared/countryCosts.ts). */
+export const QUOTE_CALC_TYPES = COST_CALC_TYPES;
+export type QuoteCalcType = CostCalcType;
+export const QUOTE_CALC_TYPE_LABELS: Record<QuoteCalcType, string> = COST_CALC_TYPE_LABELS;
 
 export const QUOTE_COST_LINE_SOURCES = ["country", "jurisdiction", "custom"] as const;
 export type QuoteCostLineSource = (typeof QUOTE_COST_LINE_SOURCES)[number];
@@ -120,13 +128,8 @@ export const QUOTE_FEE_PAID_BY_LABELS: Record<QuoteFeePaidBy, string> = {
 export const QUOTE_FX_SOURCES = ["open.er-api.com", "manual"] as const;
 export type QuoteFxSource = (typeof QUOTE_FX_SOURCES)[number];
 
-/** Base lines that a jurisdiction overlay replaces (their ids differ, so drop them by name). */
-export const JURISDICTION_SUPERSEDES_BASE_IDS = ["payroll_tax", "suta"];
-
-/** Employer on-cost ids added to the contractor list for a Contractor of Record, per canonical country. */
-export const CONTRACTOR_OF_RECORD_EMPLOYER_LINE_IDS: Record<string, string[]> = {
-  Australia: ["super"],
-};
+/** Always offered as a comparison currency, on top of the DB countries' currencies. */
+export const COMPARISON_CURRENCY_EXTRAS = ["USD", "EUR", "GBP"] as const;
 
 export const ZERO_DECIMAL_CURRENCIES = ["JPY", "VND"];
 
@@ -172,16 +175,17 @@ export const SUGGESTED_QUOTE_FEE_DEFAULTS: QuoteFeeDefaultInput[] = (
 
 export interface QuoteCostLine {
   id: string;
-  description: string;
+  /** Short label: the row title in the editor, the preview and the PDF. */
+  name: string;
+  /** Full text shown under the name (from Cost Settings, editable per quote). */
+  description?: string | null;
   calcType: QuoteCalcType;
   /** Percent for the percent types; the annual local amount for `flat`. */
   value: number;
   capAmount?: number | null;
-  thresholdAmount?: number | null;
   source: QuoteCostLineSource;
   sourceId?: string | null;
   applies: boolean;
-  note?: string | null;
   sortOrder: number;
 }
 
@@ -189,7 +193,7 @@ export interface QuoteFeeLine {
   id: string;
   description: string;
   lineType: QuoteFeeLineType;
-  /** Percent of annual gross pay (percentage_of_pay). */
+  /** Percent of annual gross pay (of the all-inclusive pay when `rateIncludesOnCosts`). */
   rate: number | null;
   /** USD per month (fixed_amount). */
   amountUsd: number | null;
@@ -207,25 +211,36 @@ export interface QuoteInput {
   isForClient: boolean;
   sdpIsBillingAgent: boolean;
   rateType: QuoteRateType;
+  /** The worker's gross rate, or the all-inclusive rate when `rateIncludesOnCosts`. */
   rate: number;
   hoursPerWeek: number;
   daysPerWeek: number;
   weeksPerYear: number;
   jurisdiction: string | null;
-  aboveThreshold: boolean;
+  /** The rate covers statutory and employer costs; gross pay is derived. */
+  rateIncludesOnCosts: boolean;
   costLines: QuoteCostLine[];
   feeLines: QuoteFeeLine[];
 }
 
+/** Exchange rates a computation uses. `localPerUsd` only converts the fixed USD fee lines. */
+export interface QuoteFx {
+  comparisonCurrency: string | null;
+  /** Local units per 1 unit of the comparison currency. */
+  localPerComparison: number | null;
+  /** Local units per 1 USD. */
+  localPerUsd: number | null;
+}
+
 export interface QuoteMoney {
   local: number;
-  usd: number;
+  /** In the comparison currency; null when the quote has none (or no rate). */
+  comparison: number | null;
 }
 
 export interface QuoteComputedCostLine extends QuoteCostLine {
-  /** The base the percentage was applied to (after cap / threshold handling). */
+  /** The base the percentage was applied to (after the cap). */
   effectiveBase: number;
-  thresholdIgnored: boolean;
   annual: QuoteMoney;
   monthly: QuoteMoney;
 }
@@ -247,7 +262,7 @@ export interface QuoteTotalsBlock {
 
 export interface QuoteTotals {
   local: { annual: QuoteTotalsBlock; monthly: QuoteTotalsBlock };
-  usd: { annual: QuoteTotalsBlock; monthly: QuoteTotalsBlock };
+  comparison: { annual: QuoteTotalsBlock; monthly: QuoteTotalsBlock } | null;
   /** Statutory and employer costs as a percentage of gross pay. */
   onCostPct: number;
 }
@@ -255,8 +270,22 @@ export interface QuoteTotals {
 export interface QuotePerUnit {
   unit: "hour" | "day";
   unitsPerYear: number;
+  /** Gross pay per unit (derived in all-inclusive mode). */
   pay: QuoteMoney;
   loadedCost: QuoteMoney;
+}
+
+/** Present only when `rateIncludesOnCosts`. */
+export interface QuoteInclusive {
+  /** The all-inclusive amount the client pays for the worker (pay + on-costs), per year / month. */
+  annualTotal: QuoteMoney;
+  monthlyTotal: QuoteMoney;
+  /** Gross pay solved from it. */
+  derivedAnnualPay: QuoteMoney;
+  /** Gross pay in the rate's own unit (per hour / day / year). */
+  derivedRate: QuoteMoney;
+  /** Flat employer costs exceed the amount: gross pay clamped at 0. */
+  shortfall: boolean;
 }
 
 export interface QuoteResult {
@@ -266,6 +295,10 @@ export interface QuoteResult {
   feeLines: QuoteComputedFeeLine[];
   totals: QuoteTotals;
   perUnit: QuotePerUnit | null;
+  inclusive: QuoteInclusive | null;
+  comparisonCurrency: string | null;
+  /** An applying fixed USD fee exists but no USD rate was given: its local amount is 0. */
+  feesNeedUsdRate: boolean;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -290,40 +323,45 @@ export function annualisePay(rateType: QuoteRateType, rate: number, hoursPerWeek
   }
 }
 
-/**
- * Same four cases as `calcLineAmount` in countryEmploymentData.ts, plus the
- * per-quote threshold rule: payroll-tax thresholds are per EMPLOYER (aggregate
- * wages), so when the employer is above the threshold the whole wage is taxed.
- */
-export function calcCostLineAmount(
-  line: Pick<QuoteCostLine, "calcType" | "value" | "capAmount" | "thresholdAmount">,
-  base: number,
-  aboveThreshold: boolean,
-): { amount: number; effectiveBase: number; thresholdIgnored: boolean } {
-  const pct = (b: number, percent: number) => (b * (percent || 0)) / 100;
-  switch (line.calcType) {
-    case "percent_with_cap": {
-      const cap = line.capAmount ?? null;
-      const effectiveBase = cap && cap > 0 ? Math.min(base, cap) : base;
-      return { amount: pct(effectiveBase, line.value), effectiveBase, thresholdIgnored: false };
-    }
-    case "percent_above_threshold": {
-      const threshold = line.thresholdAmount ?? 0;
-      if (aboveThreshold) return { amount: pct(base, line.value), effectiveBase: base, thresholdIgnored: threshold > 0 };
-      const effectiveBase = Math.max(0, base - threshold);
-      return { amount: pct(effectiveBase, line.value), effectiveBase, thresholdIgnored: false };
-    }
-    case "percent":
-      return { amount: pct(base, line.value), effectiveBase: base, thresholdIgnored: false };
-    case "flat":
-      return { amount: line.value || 0, effectiveBase: base, thresholdIgnored: false };
-    default:
-      return { amount: 0, effectiveBase: base, thresholdIgnored: false };
-  }
+export function unitsPerYearOf(input: Pick<QuoteInput, "rateType" | "hoursPerWeek" | "daysPerWeek" | "weeksPerYear">): number {
+  if (input.rateType === "hourly") return (input.hoursPerWeek || 0) * (input.weeksPerYear || 0);
+  if (input.rateType === "daily") return (input.daysPerWeek || 0) * (input.weeksPerYear || 0);
+  return 1;
 }
 
-function money(local: number, fx: number): QuoteMoney {
-  return { local: round2(local), usd: fx > 0 ? round2(local / fx) : 0 };
+/** One cost line against a base — the Cost Settings maths (shared/countryCosts.ts). */
+export function calcCostLineAmount(line: CostCalcInput, base: number): { amount: number; effectiveBase: number } {
+  return calcCostAmount(line, base);
+}
+
+/**
+ * Gross pay such that pay + Σ cost(pay) = target. Closed form when every line
+ * is a plain percentage or flat amount; bisection (cost is monotonic in pay)
+ * when a capped line is present. `shortfall` when the flat amounts alone exceed
+ * the target (pay is then 0).
+ */
+export function solveGrossPay(target: number, lines: CostCalcInput[]): { pay: number; shortfall: boolean } {
+  const t = Number.isFinite(target) && target > 0 ? target : 0;
+  const flats = lines.filter((l) => l.calcType === "flat").reduce((s, l) => s + (Number.isFinite(l.value) ? l.value : 0), 0);
+  const remaining = t - flats;
+  if (remaining <= 0) return { pay: 0, shortfall: remaining < 0 };
+  const capped = lines.filter((l) => l.calcType === "percent_with_cap" && (l.capAmount ?? 0) > 0);
+  if (capped.length === 0) {
+    const pctSum = lines
+      .filter((l) => l.calcType !== "flat")
+      .reduce((s, l) => s + (Number.isFinite(l.value) ? l.value : 0), 0);
+    return { pay: round2(remaining / (1 + pctSum / 100)), shortfall: false };
+  }
+  const f = (pay: number) => pay + lines.reduce((s, l) => s + calcCostAmount(l, pay).amount, 0) - t;
+  let lo = 0;
+  let hi = t;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (f(mid) > 0) hi = mid;
+    else lo = mid;
+    if (hi - lo < 0.0001) break;
+  }
+  return { pay: round2((lo + hi) / 2), shortfall: false };
 }
 
 function block(pay: number, statutory: number, feesBusiness: number, feesHostClient: number): QuoteTotalsBlock {
@@ -356,153 +394,143 @@ function monthlyOf(b: QuoteTotalsBlock): QuoteTotalsBlock {
 /**
  * The one calculation both columns of the editor, the server snapshot and the
  * PDF use. Lines with `applies: false` are returned with zero amounts and left
- * out of every total. `fxLocalPerUsd` = local currency units per 1 USD.
+ * out of every total.
  */
-export function computeQuote(input: QuoteInput, fxLocalPerUsd: number): QuoteResult {
-  const fx = Number.isFinite(fxLocalPerUsd) && fxLocalPerUsd > 0 ? fxLocalPerUsd : 0;
-  const annualPayLocal = round2(annualisePay(input.rateType, input.rate, input.hoursPerWeek, input.daysPerWeek, input.weeksPerYear));
+export function computeQuote(input: QuoteInput, fx: QuoteFx): QuoteResult {
+  const cmpRate = fx.comparisonCurrency && Number.isFinite(fx.localPerComparison ?? NaN) && (fx.localPerComparison ?? 0) > 0 ? (fx.localPerComparison as number) : null;
+  const comparisonCurrency = cmpRate ? fx.comparisonCurrency : null;
+  const usdRate = Number.isFinite(fx.localPerUsd ?? NaN) && (fx.localPerUsd ?? 0) > 0 ? (fx.localPerUsd as number) : null;
+  const money = (local: number): QuoteMoney => ({ local: round2(local), comparison: cmpRate ? round2(local / cmpRate) : null });
 
-  const costLines: QuoteComputedCostLine[] = [...input.costLines]
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map((line) => {
-      const calc = line.applies
-        ? calcCostLineAmount(line, annualPayLocal, input.aboveThreshold)
-        : { amount: 0, effectiveBase: annualPayLocal, thresholdIgnored: false };
+  const annualEntered = round2(annualisePay(input.rateType, input.rate, input.hoursPerWeek, input.daysPerWeek, input.weeksPerYear));
+  const sortedLines = [...input.costLines].sort((a, b) => a.sortOrder - b.sortOrder);
+  const applying = sortedLines.filter((l) => l.applies);
+
+  const computeLines = (pay: number): { lines: QuoteComputedCostLine[]; statutory: number } => {
+    const lines = sortedLines.map((line) => {
+      const calc = line.applies ? calcCostAmount(line, pay) : { amount: 0, effectiveBase: pay };
       const annualLocal = round2(calc.amount);
       return {
         ...line,
         effectiveBase: round2(calc.effectiveBase),
-        thresholdIgnored: calc.thresholdIgnored,
-        annual: money(annualLocal, fx),
-        monthly: money(annualLocal / 12, fx),
+        annual: money(annualLocal),
+        monthly: money(annualLocal / 12),
       };
     });
-  const statutoryLocal = round2(costLines.reduce((s, l) => s + (l.applies ? l.annual.local : 0), 0));
+    return { lines, statutory: round2(lines.reduce((s, l) => s + (l.applies ? l.annual.local : 0), 0)) };
+  };
 
+  let annualPayLocal = annualEntered;
+  let shortfall = false;
+  let computed = computeLines(annualPayLocal);
+  if (input.rateIncludesOnCosts) {
+    const solved = solveGrossPay(annualEntered, applying);
+    shortfall = solved.shortfall;
+    annualPayLocal = solved.pay;
+    computed = computeLines(annualPayLocal);
+    // Second pass: absorb the per-line rounding so pay + on-costs lands on the amount.
+    const adjusted = round2(annualEntered - computed.statutory);
+    if (!shortfall && adjusted >= 0 && Math.abs(adjusted - annualPayLocal) >= 0.005) {
+      annualPayLocal = adjusted;
+      computed = computeLines(annualPayLocal);
+    }
+  }
+  const costLines = computed.lines;
+  const statutoryLocal = computed.statutory;
+  const feeBaseLocal = input.rateIncludesOnCosts ? annualEntered : annualPayLocal;
+
+  let feesNeedUsdRate = false;
   const feeLines: QuoteComputedFeeLine[] = [...input.feeLines]
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((line) => {
       let annualLocal = 0;
-      let annualUsd = 0;
       if (line.applies) {
         if (line.lineType === "fixed_amount") {
-          annualUsd = round2((line.amountUsd || 0) * 12);
-          annualLocal = round2(annualUsd * fx);
+          const annualUsd = round2((line.amountUsd || 0) * 12);
+          if (usdRate) annualLocal = round2(annualUsd * usdRate);
+          else if (annualUsd > 0) feesNeedUsdRate = true;
         } else {
-          annualLocal = round2((annualPayLocal * (line.rate || 0)) / 100);
-          annualUsd = fx > 0 ? round2(annualLocal / fx) : 0;
+          annualLocal = round2((feeBaseLocal * (line.rate || 0)) / 100);
         }
       }
-      return {
-        ...line,
-        annual: { local: annualLocal, usd: annualUsd },
-        monthly: { local: round2(annualLocal / 12), usd: round2(annualUsd / 12) },
-      };
+      return { ...line, annual: money(annualLocal), monthly: money(annualLocal / 12) };
     });
   const feesBusinessLocal = round2(feeLines.reduce((s, l) => s + (l.applies && l.paidBy === "business" ? l.annual.local : 0), 0));
   const feesHostClientLocal = round2(feeLines.reduce((s, l) => s + (l.applies && l.paidBy === "host_client" ? l.annual.local : 0), 0));
-  const feesBusinessUsd = round2(feeLines.reduce((s, l) => s + (l.applies && l.paidBy === "business" ? l.annual.usd : 0), 0));
-  const feesHostClientUsd = round2(feeLines.reduce((s, l) => s + (l.applies && l.paidBy === "host_client" ? l.annual.usd : 0), 0));
 
   const annualLocalBlock = block(annualPayLocal, statutoryLocal, feesBusinessLocal, feesHostClientLocal);
-  const annualUsdBlock = block(
-    fx > 0 ? annualPayLocal / fx : 0,
-    fx > 0 ? statutoryLocal / fx : 0,
-    feesBusinessUsd,
-    feesHostClientUsd,
-  );
+  const comparisonBlock = cmpRate
+    ? block(annualPayLocal / cmpRate, statutoryLocal / cmpRate, feesBusinessLocal / cmpRate, feesHostClientLocal / cmpRate)
+    : null;
   const totals: QuoteTotals = {
     local: { annual: annualLocalBlock, monthly: monthlyOf(annualLocalBlock) },
-    usd: { annual: annualUsdBlock, monthly: monthlyOf(annualUsdBlock) },
+    comparison: comparisonBlock ? { annual: comparisonBlock, monthly: monthlyOf(comparisonBlock) } : null,
     onCostPct: annualPayLocal > 0 ? round2((statutoryLocal / annualPayLocal) * 100) : 0,
   };
 
+  const unitsPerYear = unitsPerYearOf(input);
   let perUnit: QuotePerUnit | null = null;
-  if (input.rateType === "hourly" || input.rateType === "daily") {
-    const unitsPerYear = input.rateType === "hourly"
-      ? (input.hoursPerWeek || 0) * (input.weeksPerYear || 0)
-      : (input.daysPerWeek || 0) * (input.weeksPerYear || 0);
-    if (unitsPerYear > 0) {
-      perUnit = {
-        unit: input.rateType === "hourly" ? "hour" : "day",
-        unitsPerYear,
-        pay: money(input.rate, fx),
-        loadedCost: money(annualLocalBlock.total / unitsPerYear, fx),
-      };
-    }
+  if ((input.rateType === "hourly" || input.rateType === "daily") && unitsPerYear > 0) {
+    perUnit = {
+      unit: input.rateType === "hourly" ? "hour" : "day",
+      unitsPerYear,
+      pay: money(annualPayLocal / unitsPerYear),
+      loadedCost: money(annualLocalBlock.total / unitsPerYear),
+    };
   }
 
+  const inclusive: QuoteInclusive | null = input.rateIncludesOnCosts
+    ? {
+        annualTotal: money(annualEntered),
+        monthlyTotal: money(annualEntered / 12),
+        derivedAnnualPay: money(annualPayLocal),
+        derivedRate: money(input.rateType === "annual" ? annualPayLocal : unitsPerYear > 0 ? annualPayLocal / unitsPerYear : 0),
+        shortfall,
+      }
+    : null;
+
   return {
-    annualPay: money(annualPayLocal, fx),
-    monthlyPay: money(annualPayLocal / 12, fx),
+    annualPay: money(annualPayLocal),
+    monthlyPay: money(annualPayLocal / 12),
     costLines,
     feeLines,
     totals,
     perUnit,
+    inclusive,
+    comparisonCurrency,
+    feesNeedUsdRate,
   };
 }
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
-export function onCostItemToCostLine(item: OnCostItem, source: QuoteCostLineSource, sortOrder: number): QuoteCostLine {
+export function costItemToCostLine(item: CountryCostItem, sortOrder: number): QuoteCostLine {
+  const source: QuoteCostLineSource = item.stateProvince ? "jurisdiction" : "country";
   return {
     id: `${source}:${item.id}`,
-    description: item.name,
-    calcType: item.type,
+    name: item.name,
+    description: item.description || null,
+    calcType: item.calcType,
     value: Number(item.value) || 0,
     capAmount: item.capAmount != null ? Number(item.capAmount) : null,
-    thresholdAmount: item.thresholdAmount != null ? Number(item.thresholdAmount) : null,
     source,
     sourceId: item.id,
     applies: true,
-    note: item.note ?? null,
     sortOrder,
   };
 }
 
 /**
- * Default statutory / employer cost lines for a country and engagement
- * category. Jurisdiction lines (state payroll tax, SUTA…) are added for EVERY
- * category — the user can untick a line on the quote — and supersede the base
- * placeholder rows that carry a 0 rate.
+ * Default statutory / employer cost lines for a country, engagement category
+ * and state, from the Cost Settings items: country-wide items first, then the
+ * state's. Every line starts ticked; the user can untick it on the quote.
  */
 export function buildDefaultCostLines(args: {
-  canonicalCountry: string;
+  items: CountryCostItem[];
   category: QuoteEngagementCategory;
-  jurisdictionLines: OnCostItem[];
+  jurisdiction: string | null;
 }): QuoteCostLine[] {
-  const { canonicalCountry, category, jurisdictionLines } = args;
-  const employer = DEFAULT_EMPLOYER_ONCOSTS[canonicalCountry] ?? [];
-  const contractor = DEFAULT_CONTRACTOR_ONCOSTS[canonicalCountry] ?? [];
-
-  let base: OnCostItem[];
-  if (category === "employment") {
-    base = employer;
-  } else if (category === "contractor_of_record") {
-    const extraIds = CONTRACTOR_OF_RECORD_EMPLOYER_LINE_IDS[canonicalCountry] ?? [];
-    base = [...employer.filter((i) => extraIds.includes(i.id)), ...contractor];
-  } else {
-    base = contractor;
-  }
-
-  const hasJurisdiction = jurisdictionLines.length > 0;
-  const kept = hasJurisdiction ? base.filter((i) => !JURISDICTION_SUPERSEDES_BASE_IDS.includes(i.id)) : base;
-
-  const lines: QuoteCostLine[] = [];
-  kept.forEach((item, idx) => lines.push(onCostItemToCostLine(item, "country", idx)));
-  jurisdictionLines.forEach((item, idx) => lines.push(onCostItemToCostLine(item, "jurisdiction", kept.length + idx)));
-  return lines;
-}
-
-/** Static overlay lookup (used when the DB has no jurisdiction rows for the country). */
-export function staticJurisdictionLines(canonicalCountry: string, jurisdiction: string | null | undefined): OnCostItem[] {
-  if (!jurisdiction) return [];
-  return DEFAULT_JURISDICTIONS_OVERLAY[canonicalCountry]?.[jurisdiction] ?? [];
-}
-
-/** Static overlay names in their defined order (Australia lists New South Wales first). */
-export function staticJurisdictionNames(canonicalCountry: string): string[] {
-  return Object.keys(DEFAULT_JURISDICTIONS_OVERLAY[canonicalCountry] ?? {});
+  return costItemsFor(args.items, { category: args.category, jurisdiction: args.jurisdiction }).map((item, idx) => costItemToCostLine(item, idx));
 }
 
 export function feeDefaultsToLines(rows: Array<Pick<QuoteFeeDefaultInput, "description" | "lineType" | "rate" | "amountUsd" | "paidBy" | "sortOrder"> & { id?: string | null; isActive?: boolean | null }>): QuoteFeeLine[] {
@@ -523,13 +551,90 @@ export function feeDefaultsToLines(rows: Array<Pick<QuoteFeeDefaultInput, "descr
     }));
 }
 
-export function currencyForCanonicalCountry(canonicalCountry: string): string | null {
-  return COUNTRY_CURRENCIES[canonicalCountry]?.code ?? null;
+// ─── Comparison currency ─────────────────────────────────────────────────────
+
+/** The currencies a quote in `localCurrency` can be compared against: the countries' currencies plus USD / EUR / GBP, without the local one. */
+export function comparisonCurrencyOptions(countries: Array<{ currency?: string | null }>, localCurrency: string): string[] {
+  const set = new Set<string>();
+  for (const c of countries) {
+    const code = (c.currency ?? "").toUpperCase().trim();
+    if (code.length === 3) set.add(code);
+  }
+  for (const code of COMPARISON_CURRENCY_EXTRAS) set.add(code);
+  set.delete((localCurrency || "").toUpperCase());
+  return Array.from(set).sort();
 }
 
-/** Resolve a `countries` row (id / code / name) to the canonical cost-data name. */
-export function canonicalCountryForRow(row: { code?: string | null; name?: string | null; id?: string | null }): string | null {
-  return canonicaliseCountry(row.code) ?? canonicaliseCountry(row.name) ?? canonicaliseCountry(row.id) ?? null;
+/** Local units per 1 `target` unit from a USD-base rates map; null when either rate is missing. */
+export function crossRate(rates: Record<string, number> | null | undefined, localCurrency: string, target: string): number | null {
+  if (!rates) return null;
+  const local = rates[(localCurrency || "").toUpperCase()];
+  const tgt = rates[(target || "").toUpperCase()];
+  if (typeof local !== "number" || !(local > 0) || typeof tgt !== "number" || !(tgt > 0)) return null;
+  return local / tgt;
+}
+
+// ─── Stored-row normalisation ────────────────────────────────────────────────
+
+/** A cost line as stored (today's shape or the earlier one with `description` as the name, `note`, `thresholdAmount`). */
+export function normaliseCostLine(raw: any, idx: number): QuoteCostLine {
+  const hasName = typeof raw?.name === "string" && raw.name.trim().length > 0;
+  const name = hasName ? String(raw.name) : String(raw?.description ?? "");
+  const description = hasName ? (raw?.description ?? null) : (raw?.note ?? null);
+  const calcType: QuoteCalcType =
+    raw?.calcType === "percent_above_threshold"
+      ? "percent"
+      : (QUOTE_CALC_TYPES as readonly string[]).includes(raw?.calcType)
+        ? raw.calcType
+        : "percent";
+  const source: QuoteCostLineSource = (QUOTE_COST_LINE_SOURCES as readonly string[]).includes(raw?.source) ? raw.source : "custom";
+  return {
+    id: String(raw?.id ?? `line:${idx}`),
+    name,
+    description: typeof description === "string" && description.trim() ? description : null,
+    calcType,
+    value: Number(raw?.value) || 0,
+    capAmount: raw?.capAmount != null && Number.isFinite(Number(raw.capAmount)) ? Number(raw.capAmount) : null,
+    source,
+    sourceId: raw?.sourceId ?? null,
+    applies: raw?.applies !== false,
+    sortOrder: Number.isFinite(Number(raw?.sortOrder)) ? Number(raw.sortOrder) : idx,
+  };
+}
+
+export interface StoredQuoteShape {
+  currency: string;
+  costLines: unknown;
+  feeLines: unknown;
+  totals: unknown;
+  comparisonCurrency?: string | null;
+  fxLocalPerComparison?: string | number | null;
+  fxLocalPerUsd?: string | number | null;
+}
+
+/**
+ * A quote row as the app reads it: cost lines in today's shape, and a row saved
+ * before the comparison-currency columns existed (totals carried `usd`) read as
+ * a USD comparison at its USD rate. Returns a copy.
+ */
+export function normaliseStoredQuote<T extends StoredQuoteShape>(row: T): T {
+  const costLines = Array.isArray(row.costLines) ? row.costLines.map(normaliseCostLine) : [];
+  const feeLines = Array.isArray(row.feeLines) ? row.feeLines : [];
+  const totals: any = row.totals && typeof row.totals === "object" ? { ...(row.totals as any) } : null;
+  let comparisonCurrency = row.comparisonCurrency ?? null;
+  let fxLocalPerComparison = row.fxLocalPerComparison ?? null;
+  if (totals && "usd" in totals && !("comparison" in totals)) {
+    const legacyUsd = totals.usd;
+    delete totals.usd;
+    if ((row.currency || "").toUpperCase() !== "USD") {
+      totals.comparison = legacyUsd ?? null;
+      if (!comparisonCurrency) comparisonCurrency = "USD";
+      if (fxLocalPerComparison == null) fxLocalPerComparison = row.fxLocalPerUsd ?? null;
+    } else {
+      totals.comparison = null;
+    }
+  }
+  return { ...row, costLines, feeLines, totals, comparisonCurrency, fxLocalPerComparison };
 }
 
 // ─── Contract mapping ────────────────────────────────────────────────────────
@@ -554,7 +659,7 @@ export function contractorComplianceForCategory(category: QuoteEngagementCategor
 }
 
 /** The contract columns a future "convert to contract" action would prefill. */
-export function deriveContractFields(input: QuoteInput): QuoteContractFields {
+export function deriveContractFields(input: QuoteInput, comparisonCurrency?: string | null): QuoteContractFields {
   return {
     workerType: input.engagementCategory === "employment" ? "employee" : "contractor",
     employmentType: input.employmentType,
@@ -565,7 +670,7 @@ export function deriveContractFields(input: QuoteInput): QuoteContractFields {
     rate: input.rate,
     currency: input.currency,
     totalPackageValue: input.rateType === "annual" ? input.rate : null,
-    customerCurrency: "USD",
+    customerCurrency: comparisonCurrency || input.currency,
     countryId: input.countryId,
   };
 }
@@ -576,7 +681,7 @@ export function categoryForEngagementType(employmentType: string, contractorComp
   return contractorCompliance ? "contractor_of_record" : "contractor_standard";
 }
 
-/** Cost lines worth printing: applying, and not a 0-rate placeholder such as "Payroll tax (base)". */
+/** Cost lines worth printing: applying, and not a 0-rate placeholder. */
 export function printableCostLines<T extends QuoteCostLine>(lines: T[]): T[] {
   return lines.filter((l) => l.applies && l.value !== 0);
 }
@@ -595,24 +700,19 @@ export function fmtQuoteRate(n: number): string {
   return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 }).format(Number.isFinite(n) ? n : 0)}%`;
 }
 
-export function fmtFxRate(fxLocalPerUsd: number, currencyCode: string): string {
-  const num = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(fxLocalPerUsd || 0);
-  return `1 USD = ${num} ${currencyCode}`;
+/** "1 USD = 1.5200 AUD". */
+export function fmtFxRate(localPerUnit: number, localCurrency: string, unitCurrency: string): string {
+  const num = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(localPerUnit || 0);
+  return `1 ${unitCurrency} = ${num} ${localCurrency}`;
 }
 
-/** "11.5% of pay", "5.45% above threshold (ignored)", "AUD 1,200.00 per year". */
-export function describeCostLineBasis(line: QuoteComputedCostLine | QuoteCostLine, currencyCode: string, aboveThreshold: boolean): string {
+/** "12% of pay", "0.6% up to USD 7,000.00", "AUD 1,200.00 per year". */
+export function describeCostLineBasis(line: Pick<QuoteCostLine, "calcType" | "value" | "capAmount">, currencyCode: string): string {
   switch (line.calcType) {
     case "percent":
       return `${fmtQuoteRate(line.value)} of pay`;
     case "percent_with_cap":
       return line.capAmount ? `${fmtQuoteRate(line.value)} up to ${fmtQuoteMoney(line.capAmount, currencyCode)}` : `${fmtQuoteRate(line.value)} of pay`;
-    case "percent_above_threshold": {
-      const t = line.thresholdAmount ? ` ${fmtQuoteMoney(line.thresholdAmount, currencyCode)}` : "";
-      return aboveThreshold && line.thresholdAmount
-        ? `${fmtQuoteRate(line.value)} of pay · threshold ignored`
-        : `${fmtQuoteRate(line.value)} above threshold${t}`;
-    }
     case "flat":
       return `${fmtQuoteMoney(line.value, currencyCode)} per year`;
     default:
@@ -620,10 +720,10 @@ export function describeCostLineBasis(line: QuoteComputedCostLine | QuoteCostLin
   }
 }
 
-/** "12% of pay", "USD 399.00 per month". */
-export function describeFeeLineBasis(line: QuoteFeeLine): string {
+/** "2% of pay", "2% of all-inclusive pay", "USD 399.00 per month". */
+export function describeFeeLineBasis(line: Pick<QuoteFeeLine, "lineType" | "rate" | "amountUsd">, inclusive = false): string {
   if (line.lineType === "fixed_amount") return `${fmtQuoteMoney(line.amountUsd || 0, "USD")} per month`;
-  return `${fmtQuoteRate(line.rate || 0)} of pay`;
+  return `${fmtQuoteRate(line.rate || 0)} of ${inclusive ? "all-inclusive pay" : "pay"}`;
 }
 
 // ─── Zod ─────────────────────────────────────────────────────────────────────
@@ -632,15 +732,14 @@ const nullableMoney = z.number().min(0).max(1e12).nullable().optional();
 
 export const quoteCostLineSchema = z.object({
   id: z.string().min(1).max(80),
-  description: z.string().trim().min(1).max(200),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(2000).nullable().optional(),
   calcType: z.enum(QUOTE_CALC_TYPES),
   value: z.number().min(0).max(1e12),
   capAmount: nullableMoney,
-  thresholdAmount: nullableMoney,
   source: z.enum(QUOTE_COST_LINE_SOURCES),
   sourceId: z.string().max(120).nullable().optional(),
   applies: z.boolean(),
-  note: z.string().max(300).nullable().optional(),
   sortOrder: z.number().int().min(0).max(1000),
 });
 
@@ -678,7 +777,7 @@ const quoteInputBaseSchema = z.object({
   daysPerWeek: z.number().int().min(1).max(7),
   weeksPerYear: z.number().int().min(1).max(53),
   jurisdiction: z.string().trim().max(120).nullable(),
-  aboveThreshold: z.boolean(),
+  rateIncludesOnCosts: z.boolean().default(false),
   costLines: z.array(quoteCostLineSchema).max(50),
   feeLines: z.array(quoteFeeLineSchema).max(20),
 });
@@ -699,6 +798,12 @@ function refineQuoteInput(v: z.infer<typeof quoteInputBaseSchema>, ctx: z.Refine
 
 export const quoteInputSchema = quoteInputBaseSchema.superRefine(refineQuoteInput);
 
+const currencyCode = z
+  .string()
+  .trim()
+  .length(3)
+  .transform((s) => s.toUpperCase());
+
 export const saveQuoteSchema = quoteInputBaseSchema
   .extend({
     title: z.string().trim().min(1).max(160),
@@ -707,11 +812,27 @@ export const saveQuoteSchema = quoteInputBaseSchema
     notes: z.string().max(4000).nullable().optional(),
     validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").nullable().optional(),
     status: z.enum(QUOTE_STATUSES).default("draft"),
-    fxLocalPerUsd: z.number().positive().max(1e9),
+    comparisonCurrency: currencyCode.nullable().optional(),
+    fxLocalPerComparison: z.number().positive().max(1e9).nullable().optional(),
+    fxLocalPerUsd: z.number().positive().max(1e9).nullable().optional(),
     fxRateSource: z.enum(QUOTE_FX_SOURCES),
     fxRateAsOf: z.string().max(40).nullable().optional(),
   })
-  .superRefine(refineQuoteInput);
+  .superRefine((v, ctx) => {
+    refineQuoteInput(v, ctx);
+    const cmp = v.comparisonCurrency ?? null;
+    if (cmp && cmp === v.currency.toUpperCase()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["comparisonCurrency"], message: "The comparison currency must differ from the quote's currency." });
+    }
+    if (cmp && !(v.fxLocalPerComparison && v.fxLocalPerComparison > 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["fxLocalPerComparison"], message: `Enter the exchange rate (${v.currency.toUpperCase()} per 1 ${cmp}).` });
+    }
+    const needsUsd = v.feeLines.some((l) => l.applies && l.lineType === "fixed_amount" && (l.amountUsd ?? 0) > 0);
+    const usdCovered = (v.fxLocalPerUsd && v.fxLocalPerUsd > 0) || (cmp === "USD" && v.fxLocalPerComparison && v.fxLocalPerComparison > 0) || v.currency.toUpperCase() === "USD";
+    if (needsUsd && !usdCovered) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["fxLocalPerUsd"], message: "Enter the USD exchange rate used for the fixed SDP fees." });
+    }
+  });
 
 export type SaveQuoteInput = z.infer<typeof saveQuoteSchema>;
 
@@ -757,7 +878,6 @@ export interface QuoteDefaultsCountry {
   name: string;
   code: string;
   currency: string;
-  canonicalName: string;
 }
 
 export interface QuoteDefaultsResponse {
@@ -766,6 +886,8 @@ export interface QuoteDefaultsResponse {
   costLines: QuoteCostLine[];
   feeLines: QuoteFeeLine[];
   fx: FxRatesResponse | null;
+  /** false when the country has no Cost Settings items yet. */
+  costItemsConfigured: boolean;
 }
 
 export interface QuoteListResult<T> {

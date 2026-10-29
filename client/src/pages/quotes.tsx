@@ -72,7 +72,7 @@ export default function Quotes() {
   const queryClient = useQueryClient();
   const isSdp = (user as any)?.userType === "sdp_internal";
 
-  usePageHeader("Quotes", "Cost quotes for hiring a worker in a country, in the local currency and USD");
+  usePageHeader("Quotes", "Cost quotes for hiring a worker in a country, in the local currency with an optional comparison currency");
 
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
@@ -221,10 +221,10 @@ export default function Quotes() {
                         <div className="text-xs text-secondary-500">{getEngagementTypeLabel(q.employmentType)} · {q.isForClient ? "Host Client Work" : "Internal Work"}</div>
                       </TableCell>
                       <TableCell className="text-right">
-                        <MoneyPair size="xs" local={totals?.local.annual.pay ?? 0} usd={totals?.usd.annual.pay ?? 0} currency={q.currency} />
+                        <MoneyPair size="xs" local={totals?.local.annual.pay ?? 0} comparison={totals?.comparison?.annual.pay ?? null} currency={q.currency} comparisonCurrency={q.comparisonCurrency} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <MoneyPair size="xs" local={totals?.local.annual.total ?? 0} usd={totals?.usd.annual.total ?? 0} currency={q.currency} />
+                        <MoneyPair size="xs" local={totals?.local.annual.total ?? 0} comparison={totals?.comparison?.annual.total ?? null} currency={q.currency} comparisonCurrency={q.comparisonCurrency} />
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className={cn("border-transparent", STATUS_CLASS[st])} data-testid={`quote-status-${q.quoteNumber}`}>

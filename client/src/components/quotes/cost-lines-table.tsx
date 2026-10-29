@@ -1,10 +1,12 @@
 /**
  * "Statutory and employer cost items" rows. Every row is one 12-column grid
  * with the same spans, every control is h-9 and the computed amount sits in an
- * h-9 box, so descriptions, rates and amounts share one baseline. Column labels
- * are drawn once, on the first row. The delete button floats in the row's
- * corner so it never shifts the columns.
+ * h-9 box, so names, rates and amounts share one baseline. Column labels are
+ * drawn once, on the first row. Under the grid every row shows its full
+ * description (an auto-growing textarea, so nothing is clipped). The delete
+ * button floats in the row's corner so it never shifts the columns.
  */
+import { useLayoutEffect, useRef } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,7 +34,7 @@ interface CostLinesTableProps {
   lines: QuoteCostLine[];
   computed: QuoteComputedCostLine[];
   currency: string;
-  aboveThreshold: boolean;
+  comparisonCurrency: string | null;
   subtotal: QuoteMoney;
   onChange: (lines: QuoteCostLine[]) => void;
 }
@@ -43,7 +45,49 @@ function numberOrNull(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export function CostLinesTable({ lines, computed, currency, aboveThreshold, subtotal, onChange }: CostLinesTableProps) {
+/** A borderless textarea that grows with its content, for the description under each item. */
+export function AutoGrowTextarea({
+  value,
+  onChange,
+  placeholder,
+  className,
+  disabled,
+  "data-testid": testId,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+  disabled?: boolean;
+  "data-testid"?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.max(el.scrollHeight, 22)}px`;
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className={cn(
+        "block w-full resize-none overflow-hidden rounded-sm border border-transparent bg-transparent px-1 py-0.5 text-xs leading-snug text-secondary-600",
+        "placeholder:text-secondary-400 hover:border-secondary-200 focus:border-secondary-300 focus:bg-white focus:outline-none focus:text-secondary-900",
+        "disabled:cursor-default disabled:hover:border-transparent",
+        className,
+      )}
+      data-testid={testId}
+    />
+  );
+}
+
+export function CostLinesTable({ lines, computed, currency, comparisonCurrency, subtotal, onChange }: CostLinesTableProps) {
   const sorted = [...lines].sort((a, b) => a.sortOrder - b.sortOrder);
   const byId = new Map(computed.map((c) => [c.id, c]));
 
@@ -54,15 +98,14 @@ export function CostLinesTable({ lines, computed, currency, aboveThreshold, subt
       ...lines,
       {
         id: newQuoteLineId("custom"),
-        description: "",
+        name: "",
+        description: null,
         calcType: "percent",
         value: 0,
         capAmount: null,
-        thresholdAmount: null,
         source: "custom",
         sourceId: null,
         applies: true,
-        note: null,
         sortOrder: lines.reduce((m, l) => Math.max(m, l.sortOrder), -1) + 1,
       },
     ]);
@@ -78,7 +121,6 @@ export function CostLinesTable({ lines, computed, currency, aboveThreshold, subt
         const c = byId.get(line.id);
         const first = idx === 0;
         const needsCap = line.calcType === "percent_with_cap";
-        const needsThreshold = line.calcType === "percent_above_threshold";
         return (
           <div key={line.id} className={cn(LINE_ROW_BOX, !line.applies && "bg-white")} data-testid="cost-line-row">
             <div className={LINE_ROW_GRID}>
@@ -94,10 +136,10 @@ export function CostLinesTable({ lines, computed, currency, aboveThreshold, subt
                   />
                   <Input
                     className="h-9 min-w-0 text-sm"
-                    value={line.description}
-                    onChange={(e) => patch(line.id, { description: e.target.value })}
+                    value={line.name}
+                    onChange={(e) => patch(line.id, { name: e.target.value })}
                     placeholder="e.g. Superannuation"
-                    data-testid="cost-line-description"
+                    data-testid="cost-line-name"
                   />
                   {line.source === "jurisdiction" && (
                     <Badge variant="outline" className="shrink-0 px-1.5 text-[10px] font-medium">State</Badge>
@@ -140,8 +182,9 @@ export function CostLinesTable({ lines, computed, currency, aboveThreshold, subt
                   <MoneyPair
                     size="xs"
                     local={c?.annual.local ?? 0}
-                    usd={c?.annual.usd ?? 0}
+                    comparison={c?.annual.comparison ?? null}
                     currency={currency}
+                    comparisonCurrency={comparisonCurrency}
                     muted={!line.applies}
                     data-testid="cost-line-amount"
                   />
@@ -149,34 +192,33 @@ export function CostLinesTable({ lines, computed, currency, aboveThreshold, subt
               </div>
             </div>
 
-            {(needsCap || needsThreshold) && (
+            <div className="mt-1.5 pl-6">
+              <AutoGrowTextarea
+                value={line.description ?? ""}
+                onChange={(v) => patch(line.id, { description: v || null })}
+                placeholder="Description shown on the quote under the item name"
+                className={cn(!line.applies && "opacity-60")}
+                data-testid="cost-line-description"
+              />
+            </div>
+
+            {needsCap && (
               <div className={cn(LINE_ROW_GRID, "mt-2")}>
                 <div className="col-span-5">
-                  <Label className={LINE_CELL_LABEL}>
-                    {needsCap ? `Cap (${currency} per year)` : `Threshold (${currency} per year)`}
-                  </Label>
+                  <Label className={LINE_CELL_LABEL}>Cap ({currency} per year)</Label>
                   <Input
                     type="number"
                     step="0.01"
                     min="0"
                     className="h-8 text-right text-sm tabular-nums"
-                    value={(needsCap ? line.capAmount : line.thresholdAmount) ?? ""}
-                    onChange={(e) =>
-                      patch(line.id, needsCap ? { capAmount: numberOrNull(e.target.value) } : { thresholdAmount: numberOrNull(e.target.value) })
-                    }
-                    data-testid={needsCap ? "cost-line-cap" : "cost-line-threshold"}
+                    value={line.capAmount ?? ""}
+                    onChange={(e) => patch(line.id, { capAmount: numberOrNull(e.target.value) })}
+                    data-testid="cost-line-cap"
                   />
                 </div>
-                <div className="col-span-7 flex h-8 items-center text-xs text-secondary-500">
-                  {needsThreshold && aboveThreshold && (line.thresholdAmount ?? 0) > 0
-                    ? "Threshold ignored — the employer is above the payroll-tax threshold."
-                    : needsThreshold
-                      ? "Applied to pay above the threshold."
-                      : "Applied to pay up to the cap."}
-                </div>
+                <div className="col-span-7 flex h-8 items-center text-xs text-secondary-500">Applied to pay up to the cap.</div>
               </div>
             )}
-            {line.note && <p className="mt-1 pl-1 text-xs text-secondary-500">{line.note}</p>}
 
             <Button
               type="button"
@@ -199,7 +241,7 @@ export function CostLinesTable({ lines, computed, currency, aboveThreshold, subt
         </Button>
         <div className="flex items-center gap-4">
           <span className="text-sm text-secondary-600">Statutory and employer costs</span>
-          <MoneyPair local={subtotal.local} usd={subtotal.usd} currency={currency} data-testid="cost-lines-subtotal" />
+          <MoneyPair local={subtotal.local} comparison={subtotal.comparison} currency={currency} comparisonCurrency={comparisonCurrency} data-testid="cost-lines-subtotal" />
         </div>
       </div>
     </div>

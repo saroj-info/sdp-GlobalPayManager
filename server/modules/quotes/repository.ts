@@ -1,6 +1,7 @@
 /**
  * SQL for quotes and the admin fee schedule. Direct drizzle like the other
- * modules; countries and jurisdictions are read through `storage` (service).
+ * modules; countries are read through `storage` and cost items through
+ * modules/countryCosts (service).
  */
 import { and, asc, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { db } from "../../db";

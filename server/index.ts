@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { storage } from "./storage";
+import { ensureCountryCostDefaults } from "./modules/countryCosts";
 
 const app = express();
 
@@ -84,6 +85,15 @@ app.use((req, res, next) => {
     await storage.ensureSdpOwnedBusiness();
   } catch (err: any) {
     log(`SDP-owned business seed skipped: ${err?.message ?? err}`);
+  }
+
+  // Cost Settings: load the seed for every active country that has no cost
+  // items yet (first boot, or a country added later). Best-effort — before the
+  // table is pushed this only logs.
+  try {
+    await ensureCountryCostDefaults();
+  } catch (err: any) {
+    log(`cost items seed skipped: ${err?.message ?? err}`);
   }
 
   // ALWAYS serve the app on the port specified in the environment variable PORT

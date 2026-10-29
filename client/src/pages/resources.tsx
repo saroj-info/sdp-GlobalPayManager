@@ -6,34 +6,19 @@ import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Calculator, FileText, Download, Edit3, Plus, X, BookOpen, Clock, User, TrendingUp, Shield, Users, Settings, Database } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Calculator, FileText, Download, BookOpen, Clock, User, Database } from "lucide-react";
 import { usePersistent } from "../hooks/usePersistent";
-import {
-  COUNTRY_LIST as COUNTRIES,
-  COUNTRY_CURRENCIES as CURRENCIES,
-  COUNTRY_EMPLOYMENT_NOTES as COUNTRY_NOTES,
-  DEFAULT_EMPLOYER_ONCOSTS as DEFAULT_EMPLOYEE,
-  DEFAULT_CONTRACTOR_ONCOSTS as DEFAULT_CONTRACTOR,
-  DEFAULT_JURISDICTIONS_OVERLAY as DEFAULT_JURISDICTIONS,
-} from "@shared/countryEmploymentData";
+import { canonicaliseCountry, COUNTRY_EMPLOYMENT_NOTES as COUNTRY_NOTES } from "@shared/countryEmploymentData";
+import { computeCostBreakdown, costItemsFor, jurisdictionsOf, type CountryCostItem } from "@shared/countryCosts";
 
 // =============================================================
 //  Global Total Cost of Employment (TCOE) — SDP
-//  Now with: Employment type toggle, jurisdiction selectors (AU/US),
-//  state-specific overlays, and improved calculation types.
-//  Assumptions are editable and persist in the browser.
+//  Employment type toggle, state / province selector and the breakdown.
 //
-//  Country data (currencies, on-cost defaults, jurisdiction overlays,
-//  narrative notes) lives in @shared/countryEmploymentData so the AI
-//  search feature can quote from the same source. Do NOT re-define
-//  these constants here — edit the shared module.
+//  Every rate comes from SDP's Cost Settings (`country_cost_items`, edited on
+//  /platform-config → Cost Settings) through the public GET /api/country-costs,
+//  the same items the Quotes page and the AI country tools use. The maths is
+//  shared/countryCosts.ts `computeCostBreakdown`. Nothing is edited here.
 // =============================================================
 
 function fmtCurrency(value: any, currencyCode: any) {
@@ -42,237 +27,70 @@ function fmtCurrency(value: any, currencyCode: any) {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
       currency: currencyCode || "USD",
-      maximumFractionDigits: currencyCode === "VND" ? 0 : 2,
+      maximumFractionDigits: currencyCode === "VND" || currencyCode === "JPY" ? 0 : 2,
     }).format(value || 0);
   } catch (e) {
     return `${value?.toFixed?.(2) ?? value}`;
   }
 }
 
-// ---------- Calculation engine ----------
-function calcLine(item: any, base: any) {
-  const pct = (b: any, percent: any) => (b * (percent || 0)) / 100;
-  switch (item.type) {
-    case "percent_with_cap": {
-      const appliedBase = Math.min(base, item.capAmount || base);
-      return pct(appliedBase, item.value);
-    }
-    case "percent_above_threshold": {
-      const taxable = Math.max(0, base - (item.thresholdAmount || 0));
-      return pct(taxable, item.value);
-    }
-    case "percent":
-      return pct(base, item.value);
-    case "flat":
-      return item.value || 0;
-    default:
-      return 0;
-  }
-}
-
-function sum(arr: any) {
-  return arr.reduce((a: any, b: any) => a + (Number.isFinite(b) ? b : 0), 0);
-}
-
+const CALC_TYPE_LABEL: Record<string, string> = {
+  percent: "% of pay",
+  percent_with_cap: "% up to cap",
+  flat: "Flat per year",
+};
 
 function EmploymentCostCalculator() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const [employmentType, setEmploymentType] = usePersistent("tcoe_employment_type", "Employee");
-  const [country, setCountry] = usePersistent("tcoe_country", "Australia");
+  const [countryId, setCountryId] = usePersistent("tcoe_country_id", "au");
   const [salary, setSalary] = usePersistent("tcoe_salary", 120000);
-  const [assumptionsEmployee, setAssumptionsEmployee] = usePersistent<Record<string, any[]>>("tcoe_emp_defaults_v2", DEFAULT_EMPLOYEE as Record<string, any[]>);
-  const [assumptionsContractor, setAssumptionsContractor] = usePersistent<Record<string, any[]>>("tcoe_con_defaults_v1", DEFAULT_CONTRACTOR as Record<string, any[]>);
-  // Fetch jurisdiction data from database instead of hardcoded constants - NOTE: Now using layout context for authenticated users
-  const { data: countriesData = [] } = useQuery<any[]>({
-    queryKey: ['/api/countries'],
-  });
-  const countries = countriesData; // Keep for calculator compatibility
+  const [stateByCountry, setStateByCountry] = usePersistent<Record<string, string>>("tcoe_selected_state", {});
 
-  const { data: dbJurisdictions, isLoading: isLoadingJurisdictions } = useQuery({
-    queryKey: ['/api/jurisdictions/all'],
-    queryFn: async () => {
-      const response = await fetch('/api/jurisdictions/all');
-      if (!response.ok) {
-        throw new Error('Failed to fetch jurisdiction data');
-      }
-      return response.json();
-    },
+  // Both reads are public, so the calculator works logged out too.
+  const { data: countriesData = [] } = useQuery<any[]>({ queryKey: ['/api/countries'] });
+  const { data: costData, isLoading: isLoadingItems } = useQuery<{ items: CountryCostItem[] }>({
+    queryKey: ['/api/country-costs'],
+    staleTime: 5 * 60_000,
   });
 
-  // Transform database data to match expected format
-  const transformedJurisdictions = useMemo(() => {
-    if (!dbJurisdictions) return DEFAULT_JURISDICTIONS;
-    
-    const transformed: any = {};
-    dbJurisdictions.forEach((jurisdiction: any) => {
-      if (!transformed[jurisdiction.countryId]) {
-        transformed[jurisdiction.countryId] = {};
-      }
-      if (!transformed[jurisdiction.countryId][jurisdiction.stateProvince]) {
-        transformed[jurisdiction.countryId][jurisdiction.stateProvince] = [];
-      }
-      transformed[jurisdiction.countryId][jurisdiction.stateProvince].push({
-        id: jurisdiction.id,
-        name: jurisdiction.name,
-        type: jurisdiction.calculationType,
-        value: jurisdiction.value,
-        capAmount: jurisdiction.capAmount,
-        thresholdAmount: jurisdiction.thresholdAmount,
-        note: jurisdiction.note
-      });
-    });
-    return transformed;
-  }, [dbJurisdictions]);
+  const countries = useMemo(() => (countriesData as any[]).filter((c) => c.isActive !== false), [countriesData]);
+  const country = countries.find((c) => c.id === countryId) ?? countries[0] ?? null;
+  const currency: string = country?.currency || "USD";
+  const canonical = country ? canonicaliseCountry(country.code) ?? canonicaliseCountry(country.name) : null;
+  const items = useMemo(() => (costData?.items ?? []).filter((i) => country && i.countryId === country.id), [costData, country]);
+  const category = employmentType === "Employee" ? "employment" : "contractor_standard";
 
-  const [jurisdictions, setJurisdictions] = useState<Record<string, Record<string, any[]>>>(transformedJurisdictions as Record<string, Record<string, any[]>>);
-  const [jurisdictionKey, setJurisdictionKey] = usePersistent<Record<string, string>>("tcoe_selected_juris", { Australia: "New South Wales", USA: "California" });
-  const [showEditor, setShowEditor] = useState(false);
-  const [editScope, setEditScope] = useState({ level: "country" }); // { level: 'country' | 'jurisdiction', name?: string }
+  const jurisOptions = jurisdictionsOf(items);
+  const chosen = country ? stateByCountry[country.id] : undefined;
+  const activeJurisName = chosen && jurisOptions.includes(chosen) ? chosen : jurisOptions[0];
+  const applicable = useMemo(() => costItemsFor(items, { category, jurisdiction: activeJurisName ?? null }), [items, category, activeJurisName]);
+  const breakdown = useMemo(() => computeCostBreakdown(applicable, Number(salary) || 0), [applicable, salary]);
+  const oncostTotal = breakdown.onCostTotal;
+  const totalCost = breakdown.totalEmployerCost;
+  const oncostPct = breakdown.onCostPct;
 
-  // Update jurisdictions when database data changes
-  useEffect(() => {
-    if (transformedJurisdictions) {
-      setJurisdictions(transformedJurisdictions);
-    }
-  }, [transformedJurisdictions]);
-  
-  // Check if user has permission to edit assumptions (SDP admin/super admin only)
-  const canEditAssumptions = (user as any)?.userType === 'sdp_internal' && 
+  // SDP super admins and admins maintain the rates on the Cost Settings tab.
+  const canEditSettings = (user as any)?.userType === 'sdp_internal' &&
     ((user as any)?.sdpRole === 'sdp_admin' || (user as any)?.sdpRole === 'sdp_super_admin');
-
-  // Check if user has permission to edit jurisdiction data (SDP super admin only)
-  const canEditJurisdictions = (user as any)?.userType === 'sdp_internal' && (user as any)?.sdpRole === 'sdp_super_admin';
-
-  const currency = (CURRENCIES as any)[country]?.code || "USD";
-
-  const baseLines = employmentType === "Employee" ? (assumptionsEmployee[country] || []) : (assumptionsContractor[country] || []);
-  const jurisOptions = jurisdictions[country] ? Object.keys(jurisdictions[country]) : [];
-  const activeJurisName = jurisOptions.includes(jurisdictionKey[country]) ? jurisdictionKey[country] : undefined;
-  const jurisLines = activeJurisName ? (jurisdictions[country]?.[activeJurisName] || []) : [];
-
-  // merge: country base + jurisdiction overlay
-  const mergedLines = useMemo(() => {
-    // If IDs collide, jurisdiction overrides base by replacing same id, else appended.
-    const map = new Map();
-    baseLines.forEach((l: any) => map.set(l.id, { ...l }));
-    jurisLines.forEach((l: any) => map.set(l.id, { ...l }));
-    return Array.from(map.values());
-  }, [baseLines, jurisLines]);
-
-  const { oncostTotal, totalCost, oncostPct, breakdown } = useMemo(() => {
-    const items = mergedLines.map((it) => ({
-      ...it,
-      amount: calcLine(it, Number(salary) || 0),
-    }));
-    const oncost = sum(items.map((i) => i.amount));
-    const total = (Number(salary) || 0) + oncost;
-    const pct = (oncost / (Number(salary) || 1)) * 100;
-    return { oncostTotal: oncost, totalCost: total, oncostPct: pct, breakdown: items };
-  }, [mergedLines, salary]);
-
-  function updateLine(scope: any, id: any, patch: any) {
-    if (scope === "country") {
-      if (employmentType === "Employee") {
-        setAssumptionsEmployee((prev: any) => ({
-          ...prev,
-          [country]: (prev[country] || []).map((l: any) => (l.id === id ? { ...l, ...patch } : l)),
-        }));
-      } else {
-        setAssumptionsContractor((prev: any) => ({
-          ...prev,
-          [country]: (prev[country] || []).map((l: any) => (l.id === id ? { ...l, ...patch } : l)),
-        }));
-      }
-    } else if (scope === "jurisdiction" && activeJurisName) {
-      setJurisdictions((prev: any) => ({
-        ...prev,
-        [country]: {
-          ...((prev as any)[country] || {}),
-          [activeJurisName]: ((prev as any)[country]?.[activeJurisName] || []).map((l: any) => (l.id === id ? { ...l, ...patch } : l)),
-        },
-      }));
-    }
-  }
-
-  function addLine(scope: any) {
-    const id = "custom_" + Math.random().toString(36).slice(2, 8);
-    const newLine = { id, name: "Custom item", type: "percent", value: 1, note: "Editable" };
-    if (scope === "country") {
-      if (employmentType === "Employee") {
-        setAssumptionsEmployee((prev: any) => ({ ...prev, [country]: [...(prev[country] || []), newLine] }));
-      } else {
-        setAssumptionsContractor((prev: any) => ({ ...prev, [country]: [...(prev[country] || []), newLine] }));
-      }
-    } else if (scope === "jurisdiction" && activeJurisName) {
-      setJurisdictions((prev: any) => ({
-        ...prev,
-        [country]: {
-          ...((prev as any)[country] || {}),
-          [activeJurisName]: [...((prev as any)[country]?.[activeJurisName] || []), newLine],
-        },
-      }));
-    }
-  }
-
-  function removeLine(scope: any, id: any) {
-    if (scope === "country") {
-      if (employmentType === "Employee") {
-        setAssumptionsEmployee((prev: any) => ({
-          ...prev,
-          [country]: (prev[country] || []).filter((l: any) => l.id !== id),
-        }));
-      } else {
-        setAssumptionsContractor((prev: any) => ({
-          ...prev,
-          [country]: (prev[country] || []).filter((l: any) => l.id !== id),
-        }));
-      }
-    } else if (scope === "jurisdiction" && activeJurisName) {
-      setJurisdictions((prev: any) => ({
-        ...prev,
-        [country]: {
-          ...((prev as any)[country] || {}),
-          [activeJurisName]: ((prev as any)[country]?.[activeJurisName] || []).filter((l: any) => l.id !== id),
-        },
-      }));
-    }
-  }
-
-  function resetDefaults(scope: any) {
-    if (scope === "country") {
-      if (employmentType === "Employee") {
-        setAssumptionsEmployee((prev: any) => ({ ...prev, [country]: (DEFAULT_EMPLOYEE as any)[country] }));
-      } else {
-        setAssumptionsContractor((prev: any) => ({ ...prev, [country]: (DEFAULT_CONTRACTOR as any)[country] || [] }));
-      }
-    } else if (scope === "jurisdiction" && activeJurisName) {
-      setJurisdictions((prev: any) => ({
-        ...prev,
-        [country]: {
-          ...((prev as any)[country] || {}),
-          [activeJurisName]: (DEFAULT_JURISDICTIONS as any)[country]?.[activeJurisName] || [],
-        },
-      }));
-    }
-  }
 
   function exportCSV() {
     const rows = [
       ["Employment type", employmentType],
-      ["Country", country],
-      ["Jurisdiction", activeJurisName || "(none)"],
+      ["Country", country?.name ?? ""],
+      ["State / province", activeJurisName || "(none)"],
       ["Currency", currency],
       ["Base Salary", (Number(salary) || 0).toString()],
       [],
-      ["Item", "Scope", "Type", "Rate/Value", "Cap", "Threshold", "Amount"],
-      ...breakdown.map((b) => [
+      ["Item", "Description", "Scope", "Type", "Rate/Value", "Cap", "Amount"],
+      ...breakdown.lines.map((b) => [
         b.name,
-        jurisLines.find((j: any) => j.id === b.id) ? "Jurisdiction" : "Country",
-        b.type,
-        b.type === "flat" ? b.value : `${b.value}%`,
+        b.description,
+        b.stateProvince ? `State: ${b.stateProvince}` : "Country",
+        CALC_TYPE_LABEL[b.calcType] ?? b.calcType,
+        b.calcType === "flat" ? b.value : `${b.value}%`,
         b.capAmount ? fmtCurrency(b.capAmount, currency) : "",
-        b.thresholdAmount ? fmtCurrency(b.thresholdAmount, currency) : "",
         fmtCurrency(b.amount, currency),
       ]),
       [],
@@ -285,7 +103,7 @@ function EmploymentCostCalculator() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `TCOE_${employmentType}_${country}_${activeJurisName || "NA"}_${Date.now()}.csv`;
+    a.download = `TCOE_${employmentType}_${country?.id ?? "country"}_${activeJurisName || "NA"}_${Date.now()}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -302,17 +120,17 @@ function EmploymentCostCalculator() {
             </div>
             <div>
               <h1 className="text-3xl font-bold text-secondary-900">Total Cost of Employment Calculator</h1>
-              <p className="text-secondary-600 mt-1">Calculate employer on-costs across 17 countries with state/province specific rates</p>
+              <p className="text-secondary-600 mt-1">Employer on-costs per country, with state / province specific rates</p>
             </div>
           </div>
           <Card className="border-secondary-200 bg-white/80 backdrop-blur">
             <CardContent className="p-4">
               <p className="text-sm text-secondary-600 mb-2">
-                Select employment type, country (and jurisdiction if available), then enter the annual base salary to estimate employer on‑costs. 
-                Assumptions are editable and persist locally.
+                Select the employment type, the country (and the state where rates differ), then enter the annual base salary to estimate employer on‑costs.
+                The rates are the ones SDP maintains in its Cost Settings — the same figures a quote starts from.
               </p>
               <p className="text-xs text-secondary-500">
-                <strong>Disclaimer:</strong> Planning tool only. Laws change; state/province rates, thresholds and wage caps vary. Validate before making decisions.
+                <strong>Disclaimer:</strong> Planning tool only. Laws change; state/province rates and wage caps vary. Validate before making decisions.
               </p>
             </CardContent>
           </Card>
@@ -332,6 +150,7 @@ function EmploymentCostCalculator() {
                     variant={employmentType === t ? "default" : "outline"}
                     className={`flex-1 ${employmentType === t ? "bg-primary-600 hover:bg-primary-700" : ""}`}
                     onClick={() => setEmploymentType(t)}
+                    data-testid={`button-tcoe-${t.toLowerCase()}`}
                   >
                     {t}
                   </Button>
@@ -347,11 +166,12 @@ function EmploymentCostCalculator() {
             <CardContent className="pt-0">
               <select
                 className="w-full rounded-lg border border-secondary-300 bg-white p-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                value={country}
-                onChange={(e) => setCountry(e.target.value)}
+                value={country?.id ?? ""}
+                onChange={(e) => setCountryId(e.target.value)}
+                data-testid="select-tcoe-country"
               >
-                {COUNTRIES.map((c) => (
-                  <option key={c} value={c}>{c}</option>
+                {countries.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
             </CardContent>
@@ -359,14 +179,15 @@ function EmploymentCostCalculator() {
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Jurisdiction</CardTitle>
+              <CardTitle className="text-sm">State / province</CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
               <select
                 className="w-full rounded-lg border border-secondary-300 bg-white p-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
                 value={activeJurisName || ""}
-                onChange={(e) => setJurisdictionKey({ ...jurisdictionKey, [country]: e.target.value })}
+                onChange={(e) => country && setStateByCountry({ ...stateByCountry, [country.id]: e.target.value })}
                 disabled={!jurisOptions.length}
+                data-testid="select-tcoe-state"
               >
                 {jurisOptions.length ? (
                   jurisOptions.map((j) => <option key={j} value={j}>{j}</option>)
@@ -380,7 +201,7 @@ function EmploymentCostCalculator() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm">Annual Base Salary</CardTitle>
-              <CardDescription className="text-xs">{(CURRENCIES as any)[country]?.symbol}{(CURRENCIES as any)[country]?.code}</CardDescription>
+              <CardDescription className="text-xs">{currency}</CardDescription>
             </CardHeader>
             <CardContent className="pt-0">
               <input
@@ -398,45 +219,21 @@ function EmploymentCostCalculator() {
 
         {/* Actions */}
         <div className="flex flex-wrap gap-3 mb-8">
-          {canEditAssumptions && (
-            <>
-              <Button
-                onClick={() => { setEditScope({ level: "country" }); setShowEditor(true); }}
-                className="bg-primary-600 hover:bg-primary-700"
-                data-testid="button-edit-country"
-              >
-                <Edit3 className="w-4 h-4 mr-2" />
-                Edit Country Assumptions
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => { setEditScope({ level: "jurisdiction" }); setShowEditor(true); }}
-                disabled={!activeJurisName}
-                title={activeJurisName ? "" : "Select a jurisdiction first"}
-                data-testid="button-edit-jurisdiction"
-              >
-                <Edit3 className="w-4 h-4 mr-2" />
-                Edit Jurisdiction Overlay
-              </Button>
-            </>
-          )}
-          {canEditJurisdictions && (
+          {canEditSettings && (
             <Button
               variant="outline"
               onClick={() => {
                 setLocation('/platform-config');
                 setTimeout(() => {
-                  const tabTrigger = document.querySelector('[value="jurisdiction-data"]');
-                  if (tabTrigger) {
-                    (tabTrigger as HTMLElement).click();
-                  }
+                  const tabTrigger = document.querySelector('[value="cost-settings"]');
+                  if (tabTrigger) (tabTrigger as HTMLElement).click();
                 }, 200);
               }}
               className="border-amber-200 text-amber-700 hover:bg-amber-50"
-              data-testid="button-edit-jurisdiction-data"
+              data-testid="button-edit-cost-settings"
             >
               <Database className="w-4 h-4 mr-2" />
-              Edit Jurisdiction Data
+              Edit cost settings
             </Button>
           )}
           <Button
@@ -464,7 +261,7 @@ function EmploymentCostCalculator() {
               <CardTitle className="text-sm text-accent-600">On‑cost Total</CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
-              <div className="text-2xl font-bold text-accent-700">{fmtCurrency(oncostTotal, currency)}</div>
+              <div className="text-2xl font-bold text-accent-700" data-testid="tcoe-oncost-total">{fmtCurrency(oncostTotal, currency)}</div>
             </CardContent>
           </Card>
           <Card className="border-primary-200">
@@ -472,7 +269,7 @@ function EmploymentCostCalculator() {
               <CardTitle className="text-sm text-primary-600">Total Employer Cost</CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
-              <div className="text-2xl font-bold text-primary-700">{fmtCurrency(totalCost, currency)}</div>
+              <div className="text-2xl font-bold text-primary-700" data-testid="tcoe-total-cost">{fmtCurrency(totalCost, currency)}</div>
               <div className="text-xs text-secondary-500 mt-1">On‑costs = {oncostPct.toFixed(1)}% of salary</div>
             </CardContent>
           </Card>
@@ -488,7 +285,7 @@ function EmploymentCostCalculator() {
           </CardHeader>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" data-testid="tcoe-breakdown">
                 <thead className="bg-secondary-50 text-secondary-700">
                   <tr>
                     <th className="text-left p-4 font-medium">Item</th>
@@ -496,41 +293,43 @@ function EmploymentCostCalculator() {
                     <th className="text-left p-4 font-medium">Type</th>
                     <th className="text-right p-4 font-medium">Rate/Value</th>
                     <th className="text-right p-4 font-medium">Cap</th>
-                    <th className="text-right p-4 font-medium">Threshold</th>
                     <th className="text-right p-4 font-medium">Amount</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {breakdown.map((b) => (
-                    <tr key={b.id} className="border-t border-secondary-100 hover:bg-secondary-25">
+                  {isLoadingItems && (
+                    <tr><td colSpan={6} className="p-4 text-secondary-500">Loading cost items…</td></tr>
+                  )}
+                  {!isLoadingItems && breakdown.lines.length === 0 && (
+                    <tr><td colSpan={6} className="p-4 text-secondary-500">No cost items are set up for this country yet.</td></tr>
+                  )}
+                  {breakdown.lines.map((b) => (
+                    <tr key={b.id} className="border-t border-secondary-100 hover:bg-secondary-25" data-testid={`tcoe-line-${b.itemKey}`}>
                       <td className="p-4">
                         <div className="font-medium text-secondary-900">{b.name}</div>
-                        {b.note && <div className="text-xs text-secondary-500 mt-1">{b.note}</div>}
+                        {b.description && <div className="text-xs text-secondary-500 mt-1 max-w-xl">{b.description}</div>}
                       </td>
                       <td className="p-4 text-secondary-600">
                         <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
-                          jurisLines.find((j: any) => j.id === b.id) 
-                            ? "bg-accent-100 text-accent-700" 
-                            : "bg-primary-100 text-primary-700"
+                          b.stateProvince ? "bg-accent-100 text-accent-700" : "bg-primary-100 text-primary-700"
                         }`}>
-                          {jurisLines.find((j: any) => j.id === b.id) ? "Jurisdiction" : "Country"}
+                          {b.stateProvince ? "State" : "Country"}
                         </span>
                       </td>
-                      <td className="p-4 text-secondary-600 capitalize">{b.type.replaceAll("_", " ")}</td>
-                      <td className="p-4 text-right font-medium">{b.type === "flat" ? fmtCurrency(b.value, currency) : `${b.value}%`}</td>
+                      <td className="p-4 text-secondary-600">{CALC_TYPE_LABEL[b.calcType] ?? b.calcType}</td>
+                      <td className="p-4 text-right font-medium">{b.calcType === "flat" ? fmtCurrency(b.value, currency) : `${b.value}%`}</td>
                       <td className="p-4 text-right">{b.capAmount ? fmtCurrency(b.capAmount, currency) : "—"}</td>
-                      <td className="p-4 text-right">{b.thresholdAmount ? fmtCurrency(b.thresholdAmount, currency) : "—"}</td>
                       <td className="p-4 text-right font-bold text-secondary-900">{fmtCurrency(b.amount, currency)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="bg-accent-50 border-t border-accent-200">
-                    <td className="p-4 font-bold text-accent-900" colSpan={6}>On‑cost Total</td>
+                    <td className="p-4 font-bold text-accent-900" colSpan={5}>On‑cost Total</td>
                     <td className="p-4 text-right font-bold text-accent-900">{fmtCurrency(oncostTotal, currency)}</td>
                   </tr>
                   <tr className="bg-primary-50 border-t border-primary-200">
-                    <td className="p-4 font-bold text-primary-900" colSpan={6}>Total Employer Cost</td>
+                    <td className="p-4 font-bold text-primary-900" colSpan={5}>Total Employer Cost</td>
                     <td className="p-4 text-right font-bold text-primary-900">{fmtCurrency(totalCost, currency)}</td>
                   </tr>
                 </tfoot>
@@ -540,126 +339,17 @@ function EmploymentCostCalculator() {
         </Card>
 
         {/* Country Info Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Country Info & Employment Notes — {country}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="whitespace-pre-line text-secondary-700 leading-relaxed">
-              {(COUNTRY_NOTES as any)[country]}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Editor Modal */}
-        {showEditor && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/50" onClick={() => setShowEditor(false)} />
-            <div className="relative max-w-5xl w-full max-h-[90vh] overflow-hidden rounded-2xl bg-white shadow-2xl border border-secondary-200">
-              <div className="flex items-center justify-between p-6 border-b border-secondary-200">
-                <h3 className="text-xl font-bold">
-                  {editScope.level === "country" ? (
-                    <>Edit {employmentType.toLowerCase()} assumptions — {country}</>
-                  ) : (
-                    <>Edit jurisdiction overlay — {country}{activeJurisName ? ` / ${activeJurisName}` : ""}</>
-                  )}
-                </h3>
-                <Button variant="ghost" size="sm" onClick={() => setShowEditor(false)}>
-                  <X className="w-4 h-4" />
-                </Button>
+        {canonical && COUNTRY_NOTES[canonical] && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Country Info & Employment Notes — {country?.name}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="whitespace-pre-line text-secondary-700 leading-relaxed">
+                {COUNTRY_NOTES[canonical]}
               </div>
-
-              <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
-                {(editScope.level === "country" ? baseLines : jurisLines).map((l: any) => (
-                  <Card key={l.id} className="border border-secondary-200">
-                    <CardContent className="p-4">
-                      <div className="grid grid-cols-12 gap-3 items-end">
-                        <div className="col-span-12 md:col-span-5">
-                          <label className="block text-xs font-medium mb-1">Name</label>
-                          <input
-                            className="w-full rounded-lg border border-secondary-300 p-2 text-sm"
-                            value={l.name}
-                            onChange={(e) => updateLine(editScope.level, l.id, { name: e.target.value })}
-                          />
-                        </div>
-                        <div className="col-span-6 md:col-span-3">
-                          <label className="block text-xs font-medium mb-1">Type</label>
-                          <select
-                            className="w-full rounded-lg border border-secondary-300 p-2 text-sm"
-                            value={l.type}
-                            onChange={(e) => updateLine(editScope.level, l.id, { type: e.target.value })}
-                          >
-                            <option value="percent">Percent</option>
-                            <option value="percent_with_cap">Percent with Cap</option>
-                            <option value="percent_above_threshold">Percent above Threshold</option>
-                            <option value="flat">Flat Amount</option>
-                          </select>
-                        </div>
-                        <div className="col-span-6 md:col-span-2">
-                          <label className="block text-xs font-medium mb-1">Rate / Value</label>
-                          <input
-                            type="number"
-                            className="w-full rounded-lg border border-secondary-300 p-2 text-sm text-right"
-                            value={l.value}
-                            onChange={(e) => updateLine(editScope.level, l.id, { value: Number(e.target.value) })}
-                          />
-                        </div>
-                        <div className="col-span-6 md:col-span-2">
-                          <label className="block text-xs font-medium mb-1">Cap (annual)</label>
-                          <input
-                            type="number"
-                            className="w-full rounded-lg border border-secondary-300 p-2 text-sm text-right"
-                            value={l.capAmount || ""}
-                            onChange={(e) => updateLine(editScope.level, l.id, { capAmount: e.target.value ? Number(e.target.value) : undefined })}
-                          />
-                        </div>
-                        <div className="col-span-6 md:col-span-2">
-                          <label className="block text-xs font-medium mb-1">Threshold (annual)</label>
-                          <input
-                            type="number"
-                            className="w-full rounded-lg border border-secondary-300 p-2 text-sm text-right"
-                            value={l.thresholdAmount || ""}
-                            onChange={(e) => updateLine(editScope.level, l.id, { thresholdAmount: e.target.value ? Number(e.target.value) : undefined })}
-                          />
-                        </div>
-                        <div className="col-span-12">
-                          <label className="block text-xs font-medium mb-1">Note</label>
-                          <input
-                            className="w-full rounded-lg border border-secondary-300 p-2 text-sm"
-                            value={l.note || ""}
-                            onChange={(e) => updateLine(editScope.level, l.id, { note: e.target.value })}
-                          />
-                        </div>
-                        <div className="col-span-12 flex items-center justify-between pt-2 border-t border-secondary-100">
-                          <div className="text-xs text-secondary-500">
-                            Amount at current salary: <span className="font-medium text-secondary-700">{fmtCurrency(calcLine(l, Number(salary) || 0), currency)}</span>
-                          </div>
-                          <Button variant="ghost" size="sm" onClick={() => removeLine(editScope.level, l.id)} className="text-red-600 hover:text-red-700">
-                            Remove
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-
-              <div className="p-6 border-t border-secondary-200 flex items-center justify-between">
-                <div className="flex gap-3">
-                  <Button variant="outline" onClick={() => addLine(editScope.level)}>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add Item
-                  </Button>
-                  <Button variant="outline" onClick={() => resetDefaults(editScope.level)}>
-                    Reset to Defaults
-                  </Button>
-                </div>
-                <Button onClick={() => setShowEditor(false)} className="bg-primary-600 hover:bg-primary-700">
-                  Done
-                </Button>
-              </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         )}
       </div>
     </div>
@@ -712,14 +402,14 @@ export default function Resources() {
                   <div className="text-sm text-secondary-600">Calculations</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-primary-600">Editable</div>
-                  <div className="text-sm text-secondary-600">Assumptions</div>
+                  <div className="text-2xl font-bold text-primary-600">Maintained</div>
+                  <div className="text-sm text-secondary-600">By SDP</div>
                 </div>
               </div>
               <p className="text-secondary-600 mb-4">
-                Our comprehensive calculator includes country-specific employment costs, state/province overlays, 
-                and employer on-costs for both employees and contractors. All assumptions are fully editable and 
-                calculations persist locally.
+                Our comprehensive calculator includes country-specific employment costs, state/province rates, 
+                and employer on-costs for both employees and contractors, maintained by SDP and shared with 
+                our quotes.
               </p>
             </CardContent>
           </Card>
@@ -1029,14 +719,14 @@ function AuthenticatedResources() {
                   <div className="text-sm text-secondary-600">Calculations</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-primary-600">Editable</div>
-                  <div className="text-sm text-secondary-600">Assumptions</div>
+                  <div className="text-2xl font-bold text-primary-600">Maintained</div>
+                  <div className="text-sm text-secondary-600">By SDP</div>
                 </div>
               </div>
               <p className="text-secondary-600 mb-4">
-                Our comprehensive calculator includes country-specific employment costs, state/province overlays, 
-                and employer on-costs for both employees and contractors. All assumptions are fully editable and 
-                calculations persist locally.
+                Our comprehensive calculator includes country-specific employment costs, state/province rates, 
+                and employer on-costs for both employees and contractors, maintained by SDP and shared with 
+                our quotes.
               </p>
             </CardContent>
           </Card>

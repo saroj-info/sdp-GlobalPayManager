@@ -1,29 +1,29 @@
 /**
- * Quotes orchestration: defaults for a country / category (cost data +
- * jurisdictions + fee schedule + FX), validated saves with the totals snapshot
+ * Quotes orchestration: defaults for a country / category (Cost Settings items
+ * + states + fee schedule + FX), validated saves with the totals snapshot
  * recomputed by the shared engine, duplicate, delete, and the admin fee
  * schedule. `createQuotesService(deps)` keeps it testable without a DB.
  */
 import { storage } from "../../storage";
 import { fxService, type FxResult } from "../fx";
+import { countryCostsRepository, toCostItem } from "../countryCosts";
 import { repository as defaultRepository, type QuotesRepository, type NewQuoteRow, type QuoteUpdateRow } from "./repository";
 import type { AuthUser, QuoteListQuery, Result } from "./types";
-import type { Country, Quote, QuoteFeeDefault, SelectJurisdictionType } from "@shared/schema";
-import { canonicaliseCountry, type OnCostItem } from "@shared/countryEmploymentData";
+import type { Country, Quote, QuoteFeeDefault } from "@shared/schema";
+import { jurisdictionsOf, type CountryCostItem } from "@shared/countryCosts";
 import {
   QUOTE_ENGAGEMENT_CATEGORIES,
   buildDefaultCostLines,
-  canonicalCountryForRow,
   computeQuote,
   contractorComplianceForCategory,
   feeDefaultsToLines,
+  normaliseStoredQuote,
   resolveQuoteBillingMode,
   saveQuoteFeeDefaultsSchema,
   saveQuoteSchema,
-  staticJurisdictionLines,
-  staticJurisdictionNames,
   type QuoteDefaultsResponse,
   type QuoteEngagementCategory,
+  type QuoteFx,
   type QuoteInput,
   type SaveQuoteInput,
 } from "@shared/quotes";
@@ -31,7 +31,8 @@ import {
 export interface QuotesDeps {
   repo: QuotesRepository;
   getCountries: () => Promise<Country[]>;
-  getJurisdictions: () => Promise<SelectJurisdictionType[]>;
+  /** Active Cost Settings items of a country (country-wide and every state). */
+  getCostItems: (countryId: string) => Promise<CountryCostItem[]>;
   getUsdRates: () => Promise<FxResult>;
   now: () => Date;
 }
@@ -45,35 +46,10 @@ function parseDate(value: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function jurisdictionRowToItem(row: SelectJurisdictionType): OnCostItem {
-  return {
-    id: row.id,
-    name: row.name,
-    type: row.calculationType as OnCostItem["type"],
-    value: Number(row.value) || 0,
-    capAmount: row.capAmount != null ? Number(row.capAmount) : undefined,
-    thresholdAmount: row.thresholdAmount != null ? Number(row.thresholdAmount) : undefined,
-    note: row.note ?? undefined,
-  };
-}
-
 export function createQuotesService(deps: QuotesDeps) {
   async function findCountry(countryId: string): Promise<Country | undefined> {
     const all = await deps.getCountries();
     return all.find((c) => c.id === countryId);
-  }
-
-  /** Jurisdiction names + the selected one's lines: DB rows when the country has any, else the static overlay. */
-  async function jurisdictionsFor(canonical: string, jurisdiction: string | null): Promise<{ names: string[]; lines: OnCostItem[] }> {
-    const rows = (await deps.getJurisdictions()).filter(
-      (r) => r.isActive !== false && canonicaliseCountry(r.countryId) === canonical,
-    );
-    if (rows.length === 0) {
-      return { names: staticJurisdictionNames(canonical), lines: staticJurisdictionLines(canonical, jurisdiction) };
-    }
-    const names = Array.from(new Set(rows.map((r) => r.stateProvince).filter((s): s is string => !!s))).sort();
-    const lines = jurisdiction ? rows.filter((r) => r.stateProvince === jurisdiction).map(jurisdictionRowToItem) : [];
-    return { names, lines };
   }
 
   function toQuoteInput(input: SaveQuoteInput, currency: string): QuoteInput {
@@ -90,15 +66,27 @@ export function createQuotesService(deps: QuotesDeps) {
       daysPerWeek: input.daysPerWeek,
       weeksPerYear: input.weeksPerYear,
       jurisdiction: input.jurisdiction || null,
-      aboveThreshold: input.aboveThreshold,
+      rateIncludesOnCosts: input.rateIncludesOnCosts,
       costLines: input.costLines,
       feeLines: input.feeLines,
     };
   }
 
+  /** The rates a save is computed and stored with. A USD comparison doubles as the fee rate; a USD quote needs none. */
+  function resolveFx(input: SaveQuoteInput, currency: string): QuoteFx {
+    const local = currency.toUpperCase();
+    const comparisonCurrency = input.comparisonCurrency && input.comparisonCurrency !== local ? input.comparisonCurrency : null;
+    const localPerComparison = comparisonCurrency && input.fxLocalPerComparison && input.fxLocalPerComparison > 0 ? input.fxLocalPerComparison : null;
+    let localPerUsd: number | null = input.fxLocalPerUsd && input.fxLocalPerUsd > 0 ? input.fxLocalPerUsd : null;
+    if (local === "USD") localPerUsd = 1;
+    else if (comparisonCurrency === "USD" && localPerComparison) localPerUsd = localPerComparison;
+    return { comparisonCurrency, localPerComparison, localPerUsd };
+  }
+
   function buildRow(input: SaveQuoteInput, country: Country, userId: string): NewQuoteRow {
     const quoteInput = toQuoteInput(input, country.currency);
-    const result = computeQuote(quoteInput, input.fxLocalPerUsd);
+    const fx = resolveFx(input, country.currency);
+    const result = computeQuote(quoteInput, fx);
     return {
       title: input.title,
       status: input.status,
@@ -116,8 +104,10 @@ export function createQuotesService(deps: QuotesDeps) {
       hoursPerWeek: String(quoteInput.hoursPerWeek),
       daysPerWeek: quoteInput.daysPerWeek,
       weeksPerYear: quoteInput.weeksPerYear,
-      aboveThreshold: quoteInput.aboveThreshold,
-      fxLocalPerUsd: String(input.fxLocalPerUsd),
+      rateIncludesOnCosts: quoteInput.rateIncludesOnCosts,
+      comparisonCurrency: fx.comparisonCurrency,
+      fxLocalPerComparison: fx.localPerComparison != null ? String(fx.localPerComparison) : null,
+      fxLocalPerUsd: fx.localPerUsd != null ? String(fx.localPerUsd) : null,
       fxRateSource: input.fxRateSource,
       fxRateAsOf: parseDate(input.fxRateAsOf),
       costLines: quoteInput.costLines,
@@ -154,11 +144,10 @@ export function createQuotesService(deps: QuotesDeps) {
       const category = args.category as QuoteEngagementCategory;
       const country = await findCountry(args.countryId);
       if (!country) return fail(404, "COUNTRY_NOT_FOUND", "Country not found");
-      const canonical = canonicalCountryForRow(country);
-      if (!canonical) return fail(400, "COUNTRY_UNSUPPORTED", `No employment cost data for ${country.name}`);
 
-      const { names, lines } = await jurisdictionsFor(canonical, args.jurisdiction);
-      const costLines = buildDefaultCostLines({ canonicalCountry: canonical, category, jurisdictionLines: lines });
+      const items = await deps.getCostItems(country.id);
+      const jurisdictions = jurisdictionsOf(items);
+      const costLines = buildDefaultCostLines({ items, category, jurisdiction: args.jurisdiction });
       const feeRows = (await deps.repo.listFeeDefaults()).filter(
         (r) => r.isActive && r.engagementCategory === category && r.sdpIsBillingAgent === args.billingAgent,
       );
@@ -176,23 +165,24 @@ export function createQuotesService(deps: QuotesDeps) {
       );
       const fx = await deps.getUsdRates();
       return ok({
-        country: { id: country.id, name: country.name, code: country.code, currency: country.currency, canonicalName: canonical },
-        jurisdictions: names,
+        country: { id: country.id, name: country.name, code: country.code, currency: country.currency },
+        jurisdictions,
         costLines,
         feeLines,
         fx: fx.ok ? fx.data : null,
+        costItemsConfigured: items.length > 0,
       });
     },
 
     async list(query: QuoteListQuery): Promise<Result<{ items: Quote[]; total: number; page: number; pageSize: number }>> {
       const { items, total } = await deps.repo.list(query);
-      return ok({ items, total, page: query.page, pageSize: query.pageSize });
+      return ok({ items: items.map((q) => normaliseStoredQuote(q)), total, page: query.page, pageSize: query.pageSize });
     },
 
     async get(id: string): Promise<Result<Quote>> {
       const quote = await deps.repo.getById(id);
       if (!quote) return fail(404, "QUOTE_NOT_FOUND", "Quote not found");
-      return ok(quote);
+      return ok(normaliseStoredQuote(quote));
     },
 
     async create(user: AuthUser, body: unknown): Promise<Result<Quote>> {
@@ -202,7 +192,7 @@ export function createQuotesService(deps: QuotesDeps) {
       if (!country) return fail(404, "COUNTRY_NOT_FOUND", "Country not found");
       const row = buildRow(valid.data, country, user.id);
       const created = await deps.repo.insert(row, deps.now().getFullYear());
-      return ok(created);
+      return ok(normaliseStoredQuote(created));
     },
 
     async update(user: AuthUser, id: string, body: unknown): Promise<Result<Quote>> {
@@ -217,7 +207,7 @@ export function createQuotesService(deps: QuotesDeps) {
       const patch: QuoteUpdateRow = { ...rest, updatedAt: deps.now() };
       const updated = await deps.repo.update(id, patch);
       if (!updated) return fail(404, "QUOTE_NOT_FOUND", "Quote not found");
-      return ok(updated);
+      return ok(normaliseStoredQuote(updated));
     },
 
     async remove(id: string): Promise<Result<null>> {
@@ -229,9 +219,10 @@ export function createQuotesService(deps: QuotesDeps) {
     async duplicate(user: AuthUser, id: string): Promise<Result<Quote>> {
       const source = await deps.repo.getById(id);
       if (!source) return fail(404, "QUOTE_NOT_FOUND", "Quote not found");
+      const normalised = normaliseStoredQuote(source);
       const {
         id: _id, quoteNumber: _n, quoteYear: _y, quoteSeq: _s, createdAt: _c, updatedAt: _u, createdByUserId: _by, ...rest
-      } = source;
+      } = normalised;
       void _id; void _n; void _y; void _s; void _c; void _u; void _by;
       const row: NewQuoteRow = {
         ...rest,
@@ -242,7 +233,7 @@ export function createQuotesService(deps: QuotesDeps) {
         updatedByUserId: user.id,
       };
       const created = await deps.repo.insert(row, deps.now().getFullYear());
-      return ok(created);
+      return ok(normaliseStoredQuote(created));
     },
 
     async getFeeDefaults(): Promise<Result<QuoteFeeDefault[]>> {
@@ -277,7 +268,7 @@ export type QuotesService = ReturnType<typeof createQuotesService>;
 export const quotesService: QuotesService = createQuotesService({
   repo: defaultRepository,
   getCountries: () => storage.getAllCountries(),
-  getJurisdictions: () => storage.getJurisdictions(),
+  getCostItems: async (countryId) => (await countryCostsRepository.listForCountry(countryId, false)).map(toCostItem),
   getUsdRates: () => fxService.getUsdRates(),
   now: () => new Date(),
 });

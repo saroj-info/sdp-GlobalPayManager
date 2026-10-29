@@ -2,6 +2,8 @@
  * Quote PDF (jsPDF + autotable), same look as generateInvoicePdf.ts: blue header
  * band, Helvetica, striped tables, right-aligned money. Rendered from the
  * editor draft + the shared engine result, so an unsaved quote can be printed.
+ * The comparison-currency columns appear only when the quote has one; cost
+ * items print their description under the name.
  */
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -11,6 +13,7 @@ import {
   QUOTE_DISCLAIMER,
   QUOTE_ENGAGEMENT_CATEGORY_LABELS,
   QUOTE_RATE_TYPE_LABELS,
+  QUOTE_RATE_UNIT_LABELS,
   QUOTE_STATUS_LABELS,
   QUOTE_WORK_LOCATION_LABELS,
   ZERO_DECIMAL_CURRENCIES,
@@ -20,6 +23,7 @@ import {
   fmtQuoteMoney,
   printableCostLines,
   resolveQuoteBillingMode,
+  type QuoteMoney,
   type QuoteResult,
 } from '@shared/quotes';
 import { draftFx, type QuoteDraft } from '@/components/quotes/quote-draft';
@@ -35,9 +39,9 @@ const LIGHT_BLUE = '#eff6ff';
 const GRAY = '#6b7280';
 const DARK = '#111827';
 
-function num(n: number, currency: string): string {
+function num(n: number | null | undefined, currency: string): string {
   const digits = ZERO_DECIMAL_CURRENCIES.includes(currency) ? 0 : 2;
-  return new Intl.NumberFormat('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(Number.isFinite(n) ? n : 0);
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(Number.isFinite(n ?? NaN) ? (n as number) : 0);
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -51,8 +55,12 @@ export function downloadQuotePdf({ draft, result, countryName }: QuotePdfInput):
   const PAGE_W = doc.internal.pageSize.getWidth();
   const PAGE_H = doc.internal.pageSize.getHeight();
   const currency = draft.currency || 'USD';
+  const cmp = result.comparisonCurrency;
+  const fx = draftFx(draft);
   const number = draft.quoteNumber ?? 'Draft quote';
   const t = result.totals;
+  const inclusive = result.inclusive;
+  const unit = QUOTE_RATE_UNIT_LABELS[draft.rateType];
 
   // Header band
   doc.setFillColor(BLUE);
@@ -79,17 +87,22 @@ export function downloadQuotePdf({ draft, result, countryName }: QuotePdfInput):
   y += 9;
 
   const billingMode = resolveQuoteBillingMode(draft.isForClient, draft.sdpIsBillingAgent);
+  const rateText = fmtQuoteMoney(Number(draft.rate) || 0, currency);
   const payBasis =
     draft.rateType === 'annual'
-      ? `${QUOTE_RATE_TYPE_LABELS.annual} ${fmtQuoteMoney(Number(draft.rate) || 0, currency)}`
-      : `${fmtQuoteMoney(Number(draft.rate) || 0, currency)} per ${draft.rateType === 'hourly' ? 'hour' : 'day'} · ${
+      ? `${inclusive ? 'All-inclusive annual amount' : QUOTE_RATE_TYPE_LABELS.annual} ${rateText}`
+      : `${inclusive ? 'All-inclusive ' : ''}${rateText} ${unit} · ${
           draft.rateType === 'hourly' ? `${draft.hoursPerWeek || 0} h/week` : `${draft.daysPerWeek || 0} days/week`
         } · ${draft.weeksPerYear || 0} weeks/year`;
+  const comparisonText =
+    cmp && fx.localPerComparison
+      ? `${fmtFxRate(fx.localPerComparison, currency, cmp)} (${draft.fxRateSource}${draft.fxRateAsOf ? `, ${fmtDate(draft.fxRateAsOf)}` : ''})`
+      : 'none';
   const meta: Array<[string, string]> = [
     ['Prepared for', draft.clientName || '—'],
     ['Valid until', fmtDate(draft.validUntil || null)],
     ['Country', `${countryName}${draft.jurisdiction ? ` · ${draft.jurisdiction}` : ''}`],
-    ['Currency', `${currency} · ${fmtFxRate(draftFx(draft), currency)} (${draft.fxRateSource}${draft.fxRateAsOf ? `, ${fmtDate(draft.fxRateAsOf)}` : ''})`],
+    ['Currency', `${currency} · comparison ${comparisonText}`],
     ['Engagement', `${QUOTE_ENGAGEMENT_CATEGORY_LABELS[draft.engagementCategory]} · ${getEngagementTypeLabel(draft.employmentType)}`],
     ['Work', QUOTE_WORK_LOCATION_LABELS[draft.isForClient ? 'host_client' : 'internal']],
     ['Billing', QUOTE_BILLING_MODE_LABELS[billingMode]],
@@ -120,6 +133,17 @@ export function downloadQuotePdf({ draft, result, countryName }: QuotePdfInput):
     footStyles: { fillColor: LIGHT_BLUE, textColor: DARK, fontStyle: 'bold' as const, fontSize: 8 },
     margin: { left: 14, right: 14 },
   };
+  /** Local (and comparison) annual + monthly cells for one money pair. */
+  const moneyCells = (annual: QuoteMoney, monthly: QuoteMoney): string[] =>
+    cmp
+      ? [num(annual.local, currency), num(annual.comparison, cmp), num(monthly.local, currency), num(monthly.comparison, cmp)]
+      : [num(annual.local, currency), num(monthly.local, currency)];
+  const moneyHead = cmp
+    ? [`Annual ${currency}`, `Annual ${cmp}`, `Monthly ${currency}`, `Monthly ${cmp}`]
+    : [`Annual ${currency}`, `Monthly ${currency}`];
+  const pair = (annual: number, comparison: number | null | undefined, monthly: number, monthlyComparison: number | null | undefined) =>
+    moneyCells({ local: annual, comparison: comparison ?? null }, { local: monthly, comparison: monthlyComparison ?? null });
+  const itemCell = (name: string, description?: string | null) => (description ? `${name}\n${description}` : name);
 
   // Table 1 — pay and statutory costs
   doc.setFontSize(10);
@@ -127,32 +151,28 @@ export function downloadQuotePdf({ draft, result, countryName }: QuotePdfInput):
   doc.setTextColor(DARK);
   doc.text('Pay and statutory / employer costs', 14, y);
   y += 3;
-  const costRows = printableCostLines(result.costLines)
-    .map((l) => [
-      l.description || 'Untitled item',
-      describeCostLineBasis(l, currency, draft.aboveThreshold),
-      num(l.annual.local, currency),
-      num(l.annual.usd, 'USD'),
-      num(l.monthly.local, currency),
-      num(l.monthly.usd, 'USD'),
-    ]);
+  const payRows: any[][] = inclusive
+    ? [
+        [{ content: 'All-inclusive pay', styles: { fontStyle: 'bold' } }, `${payBasis} · includes the costs below`, ...moneyCells(inclusive.annualTotal, inclusive.monthlyTotal)],
+        ['Gross pay to worker (derived)', draft.rateType !== 'annual' ? `≈ ${fmtQuoteMoney(inclusive.derivedRate.local, currency)} ${unit}` : 'After the statutory and employer costs', ...moneyCells(result.annualPay, result.monthlyPay)],
+      ]
+    : [['Gross pay', payBasis, ...moneyCells(result.annualPay, result.monthlyPay)]];
+  const costRows = printableCostLines(result.costLines).map((l) => [
+    itemCell(l.name || 'Untitled item', l.description),
+    describeCostLineBasis(l, currency),
+    ...moneyCells(l.annual, l.monthly),
+  ]);
   autoTable(doc, {
     ...tableBase,
     startY: y,
-    head: [['Item', 'Basis', `Annual ${currency}`, 'Annual USD', `Monthly ${currency}`, 'Monthly USD']],
-    body: [
-      ['Gross pay', payBasis, num(result.annualPay.local, currency), num(result.annualPay.usd, 'USD'), num(result.monthlyPay.local, currency), num(result.monthlyPay.usd, 'USD')],
-      ...costRows,
-    ],
+    head: [['Item', 'Basis', ...moneyHead]],
+    body: [...payRows, ...costRows],
     foot: [[
       'Total employer cost',
-      `On-costs ${t.onCostPct}% of pay`,
-      num(t.local.annual.employerCost, currency),
-      num(t.usd.annual.employerCost, 'USD'),
-      num(t.local.monthly.employerCost, currency),
-      num(t.usd.monthly.employerCost, 'USD'),
+      inclusive ? `= the all-inclusive pay · on-costs ${t.onCostPct}% of gross pay` : `On-costs ${t.onCostPct}% of pay`,
+      ...pair(t.local.annual.employerCost, t.comparison?.annual.employerCost, t.local.monthly.employerCost, t.comparison?.monthly.employerCost),
     ]],
-    columnStyles: { 0: { cellWidth: 44 }, 1: { cellWidth: 46 } },
+    columnStyles: cmp ? { 0: { cellWidth: 58 }, 1: { cellWidth: 36 } } : { 0: { cellWidth: 76 }, 1: { cellWidth: 46 } },
     didParseCell: rightAlignMoney(2),
   });
   y = (doc as any).lastAutoTable.finalY + 10;
@@ -164,62 +184,61 @@ export function downloadQuotePdf({ draft, result, countryName }: QuotePdfInput):
   doc.setTextColor(DARK);
   doc.text('SDP fees', 14, y);
   y += 3;
+  const fixedFeeRate = currency !== 'USD' && fx.localPerUsd ? ` · at ${fmtFxRate(fx.localPerUsd, currency, 'USD')}` : '';
   const feeRows = result.feeLines
     .filter((l) => l.applies)
     .map((l) => [
       l.description || 'Untitled fee',
-      describeFeeLineBasis(l),
+      `${describeFeeLineBasis(l, !!inclusive)}${l.lineType === 'fixed_amount' ? fixedFeeRate : ''}`,
       draft.isForClient && l.paidBy === 'host_client' ? 'Host client' : 'Business',
-      num(l.annual.local, currency),
-      num(l.annual.usd, 'USD'),
-      num(l.monthly.local, currency),
-      num(l.monthly.usd, 'USD'),
+      ...moneyCells(l.annual, l.monthly),
     ]);
+  const feeCols = 3 + moneyHead.length;
   autoTable(doc, {
     ...tableBase,
     startY: y,
-    head: [['Fee', 'Basis', 'Paid by', `Annual ${currency}`, 'Annual USD', `Monthly ${currency}`, 'Monthly USD']],
-    body: feeRows.length ? feeRows : [[{ content: 'No SDP fees on this quote.', colSpan: 7, styles: { textColor: GRAY } }]],
+    head: [['Fee', 'Basis', 'Paid by', ...moneyHead]],
+    body: feeRows.length ? feeRows : [[{ content: 'No SDP fees on this quote.', colSpan: feeCols, styles: { textColor: GRAY } }]],
     foot: [[
       'Total SDP fees',
       '',
       '',
-      num(t.local.annual.fees, currency),
-      num(t.usd.annual.fees, 'USD'),
-      num(t.local.monthly.fees, currency),
-      num(t.usd.monthly.fees, 'USD'),
+      ...pair(t.local.annual.fees, t.comparison?.annual.fees, t.local.monthly.fees, t.comparison?.monthly.fees),
     ]],
-    columnStyles: { 0: { cellWidth: 44 }, 1: { cellWidth: 34 }, 2: { cellWidth: 20 } },
+    columnStyles: cmp ? { 0: { cellWidth: 44 }, 1: { cellWidth: 40 }, 2: { cellWidth: 20 } } : { 0: { cellWidth: 60 }, 1: { cellWidth: 56 }, 2: { cellWidth: 22 } },
     didParseCell: rightAlignMoney(3),
   });
   y = (doc as any).lastAutoTable.finalY + 10;
 
   // Totals block
   if (y > PAGE_H - 70) { doc.addPage(); y = 20; }
+  const cmpText = (n: number | null | undefined) => (cmp && n != null ? fmtQuoteMoney(n, cmp) : '');
   const totalsLines: Array<[string, string, string, boolean]> = [
-    ['Total employer cost per year', fmtQuoteMoney(t.local.annual.employerCost, currency), fmtQuoteMoney(t.usd.annual.employerCost, 'USD'), false],
-    ['SDP fees per year', fmtQuoteMoney(t.local.annual.fees, currency), fmtQuoteMoney(t.usd.annual.fees, 'USD'), false],
-    ['Total quote per year', fmtQuoteMoney(t.local.annual.total, currency), fmtQuoteMoney(t.usd.annual.total, 'USD'), true],
-    ['Total quote per month', fmtQuoteMoney(t.local.monthly.total, currency), fmtQuoteMoney(t.usd.monthly.total, 'USD'), false],
+    ['Total employer cost per year', fmtQuoteMoney(t.local.annual.employerCost, currency), cmpText(t.comparison?.annual.employerCost), false],
+    ['SDP fees per year', fmtQuoteMoney(t.local.annual.fees, currency), cmpText(t.comparison?.annual.fees), false],
+    ['Total quote per year', fmtQuoteMoney(t.local.annual.total, currency), cmpText(t.comparison?.annual.total), true],
+    ['Total quote per month', fmtQuoteMoney(t.local.monthly.total, currency), cmpText(t.comparison?.monthly.total), false],
   ];
   if (result.perUnit) {
     totalsLines.push([
       `Loaded cost per ${result.perUnit.unit}`,
       fmtQuoteMoney(result.perUnit.loadedCost.local, currency),
-      fmtQuoteMoney(result.perUnit.loadedCost.usd, 'USD'),
+      cmpText(result.perUnit.loadedCost.comparison),
       false,
     ]);
   }
   const rightX = PAGE_W - 14;
-  totalsLines.forEach(([label, local, usd, bold]) => {
+  totalsLines.forEach(([label, local, comparison, bold]) => {
     doc.setFont('helvetica', bold ? 'bold' : 'normal');
     doc.setFontSize(bold ? 11 : 9);
     doc.setTextColor(bold ? BLUE : DARK);
     doc.text(label, rightX - 95, y);
-    doc.text(local, rightX - 36, y, { align: 'right' });
-    doc.setTextColor(GRAY);
-    doc.setFontSize(bold ? 9 : 8);
-    doc.text(usd, rightX, y, { align: 'right' });
+    doc.text(local, cmp ? rightX - 36 : rightX, y, { align: 'right' });
+    if (comparison) {
+      doc.setTextColor(GRAY);
+      doc.setFontSize(bold ? 9 : 8);
+      doc.text(comparison, rightX, y, { align: 'right' });
+    }
     y += bold ? 7 : 6;
   });
   y += 4;
