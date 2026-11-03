@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, extractApiErrorBody, extractApiErrorMessage, queryClient } from "@/lib/queryClient";
 import { listContractDeleteBlockers, type ContractDeleteBlockers, type ContractDeletionCheck } from "@shared/contractLifecycle";
+import { getSigningVocabulary } from "@shared/contractHelpers";
 
 interface DeleteContractDialogProps {
   open: boolean;
@@ -47,6 +48,7 @@ export function contractDisplayName(contract: any): string {
 export function DeleteContractDialog({ open, onOpenChange, contract, onDeleted }: DeleteContractDialogProps) {
   const { toast } = useToast();
   const contractId: string | undefined = contract?.id;
+  const vocab = getSigningVocabulary(contract?.signingMode);
   const [blockedOverride, setBlockedOverride] = useState<ContractDeleteBlockers | null>(null);
 
   useEffect(() => {
@@ -183,13 +185,13 @@ export function DeleteContractDialog({ open, onOpenChange, contract, onDeleted }
               {data.signed && (
                 <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900" data-testid="delete-contract-signed-warning">
                   <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-                  <span>The worker has signed this contract. Deleting it removes the signed record permanently.</span>
+                  <span>The worker has {vocab.verbPast} this contract. Deleting it removes the {vocab.verbPast} record permanently.</span>
                 </div>
               )}
               {data.awaitingSignature && (
                 <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900" data-testid="delete-contract-pending-warning">
                   <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-                  <span>It has been sent for signing; the signing link will stop working.</span>
+                  <span>It has been sent for {vocab.nounAction}; the {vocab.nounAction} link will stop working.</span>
                 </div>
               )}
             </div>

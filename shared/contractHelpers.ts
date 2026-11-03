@@ -148,9 +148,94 @@ export function getDerivedContractStatus(
 }
 
 /**
- * Adds human-readable labels for contract statuses
+ * How the worker accepts a contract (`contracts.signingMode`):
+ *   - 'electronic'     — generated from a template, signed on the platform (/sign/:token)
+ *   - 'acknowledgment' — signed outside the platform; the worker acknowledges an emailed
+ *                        summary of the key terms (/acknowledge/:token). The acknowledgment
+ *                        writes the same columns as a signature (signedAt, signatureText,
+ *                        status 'active'), so every gate that reads `signedAt` is unchanged;
+ *                        only the words differ, and they all come from getSigningVocabulary.
  */
-export function getContractStatusLabel(status: string): string {
+export type ContractSigningMode = 'electronic' | 'acknowledgment';
+
+export const CONTRACT_SIGNING_MODES: readonly ContractSigningMode[] = ['electronic', 'acknowledgment'];
+
+export interface SigningVocabulary {
+  mode: ContractSigningMode;
+  isAcknowledgment: boolean;
+  /** Details-modal button: "Send for Signing" / "Send for Acknowledgment". */
+  sendAction: string;
+  sendingLabel: string;
+  sentToast: string;
+  /** Worker-side call to action: "Sign Contract" / "Acknowledge Contract". */
+  workerAction: string;
+  awaitingLabel: string;
+  awaitingShort: string;
+  doneLabel: string;
+  lockedLabel: string;
+  doneByLabel: string;
+  activityTitle: string;
+  verbPresent: string;
+  verbPast: string;
+  nounAction: string;
+  modeLabel: string;
+  /** Public page path prefix; the token is appended. */
+  publicRoute: '/sign' | '/acknowledge';
+}
+
+export function isAcknowledgmentMode(mode: string | null | undefined): boolean {
+  return mode === 'acknowledgment';
+}
+
+/** Every user-facing signing / acknowledgment word, by mode. Unknown or missing → electronic. */
+export function getSigningVocabulary(mode: string | null | undefined): SigningVocabulary {
+  if (isAcknowledgmentMode(mode)) {
+    return {
+      mode: 'acknowledgment',
+      isAcknowledgment: true,
+      sendAction: 'Send for Acknowledgment',
+      sendingLabel: 'Sending...',
+      sentToast: 'The contract summary has been sent to the worker for acknowledgment via email.',
+      workerAction: 'Acknowledge Contract',
+      awaitingLabel: 'Awaiting Acknowledgment',
+      awaitingShort: 'Awaiting acknowledgment',
+      doneLabel: 'Acknowledged',
+      lockedLabel: 'Acknowledged & Locked',
+      doneByLabel: 'Acknowledged By (typed)',
+      activityTitle: 'Acknowledgment Activity',
+      verbPresent: 'acknowledge',
+      verbPast: 'acknowledged',
+      nounAction: 'acknowledgment',
+      modeLabel: 'Signed outside the platform — acknowledgment only',
+      publicRoute: '/acknowledge',
+    };
+  }
+  return {
+    mode: 'electronic',
+    isAcknowledgment: false,
+    sendAction: 'Send for Signing',
+    sendingLabel: 'Sending...',
+    sentToast: 'The contract has been sent to the worker for signing via email.',
+    workerAction: 'Sign Contract',
+    awaitingLabel: 'Awaiting Signature',
+    awaitingShort: 'Awaiting signature',
+    doneLabel: 'Signed',
+    lockedLabel: 'Signed & Locked',
+    doneByLabel: 'Signed By (typed)',
+    activityTitle: 'Signature Activity',
+    verbPresent: 'sign',
+    verbPast: 'signed',
+    nounAction: 'signing',
+    modeLabel: 'Electronic signature',
+    publicRoute: '/sign',
+  };
+}
+
+/**
+ * Adds human-readable labels for contract statuses. With `signingMode = 'acknowledgment'`
+ * the signature words become acknowledgment words ("Acknowledged", "Pending Acknowledgment").
+ */
+export function getContractStatusLabel(status: string, signingMode?: string | null): string {
   const labels: Record<string, string> = {
     'signed': 'Signed',
     'pending': 'Pending Signature',
@@ -160,7 +245,12 @@ export function getContractStatusLabel(status: string): string {
     'ready_to_issue': 'Ready to Issue',
     'pending_sdp_review': 'Pending SDP Review'
   };
-  
+  if (isAcknowledgmentMode(signingMode)) {
+    labels.signed = 'Acknowledged';
+    labels.pending = 'Pending Acknowledgment';
+    labels.expired = 'Acknowledgment Expired';
+  }
+
   return labels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
 

@@ -1,6 +1,7 @@
 import { Resend } from 'resend';
 import { storage } from './storage';
 import type { ApproverDayRow } from './modules/timesheet-approval/types';
+import { groupContractSummary, type ContractSummaryRow } from '@shared/contractSummary';
 
 // Initialize Resend with API key from environment variables (only if available)
 let resend: Resend | null = null;
@@ -748,6 +749,80 @@ class EmailService {
     return this.sendEmail({
       to,
       subject: `Action Required: Sign Your ${contractType} Contract with ${businessName}`,
+      html,
+      text,
+    });
+  }
+
+  /**
+   * Sent to the worker when a contract that was signed OUTSIDE the platform
+   * (`contracts.signingMode = 'acknowledgment'`) is issued: no generated document,
+   * a summary of the key terms (shared/contractSummary.ts) and one button that opens
+   * the public /acknowledge/<token> page. Mirrors sendContractSigningEmail.
+   */
+  async sendContractAcknowledgmentEmail(opts: {
+    to: string;
+    workerName: string;
+    businessName: string;
+    contractLabel: string;
+    rows: ContractSummaryRow[];
+    acknowledgeLink: string;
+  }): Promise<boolean> {
+    const esc = (v: unknown) => String(v ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const cell = 'padding: 6px 8px; border-bottom: 1px solid #e5e7eb; font-size: 13px; vertical-align: top;';
+    const head = 'padding: 10px 8px 4px 8px; font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em;';
+    const groups = groupContractSummary(opts.rows);
+    const tableHtml = groups.length > 0 ? `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; margin: 8px 0 16px 0;">
+        ${groups.map((g) => `
+        <tr style="background-color: #f3f4f6;"><td colspan="2" style="${head}">${esc(g.section)}</td></tr>
+        ${g.rows.map((r) => `
+        <tr>
+          <td style="${cell} color: #6b7280; width: 40%; white-space: nowrap;">${esc(r.label)}</td>
+          <td style="${cell} color: #111827; font-weight: 600;">${esc(r.value)}</td>
+        </tr>`).join('')}`).join('')}
+      </table>` : '';
+    const workerName = esc(opts.workerName);
+    const businessName = esc(opts.businessName);
+    const contractLabel = esc(opts.contractLabel);
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Contract Acknowledgment</title></head>
+<body style="font-family: Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 20px;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <div style="background-color: #1e3a5f; padding: 32px 40px; text-align: center;">
+      <h1 style="color: #ffffff; margin: 0; font-size: 22px;">SDP Global Pay</h1>
+      <p style="color: #93c5fd; margin: 8px 0 0 0; font-size: 14px;">Contract Acknowledgment</p>
+    </div>
+    <div style="padding: 32px 40px;">
+      <p style="color: #111827; font-size: 16px; margin: 0 0 16px 0;">Hello ${workerName},</p>
+      <p style="color: #374151; font-size: 14px; line-height: 1.6;"><strong>${businessName}</strong> has recorded the contract you signed with them for <strong>${contractLabel}</strong> on SDP Global Pay. Please review this summary of its key terms and acknowledge it so your timesheets and payments can start.</p>
+      ${tableHtml}
+      <div style="text-align: center; margin: 32px 0;">
+        <a href="${opts.acknowledgeLink}" style="display: inline-block; background-color: #1e3a5f; color: #ffffff; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-size: 16px; font-weight: 600;">Acknowledge Contract</a>
+      </div>
+      <p style="color: #6b7280; font-size: 13px; line-height: 1.5;">If the button above doesn't work, copy and paste this link into your browser:</p>
+      <p style="color: #2563eb; font-size: 13px; word-break: break-all;">${opts.acknowledgeLink}</p>
+      <div style="margin-top: 24px; padding: 16px; background-color: #fef3c7; border-radius: 6px;">
+        <p style="margin: 0; color: #92400e; font-size: 13px;"><strong>Important:</strong> This acknowledgment link is unique to you. Do not share it with anyone else. By acknowledging, you confirm you have read this summary of the contract you signed with ${businessName}. The summary does not replace the signed contract; if anything looks wrong, contact ${businessName} before acknowledging.</p>
+      </div>
+    </div>
+    <div style="background-color: #f3f4f6; padding: 16px 40px; text-align: center;">
+      <p style="margin: 0; color: #9ca3af; font-size: 12px;">SDP Global Pay — Global Workforce Management</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const textRows = groups.map((g) => `${g.section}\n${g.rows.map((r) => `  ${r.label}: ${r.value}`).join('\n')}`).join('\n\n');
+    const text = `Hello ${opts.workerName},\n\n${opts.businessName} has recorded the contract you signed with them for ${opts.contractLabel} on SDP Global Pay. Please review this summary of its key terms and acknowledge it so your timesheets and payments can start.\n\nSUMMARY\n${textRows}\n\nAcknowledge at: ${opts.acknowledgeLink}\n\nThis link is unique to you — do not share it. The summary does not replace the signed contract; if anything looks wrong, contact ${opts.businessName} before acknowledging.\n\nSDP Global Pay`;
+
+    return this.sendEmail({
+      to: opts.to,
+      subject: `Action Required: Acknowledge Your Contract with ${opts.businessName}`,
       html,
       text,
     });

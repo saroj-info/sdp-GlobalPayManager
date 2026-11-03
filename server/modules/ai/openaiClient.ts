@@ -74,7 +74,10 @@ async function runChat(model: string, params: ChatExtractParams): Promise<ChatCa
     // (e.g. toolChoice:"none" on a no-tool call) is a 400 upstream.
     tool_choice: params.tools ? params.toolChoice ?? "auto" : undefined,
     temperature: params.temperature ?? 0.2,
-    max_tokens: params.maxTokens,
+    // gpt-5.x rejects `max_tokens` (400 "Unsupported parameter … Use
+    // 'max_completion_tokens' instead"); every current chat model accepts
+    // `max_completion_tokens`, so it is sent for all of them.
+    max_completion_tokens: params.maxTokens,
     response_format: params.jsonMode ? { type: "json_object" } : undefined,
   };
   if (isReasoningTier) {

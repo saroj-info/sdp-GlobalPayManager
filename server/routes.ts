@@ -6,6 +6,7 @@ import bcrypt from "bcrypt";
 import * as OTPAuth from "otpauth";
 import * as twoFactorAuth from "./twoFactorAuth";
 import { storage } from "./storage";
+import { buildContractSummary } from "@shared/contractSummary";
 import { registerTimesheetApprovalRoutes, issueApprovalToken, summarizeForApprover } from "./modules/timesheet-approval";
 import { registerWorkforceRoutes, findEmailConflict, describeEmailConflict, normalizeEmail, workerInvitations } from "./modules/workforce";
 import {
@@ -5792,6 +5793,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...data,
         ...auditFields,
       };
+
+      // Signed outside the platform: no template, no generated document — the worker
+      // acknowledges an emailed summary instead (shared/contractSummary.ts).
+      if ((finalContractData as any).signingMode === 'acknowledgment') {
+        (finalContractData as any).templateId = null;
+      }
       
       // Validate customer billing fields for all client-work billing modes
       const billingMode = (finalContractData as any).billingMode;
@@ -6069,6 +6076,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // If only contractDocument is being updated, skip full schema validation
       if (contractDocument !== undefined && Object.keys(bodyWithoutDoc).length === 0) {
+        if ((existingContract as any).signingMode === 'acknowledgment') {
+          return res.status(400).json({
+            message: "This contract is acknowledged, not generated — it has no document.",
+            code: 'SIGNING_MODE_NO_DOCUMENT',
+          });
+        }
         const updatedContract = await storage.updateContract(id, { contractDocument } as any);
         return res.json(updatedContract);
       }
@@ -6138,10 +6151,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // If contractDocument is provided alongside other fields, include it in the update
-      const updateData = contractDocument !== undefined
+      // If contractDocument is provided alongside other fields, include it in the update.
+      // An acknowledgment contract (signed outside the platform) never has a template or a
+      // document: both are nulled whatever the body carried.
+      const resultingSigningMode = (data as any).signingMode ?? (existingContract as any).signingMode;
+      const updateData: Record<string, unknown> = contractDocument !== undefined
         ? { ...data, contractDocument }
-        : data;
+        : { ...data };
+      if (resultingSigningMode === 'acknowledgment') {
+        updateData.templateId = null;
+        updateData.contractDocument = null;
+      }
 
       const updatedContract = await storage.updateContract(id, updateData as any);
 
@@ -6403,7 +6423,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (contract.signedAt) {
-        return res.status(400).json({ message: "Contract already signed" });
+        return res.status(400).json({ message: "Contract already signed or acknowledged" });
       }
 
       const ipAddress = req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for'];
@@ -6428,7 +6448,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Send confirmation email (you can implement this later)
       // await sendContractSignedEmail(contract);
       
-      res.json({ success: true, message: "Contract signed successfully" });
+      res.json({
+        success: true,
+        message: (contract as any).signingMode === 'acknowledgment'
+          ? "Contract acknowledged successfully"
+          : "Contract signed successfully",
+      });
     } catch (error: any) {
       console.error("Error signing contract:", error);
       res.status(500).json({ message: "Failed to sign contract" });
@@ -6473,12 +6498,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Signed outside the platform: no document to render; the worker gets a summary of
+      // the key terms to acknowledge instead (shared/contractSummary.ts).
+      const isAcknowledgment = (contract as any).signingMode === 'acknowledgment';
+
       // Re-render the contract document right before sending so it picks up remuneration lines,
       // role title, job description and any other variables that may have been filled in
       // *after* the contract was originally created. The document is stored in DB so the
       // worker sees the latest version on the signing page.
       try {
-        if ((contract as any).templateId) {
+        if (!isAcknowledgment && (contract as any).templateId) {
           const regen = await storage.generateUniversalContract(
             (contract as any).templateId,
             contract.businessId,
@@ -6514,31 +6543,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
         emailSentAt: new Date()
       });
 
-      // Build signing link using FRONTEND_URL for correct domain
+      // Build the link using FRONTEND_URL for correct domain. Both public routes render the
+      // same page; the path only makes the email read naturally.
       const frontendUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
-      const signingLink = `${frontendUrl}/sign/${signingToken}`;
+      const signingLink = `${frontendUrl}${isAcknowledgment ? '/acknowledge' : '/sign'}/${signingToken}`;
 
       // Get worker and business details for the email
       const worker = await storage.getWorkerById(contract.workerId);
       const business = await storage.getBusinessById(contract.businessId);
 
+      let emailSent = false;
       if (worker?.email) {
         const workerName = `${worker.firstName || ''} ${worker.lastName || ''}`.trim();
         const businessName = business?.name || 'Unknown Business';
         const contractType = (contract.employmentType || '').replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
 
-        await emailService.sendContractSigningEmail(
-          worker.email,
-          workerName,
-          businessName,
-          contractType,
-          signingLink
-        );
+        if (isAcknowledgment) {
+          const c: any = contract;
+          const [roleTitle, country, customerBusiness, thirdPartyBusiness, rateLines, remunerationLines] = await Promise.all([
+            c.roleTitleId ? storage.getRoleTitle(c.roleTitleId).catch(() => null) : Promise.resolve(null),
+            c.countryId ? storage.getCountryById(c.countryId).catch(() => null) : Promise.resolve(null),
+            c.customerBusinessId ? storage.getBusinessById(c.customerBusinessId).catch(() => null) : Promise.resolve(null),
+            c.thirdPartyBusinessId ? storage.getThirdPartyBusinessById(c.thirdPartyBusinessId).catch(() => null) : Promise.resolve(null),
+            c.rateStructure === 'multiple' ? storage.getContractRateLines(c.id).catch(() => []) : Promise.resolve([]),
+            storage.getRemunerationLinesByContractId(c.id).catch(() => []),
+          ]);
+          const rows = buildContractSummary(c, {
+            worker,
+            business,
+            hostClient: customerBusiness ? { name: customerBusiness.name, address: (customerBusiness as any).address ?? null } : null,
+            roleTitle,
+            country: country ? { name: country.name, code: (country as any).code ?? null } : null,
+            thirdPartyBusiness: thirdPartyBusiness ? { name: (thirdPartyBusiness as any).name } : null,
+            rateLines: rateLines as any[],
+            remunerationLines: remunerationLines as any[],
+          });
+          emailSent = await emailService.sendContractAcknowledgmentEmail({
+            to: worker.email,
+            workerName,
+            businessName,
+            contractLabel: c.contractName || roleTitle?.title || c.customRoleTitle || `${contractType} contract`,
+            rows,
+            acknowledgeLink: signingLink,
+          });
+        } else {
+          emailSent = await emailService.sendContractSigningEmail(
+            worker.email,
+            workerName,
+            businessName,
+            contractType,
+            signingLink
+          );
+        }
+        if (!emailSent) {
+          console.warn(`[contract] ${isAcknowledgment ? 'acknowledgment' : 'signing'} email not sent for ${id} (no RESEND_API_KEY or provider error)`);
+        }
       }
 
       res.json({
         success: true,
-        message: "Contract sent for signing",
+        message: isAcknowledgment ? "Contract sent for acknowledgment" : "Contract sent for signing",
+        emailSent,
       });
     } catch (error: any) {
       console.error("Error sending contract for signing:", error);
@@ -6557,6 +6622,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const contract = await storage.getContract(id);
       if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if ((contract as any).signingMode === 'acknowledgment') {
+        return res.status(400).json({
+          message: "This contract is acknowledged, not generated — there is no document to refresh.",
+          code: 'SIGNING_MODE_NO_DOCUMENT',
+        });
+      }
       if (!(contract as any).templateId) {
         return res.status(400).json({ message: "Contract has no template — cannot regenerate document" });
       }
@@ -7068,7 +7139,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Sanity guard: only meaningful for fully-signed contracts
       if (!contract.signedAt) {
-        return res.status(400).json({ message: "Contract is not signed — use Edit / Recall instead" });
+        return res.status(400).json({ message: "Contract is not signed or acknowledged — use Edit / Recall instead" });
       }
 
       // Clear the signing audit fields on the contracts row + reset status to draft so the
@@ -7446,9 +7517,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Surface the right reason: unsigned vs missing-active.
           const hasUnsignedActive = candidates.some(c => c.status === 'active' && !c.signedAt);
           if (hasUnsignedActive) {
-            return res.status(400).json({ message: "Cannot create a timesheet for an unsigned contract. Please sign the contract first." });
+            return res.status(400).json({ message: "Cannot create a timesheet yet: the worker has not signed or acknowledged this contract." });
           }
-          return res.status(400).json({ message: "No active signed contract found for worker" });
+          return res.status(400).json({ message: "No active signed or acknowledged contract found for worker" });
         }
 
         const timesheetData = {
@@ -7511,7 +7582,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         if (!contract.signedAt) {
-          return res.status(400).json({ message: "Cannot create a timesheet for an unsigned contract. Please sign the contract first." });
+          return res.status(400).json({ message: "Cannot create a timesheet yet: the worker has not signed or acknowledged this contract." });
         }
 
         const timesheetData = {

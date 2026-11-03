@@ -123,6 +123,8 @@ export interface WorkerDashboardSummary {
     businessName: string | null;
     signedAt: string | null;
     hasSigningToken: boolean;
+    /** 'acknowledgment' = signed outside the platform, the worker acknowledges a summary. */
+    signingMode: 'electronic' | 'acknowledgment';
   }>;
   /** Employees only; null for contractors. */
   leave: { pending: number; approved: number } | null;

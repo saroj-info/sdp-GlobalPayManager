@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, extractApiErrorMessage, queryClient } from "@/lib/queryClient";
 import { addDays, dateToDay, isEndDateLater } from "@shared/contractLifecycle";
+import { getSigningVocabulary } from "@shared/contractHelpers";
 
 interface ContractExtendDialogProps {
   open: boolean;
@@ -70,6 +71,7 @@ export function ContractExtendDialog({ open, onOpenChange, contract, onExtended 
 
   if (!contract) return null;
   const contractLabel = contract.contractName || contract.customRoleTitle || contract.roleTitle?.title || "Contract";
+  const vocab = getSigningVocabulary(contract.signingMode);
   const isSigned = !!contract.signedAt;
   const awaitingSignature = !isSigned && !!contract.signingToken && !!contract.emailSentAt;
 
@@ -116,9 +118,11 @@ export function ContractExtendDialog({ open, onOpenChange, contract, onExtended 
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
               {isSigned
-                ? "This contract is signed. The signed document will not change; the new end date is recorded on the contract and logged in Change History."
+                ? `This contract is ${vocab.verbPast}. ${vocab.isAcknowledgment ? "The acknowledged summary is not re-sent;" : "The signed document will not change;"} the new end date is recorded on the contract and logged in Change History.`
                 : awaitingSignature
-                  ? "This contract is awaiting signature. The document is regenerated with the new end date; re-send it for signing so the worker signs the updated version."
+                  ? (vocab.isAcknowledgment
+                    ? "This contract is awaiting acknowledgment. The new end date is recorded and logged in Change History; re-send it for acknowledgment so the worker sees the updated summary."
+                    : "This contract is awaiting signature. The document is regenerated with the new end date; re-send it for signing so the worker signs the updated version.")
                   : contract.templateId
                     ? "The contract document will be regenerated with the new end date."
                     : "The new end date is recorded on the contract and logged in Change History."}

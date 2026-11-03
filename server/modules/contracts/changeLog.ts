@@ -19,6 +19,7 @@ export const TRACKED_CONTRACT_FIELDS: Array<{ key: string; label: string }> = [
   { key: "customRoleTitle",         label: "Role Title" },
   { key: "roleTitleId",             label: "Role Title (ref)" },
   { key: "employmentType",          label: "Employment Type" },
+  { key: "signingMode",             label: "Signing Method" },
 
   // Worker pay
   { key: "rateType",                label: "Worker Rate Type" },

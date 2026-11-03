@@ -472,6 +472,10 @@ export const contractStatusEnum = pgEnum('contract_status', ['draft', 'pending_s
 export const rateTypeEnum = pgEnum('rate_type', ['annual', 'hourly', 'daily']);
 // Host client confirmation of a Customer Work contract (recorded by the business or SDP).
 export const hostClientConfirmationStatusEnum = pgEnum('host_client_confirmation_status', ['pending', 'confirmed', 'declined']);
+// How the worker accepts a contract: 'electronic' = generated from a template and signed on the
+// platform; 'acknowledgment' = signed outside the platform, the worker acknowledges an emailed
+// summary of the key terms (no template, no generated document; see shared/contractSummary.ts).
+export const contractSigningModeEnum = pgEnum('contract_signing_mode', ['electronic', 'acknowledgment']);
 
 // Timesheet and leave types
 export const timesheetFrequencyEnum = pgEnum('timesheet_frequency', ['weekly', 'fortnightly', 'semi_monthly', 'monthly']);
@@ -494,6 +498,9 @@ export const contracts = pgTable("contracts", {
   roleTitleId: varchar("role_title_id").references(() => roleTitles.id),
   customRoleTitle: varchar("custom_role_title"), // if not using predefined role
   templateId: varchar("template_id").references(() => contractTemplates.id), // contract template used to generate this contract
+  // 'acknowledgment' ⇒ templateId and contractDocument are null (enforced by POST / PUT /api/contracts);
+  // the acknowledgment reuses the signing columns below (signedAt, signatureText = typed name).
+  signingMode: contractSigningModeEnum("signing_mode").notNull().default('electronic'),
   contractorCompliance: boolean("contractor_compliance").default(false), // For contractor engagements: opted into SDP compliance review/protection
   employmentType: employmentTypeEnum("employment_type").notNull(),
   rateType: rateTypeEnum("rate_type").notNull(),
@@ -2060,6 +2067,7 @@ export const insertContractSchema = createInsertSchema(contracts).omit({
   // The signing columns (emailSentAt, signedAt, signingToken, signatureText, …) have no
   // transform on purpose: the wizard never sends them and drizzle skips undefined, which
   // is what preserves the signing audit on an edit. Do not add a ''→null transform to them.
+  // `signingMode` likewise has no Zod default: a PUT that omits it must keep the stored mode.
   // Handle numeric fields that might be empty strings
   totalPackageValue: z.union([z.string(), z.number(), z.null(), z.undefined()]).optional().transform((val) =>
     val === '' || val === null || val === undefined ? null : val

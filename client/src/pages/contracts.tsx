@@ -23,7 +23,7 @@ import { requiresBillingTerms, type BillingTermsAcceptanceInput, type BillingTer
 import { useMissingBusinessDetails } from "@/hooks/useBusinessProfile";
 import { useAuth } from "@/hooks/useAuth";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
-import { getContractStatusLabel, getContractStatusVariant } from "@shared/contractHelpers";
+import { getContractStatusLabel, getContractStatusVariant, getSigningVocabulary } from "@shared/contractHelpers";
 import { generatePeriodSchedule } from "@shared/timesheetPeriodCalculator";
 import { DataPagination } from "@/components/ui/data-pagination";
 import { ContractActionsMenu } from "@/components/contracts/contract-actions-menu";
@@ -64,7 +64,7 @@ function ContractStatusBadge({ contract }: { contract: any }) {
 
   const Icon = icons[derivedStatus] || FileText;
   const variant = getContractStatusVariant(derivedStatus);
-  const label = getContractStatusLabel(derivedStatus);
+  const label = getContractStatusLabel(derivedStatus, contract.signingMode);
 
   return (
     <div className="flex gap-2 flex-shrink-0">
@@ -112,9 +112,19 @@ function ContractLifecyclePills({ contract, userType }: { contract: any; userTyp
   const renewals: any[] = Array.isArray(contract?.renewals) ? contract.renewals : [];
   const renewedFrom = contract?.renewedFrom;
   const showConfirmation = !!status && !!contract?.isForClient && userType !== 'worker';
-  if (!showConfirmation && !renewedFrom && renewals.length === 0) return null;
+  const isAcknowledgment = contract?.signingMode === 'acknowledgment';
+  if (!showConfirmation && !renewedFrom && renewals.length === 0 && !isAcknowledgment) return null;
   return (
     <>
+      {isAcknowledgment && (
+        <span
+          className="inline-flex items-center gap-1 text-[11px] font-medium text-secondary-700 bg-secondary-100 border border-secondary-200 rounded-full px-2 py-0.5"
+          title="Signed outside the platform — the worker acknowledges a summary of the key terms; no generated document"
+          data-testid={`pill-signed-outside-${contract.id}`}
+        >
+          <ClipboardCheck className="h-3 w-3" />Signed outside platform
+        </span>
+      )}
       {renewedFrom && (
         <span
           className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5"
@@ -1381,7 +1391,7 @@ export default function ContractsPage() {
   
   usePageHeader(
     "Contracts",
-    (user as any)?.userType === 'worker' ? "View your employment contracts" : "Manage employment contracts and e-signatures"
+    (user as any)?.userType === 'worker' ? "View your employment contracts" : "Manage employment contracts, e-signatures and acknowledgments"
   );
   
   // Only load data when on contracts page
@@ -1536,14 +1546,24 @@ export default function ContractsPage() {
   const [contractToRenegotiate, setContractToRenegotiate] = useState<any>(null);
 
   const sendForSigningMutation = useMutation({
-    mutationFn: async (contractId: string) => {
-      return await apiRequest("POST", `/api/contracts/${contractId}/send-for-signing`);
+    // Takes the contract row: the toast wording follows its signing mode and the
+    // response says whether the email actually left (sendEmail never throws).
+    mutationFn: async (contract: any) => {
+      const res = await apiRequest("POST", `/api/contracts/${contract.id}/send-for-signing`);
+      const body = await res.json().catch(() => ({}));
+      return { contract, body };
     },
-    onSuccess: () => {
-      toast({
-        title: "Contract Sent",
-        description: "The contract has been sent to the worker for signing via email.",
-      });
+    onSuccess: ({ contract, body }) => {
+      const vocab = getSigningVocabulary(contract?.signingMode);
+      if (body?.emailSent === false) {
+        toast({
+          title: "Email not sent",
+          description: `The contract is ready for ${vocab.nounAction}, but the email could not be sent. Check the email settings and send it again.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Contract Sent", description: vocab.sentToast });
+      }
       queryClient.invalidateQueries({
         predicate: (query) => {
           const key = query.queryKey;
@@ -1594,7 +1614,7 @@ export default function ContractsPage() {
     onSuccess: () => {
       toast({
         title: "Contract Recalled",
-        description: "The signature request has been cancelled. You can now edit and re-send the contract.",
+        description: "The request has been cancelled. You can now edit and re-send the contract.",
       });
       setShowRecallDialog(false);
       setContractToRecall(null);
@@ -1623,7 +1643,7 @@ export default function ContractsPage() {
     onSuccess: () => {
       toast({
         title: "Contract Reopened",
-        description: "The signed contract has been unlocked for editing. The previous signed version is preserved as audit history.",
+        description: "The contract has been unlocked for editing. The previous signed or acknowledged record is preserved as audit history.",
       });
       setShowRenegotiateDialog(false);
       setContractToRenegotiate(null);
@@ -1703,8 +1723,8 @@ export default function ContractsPage() {
                         <SelectItem value="all">All Contracts</SelectItem>
                         <SelectItem value="pending_sdp_review">Pending Review</SelectItem>
                         <SelectItem value="active">Active Contracts</SelectItem>
-                        <SelectItem value="signed">Signed</SelectItem>
-                        <SelectItem value="pending_signature">Pending Signature</SelectItem>
+                        <SelectItem value="signed">Signed / Acknowledged</SelectItem>
+                        <SelectItem value="pending_signature">Pending Signature / Acknowledgment</SelectItem>
                       </SelectContent>
                     </Select>
                   </>
@@ -1943,11 +1963,11 @@ export default function ContractsPage() {
                         <Button
                           size="sm"
                           className="w-full bg-primary-600 hover:bg-primary-700 text-white"
-                          onClick={() => setLocation(`/sign/${(contract as any).signingToken}`)}
+                          onClick={() => setLocation(`${getSigningVocabulary((contract as any).signingMode).publicRoute}/${(contract as any).signingToken}`)}
                           data-testid={`button-sign-contract-${contract.id}`}
                         >
                           <CheckCircle className="mr-2 h-4 w-4" />
-                          Sign Contract
+                          {getSigningVocabulary((contract as any).signingMode).workerAction}
                         </Button>
                       )}
                       {renderViewWithActions(contract, { fullWidth: true, label: 'View Details', testId: `button-view-details-${contract.id}` })}
@@ -2542,7 +2562,7 @@ export default function ContractsPage() {
                 {(selectedContract.signedAt || (selectedContract as any).emailSentAt || (selectedContract as any).emailViewedAt || (selectedContract as any).signatureText) && (
                   <div className="border rounded-lg overflow-hidden">
                     <div className="px-4 py-2 bg-secondary-50 border-b">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">Signature Activity</p>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-secondary-700">{getSigningVocabulary((selectedContract as any).signingMode).activityTitle}</p>
                     </div>
                     <div className="grid grid-cols-2 gap-4 p-4 text-sm">
                       {(selectedContract as any).emailSentAt && (
@@ -2552,10 +2572,10 @@ export default function ContractsPage() {
                         <div><span className="text-xs text-muted-foreground">Email Viewed: </span><span className="font-medium">{new Date((selectedContract as any).emailViewedAt).toLocaleString()}</span></div>
                       )}
                       {selectedContract.signedAt && (
-                        <div><span className="text-xs text-muted-foreground">Signed: </span><span className="font-medium">{new Date(selectedContract.signedAt).toLocaleString()}</span></div>
+                        <div><span className="text-xs text-muted-foreground">{getSigningVocabulary((selectedContract as any).signingMode).doneLabel}: </span><span className="font-medium">{new Date(selectedContract.signedAt).toLocaleString()}</span></div>
                       )}
                       {(selectedContract as any).signatureText && (
-                        <div><span className="text-xs text-muted-foreground">Signed By (typed): </span><span className="font-medium">{(selectedContract as any).signatureText}</span></div>
+                        <div><span className="text-xs text-muted-foreground">{getSigningVocabulary((selectedContract as any).signingMode).doneByLabel}: </span><span className="font-medium">{(selectedContract as any).signatureText}</span></div>
                       )}
 
                     </div>
@@ -2614,6 +2634,7 @@ export default function ContractsPage() {
                         <span className="text-sm font-medium">Host Client View (Read-only)</span>
                       </div>
                     )}
+                    {(selectedContract as any)?.signingMode !== 'acknowledgment' && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -2633,10 +2654,11 @@ export default function ContractsPage() {
                       <FileText className="mr-2 h-4 w-4" />
                       View Document
                     </Button>
+                    )}
                     {selectedContract?.signedAt && (
                       <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-md text-sm">
                         <CheckCircle className="h-4 w-4" />
-                        <span className="font-medium">Signed</span>
+                        <span className="font-medium">{getSigningVocabulary((selectedContract as any).signingMode).doneLabel}</span>
                       </div>
                     )}
                   </>
@@ -2646,6 +2668,9 @@ export default function ContractsPage() {
                     const sigStatus = selectedContract?.derivedSignatureStatus || selectedContract?.signatureStatus || '';
                     const isLocked = ['sent_for_signature', 'partially_signed'].includes(sigStatus);
                     const isFullySigned = sigStatus === 'fully_signed' || !!selectedContract?.signedAt;
+                    // Signed outside the platform: no document, acknowledgment wording.
+                    const vocab = getSigningVocabulary((selectedContract as any)?.signingMode);
+                    const isAck = vocab.isAcknowledgment;
                     return (
                       <>
                         {/* Delete sits apart at the left edge (mr-auto); the other actions form
@@ -2670,7 +2695,7 @@ export default function ContractsPage() {
                           <>
                             <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-md text-sm" data-testid="badge-signed-locked">
                               <Lock className="h-4 w-4" />
-                              <span className="font-medium">Signed &amp; Locked</span>
+                              <span className="font-medium">{vocab.lockedLabel}</span>
                             </div>
                             {/* Renegotiation is an SDP-only action. Business users can request it but cannot trigger themselves. */}
                             {(user as any)?.userType === 'sdp_internal' && (
@@ -2718,6 +2743,7 @@ export default function ContractsPage() {
                             Edit Contract
                           </Button>
                         )}
+                        {!isAck && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -2737,7 +2763,8 @@ export default function ContractsPage() {
                           <FileText className="mr-2 h-4 w-4" />
                           View Document
                         </Button>
-                        {!isLocked && !isFullySigned && (selectedContract as any).templateId && (
+                        )}
+                        {!isLocked && !isFullySigned && !isAck && (selectedContract as any).templateId && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -2763,7 +2790,7 @@ export default function ContractsPage() {
                           <Button
                             variant="default"
                             size="sm"
-                            onClick={() => sendForSigningMutation.mutate(selectedContract.id)}
+                            onClick={() => sendForSigningMutation.mutate(selectedContract)}
                             disabled={sendForSigningMutation.isPending}
                             data-testid="button-send-for-signing"
                           >
@@ -2775,7 +2802,7 @@ export default function ContractsPage() {
                             ) : (
                               <>
                                 <Mail className="mr-2 h-4 w-4" />
-                                Send for Signing
+                                {vocab.sendAction}
                               </>
                             )}
                           </Button>
@@ -2783,7 +2810,7 @@ export default function ContractsPage() {
                         {isLocked && (
                           <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-700 rounded-md text-sm">
                             <Clock className="h-4 w-4" />
-                            Awaiting Signature
+                            {vocab.awaitingLabel}
                           </div>
                         )}
                         {(isLocked || isFullySigned) && (
@@ -2898,7 +2925,7 @@ export default function ContractsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-secondary-600">
-              Recalling this contract will cancel the signature request. The worker will need to sign again after edits are made.
+              Recalling this contract will cancel the {getSigningVocabulary(contractToRecall?.signingMode).nounAction} request. The worker will need to {getSigningVocabulary(contractToRecall?.signingMode).verbPresent} again after edits are made.
             </p>
             <p className="text-sm font-medium text-secondary-800">
               Contract: {contractToRecall?.contractName || contractToRecall?.customRoleTitle || contractToRecall?.roleTitle?.title || 'Contract'} — {contractToRecall?.worker?.firstName} {contractToRecall?.worker?.lastName}
@@ -2931,7 +2958,7 @@ export default function ContractsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-secondary-600">
-              This will unlock the signed contract for editing. The previously-signed version is preserved as audit history, but the worker will need to sign the revised contract once you re-send it.
+              This will unlock the {getSigningVocabulary(contractToRenegotiate?.signingMode).verbPast} contract for editing. The previous record is preserved as audit history, but the worker will need to {getSigningVocabulary(contractToRenegotiate?.signingMode).verbPresent} the revised contract once you re-send it.
             </p>
             <p className="text-sm font-medium text-secondary-800">
               Contract: {contractToRenegotiate?.contractName || contractToRenegotiate?.customRoleTitle || contractToRenegotiate?.roleTitle?.title || 'Contract'} — {contractToRenegotiate?.worker?.firstName} {contractToRenegotiate?.worker?.lastName}

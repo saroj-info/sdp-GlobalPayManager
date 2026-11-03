@@ -159,6 +159,7 @@ export async function fetchWorkerContracts(workerId: string) {
       endDate: contracts.endDate,
       signedAt: contracts.signedAt,
       signingToken: contracts.signingToken,
+      signingMode: contracts.signingMode,
       businessName: businesses.name,
     })
     .from(contracts)

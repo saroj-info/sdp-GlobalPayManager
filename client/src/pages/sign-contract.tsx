@@ -9,17 +9,27 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle, Clock, FileText, User, Building, Calendar, DollarSign, MapPin, Mail, Phone, Globe, Briefcase, Users as UsersIcon, CalendarClock, Banknote } from "lucide-react";
 import { generatePeriodSchedule } from "@shared/timesheetPeriodCalculator";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { ContractWithDerived } from "@/types/api";
+import { getSigningVocabulary } from "@shared/contractHelpers";
+import { buildContractSummary, groupContractSummary } from "@shared/contractSummary";
+
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 export default function SignContract() {
-  const [, params] = useRoute("/sign/:token");
+  // One page for both public routes: /sign/:token (electronic signature) and
+  // /acknowledge/:token (a contract signed outside the platform; the worker
+  // acknowledges a summary). The contract's `signingMode` picks the branch.
+  const [, signParams] = useRoute("/sign/:token");
+  const [, ackParams] = useRoute("/acknowledge/:token");
   const [signature, setSignature] = useState("");
+  const [acknowledged, setAcknowledged] = useState(false);
   const [isViewed, setIsViewed] = useState(false);
   const { toast } = useToast();
 
-  const token = params?.token;
+  const token = signParams?.token ?? ackParams?.token;
 
   // Public signing flow — the URL token IS the authentication. No login
   // required so the recipient can sign straight from the email link.
@@ -42,7 +52,7 @@ export default function SignContract() {
   const signContractMutation = useMutation({
     mutationFn: async () => {
       if (!signature.trim()) {
-        throw new Error("Please enter your full name as signature");
+        throw new Error("Please enter your full name");
       }
 
       return await apiRequest("POST", `/api/contracts/${contract!.id}/sign`, {
@@ -51,9 +61,12 @@ export default function SignContract() {
       });
     },
     onSuccess: () => {
+      const ack = (contract as any)?.signingMode === 'acknowledgment';
       toast({
-        title: "Contract Signed Successfully",
-        description: "Your contract has been signed and recorded. Redirecting to home...",
+        title: ack ? "Contract Acknowledged" : "Contract Signed Successfully",
+        description: ack
+          ? "Your acknowledgment has been recorded. Redirecting to home..."
+          : "Your contract has been signed and recorded. Redirecting to home...",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/contracts/sign", token] });
       setTimeout(() => {
@@ -62,7 +75,7 @@ export default function SignContract() {
     },
     onError: (error) => {
       toast({
-        title: "Error Signing Contract",
+        title: (contract as any)?.signingMode === 'acknowledgment' ? "Error Acknowledging Contract" : "Error Signing Contract",
         description: error.message,
         variant: "destructive",
       });
@@ -96,6 +109,8 @@ export default function SignContract() {
   }
 
   const isAlreadySigned = contract.signedAt;
+  const isAck = (contract as any).signingMode === 'acknowledgment';
+  const vocab = getSigningVocabulary((contract as any).signingMode);
 
   const formatDateLong = (d: string | Date | null | undefined) =>
     d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
@@ -110,8 +125,12 @@ export default function SignContract() {
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-4xl mx-auto px-4">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Contract Review & Signature</h1>
-          <p className="text-gray-600">Please review the contract details below and sign if you agree to the terms</p>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">{isAck ? "Contract Acknowledgment" : "Contract Review & Signature"}</h1>
+          <p className="text-gray-600">
+            {isAck
+              ? `Please review this summary of the contract you signed with ${c.business?.name || 'your employer'} and acknowledge it`
+              : "Please review the contract details below and sign if you agree to the terms"}
+          </p>
           <div className="mt-3 inline-flex items-center gap-2 text-sm text-gray-700 bg-white border rounded-full px-4 py-1.5 shadow-sm">
             <FileText className="h-4 w-4 text-blue-600" />
             <span className="font-semibold">{headerLabel}</span>
@@ -132,12 +151,12 @@ export default function SignContract() {
 
         {isAlreadySigned && (
           <div className="mb-6">
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center" data-testid={isAck ? "banner-already-acknowledged" : "banner-already-signed"}>
               <CheckCircle className="h-5 w-5 text-green-600 mr-3" />
               <div>
-                <p className="font-semibold text-green-800">Contract Already Signed</p>
+                <p className="font-semibold text-green-800">{isAck ? "Contract Already Acknowledged" : "Contract Already Signed"}</p>
                 <p className="text-green-700 text-sm">
-                  This contract was signed on {new Date(contract.signedAt!).toLocaleDateString()} at {new Date(contract.signedAt!).toLocaleTimeString()}
+                  This contract was {vocab.verbPast} on {new Date(contract.signedAt!).toLocaleDateString()} at {new Date(contract.signedAt!).toLocaleTimeString()}
                 </p>
               </div>
             </div>
@@ -145,8 +164,54 @@ export default function SignContract() {
         )}
 
         <div className="grid gap-6 lg:grid-cols-3">
-          {/* Contract Details */}
+          {/* Contract Details — in acknowledgment mode the same rows the email carried
+              (shared/contractSummary.ts), so what is shown is exactly what is acknowledged. */}
           <div className="lg:col-span-2">
+            {isAck ? (
+            <Card data-testid="card-contract-summary">
+              <CardHeader>
+                <CardTitle className="flex items-center">
+                  <FileText className="h-5 w-5 mr-2" />
+                  Contract Summary
+                </CardTitle>
+                <CardDescription>
+                  The key terms of the contract you signed with {c.business?.name || 'your employer'}. This summary does not replace the signed contract; if anything looks wrong, contact them before acknowledging.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {groupContractSummary(buildContractSummary(c, {
+                  worker: c.worker,
+                  business: c.business,
+                  hostClient: c.customerBusiness,
+                  roleTitle: c.roleTitle,
+                  country: c.country,
+                  thirdPartyBusiness: c.thirdPartyBusiness,
+                  rateLines: c.rateLines,
+                  remunerationLines: c.remunerationLines,
+                })).map((group) => (
+                  <section key={group.section}>
+                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{group.section}</h3>
+                    <dl className="divide-y divide-gray-100 border rounded-md">
+                      {group.rows.map((row) => (
+                        <div key={row.label} className="grid grid-cols-5 gap-3 px-3 py-2 text-sm" data-testid={`summary-row-${slug(row.label)}`}>
+                          <dt className="col-span-2 text-gray-500">{row.label}</dt>
+                          <dd className="col-span-3 font-medium text-gray-900">{row.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </section>
+                ))}
+                {c.jobDescription && (
+                  <div>
+                    <Label className="text-sm font-medium text-gray-500">Job Description</Label>
+                    <div className="mt-1 p-3 bg-gray-50 rounded-md">
+                      <p className="whitespace-pre-wrap text-sm">{c.jobDescription}</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            ) : (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center">
@@ -551,32 +616,86 @@ export default function SignContract() {
                 )}
               </CardContent>
             </Card>
+            )}
           </div>
 
-          {/* Signing Panel */}
+          {/* Signing / acknowledgment panel */}
           <div>
             <Card>
               <CardHeader>
-                <CardTitle>Digital Signature</CardTitle>
+                <CardTitle>{isAck ? "Acknowledge Contract" : "Digital Signature"}</CardTitle>
                 <CardDescription>
-                  {isAlreadySigned 
-                    ? "This contract has been signed" 
-                    : "Type your full name to sign this contract"
-                  }
+                  {isAlreadySigned
+                    ? (isAck ? "This contract has been acknowledged" : "This contract has been signed")
+                    : (isAck ? "Confirm you have read the summary and type your full name" : "Type your full name to sign this contract")}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {isAlreadySigned ? (
                   <div className="space-y-3">
                     <div className="p-3 bg-green-50 border border-green-200 rounded-md">
-                      <p className="font-medium text-green-800">Signed by:</p>
+                      <p className="font-medium text-green-800">{isAck ? "Acknowledged by:" : "Signed by:"}</p>
                       <p className="text-green-700">{contract.signatureText}</p>
                     </div>
                     <div className="text-sm text-gray-600">
-                      <p>Signed: {new Date(contract.signedAt!).toLocaleString()}</p>
+                      <p>{isAck ? "Acknowledged" : "Signed"}: {new Date(contract.signedAt!).toLocaleString()}</p>
                       {contract.signingLocation && (
                         <p>Location: {JSON.parse(contract.signingLocation).city}, {JSON.parse(contract.signingLocation).country}</p>
                       )}
+                    </div>
+                  </div>
+                ) : isAck ? (
+                  <div className="space-y-4">
+                    <label htmlFor="ack-confirm" className="flex items-start gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 cursor-pointer">
+                      <Checkbox
+                        id="ack-confirm"
+                        checked={acknowledged}
+                        onCheckedChange={(v) => setAcknowledged(v === true)}
+                        className="mt-0.5"
+                        data-testid="checkbox-acknowledge-summary"
+                      />
+                      <span className="text-sm text-gray-700">
+                        I have read and acknowledge the summary of my contract with {c.business?.name || 'my employer'}.
+                      </span>
+                    </label>
+                    <div>
+                      <Label htmlFor="ack-name">Full Name *</Label>
+                      <Input
+                        id="ack-name"
+                        type="text"
+                        placeholder="Type your full legal name"
+                        value={signature}
+                        onChange={(e) => setSignature(e.target.value)}
+                        className="mt-1"
+                        data-testid="input-acknowledge-name"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Your name is recorded with the date, time and IP address of this acknowledgment.
+                      </p>
+                    </div>
+
+                    <Button
+                      onClick={() => signContractMutation.mutate()}
+                      disabled={signContractMutation.isPending || !acknowledged || !signature.trim()}
+                      className="w-full"
+                      data-testid="button-acknowledge-contract"
+                    >
+                      {signContractMutation.isPending ? (
+                        <>
+                          <Clock className="mr-2 h-4 w-4 animate-spin" />
+                          Acknowledging...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle className="mr-2 h-4 w-4" />
+                          Acknowledge Contract
+                        </>
+                      )}
+                    </Button>
+
+                    <div className="text-xs text-gray-500 space-y-1">
+                      <p>• Your IP address and time are recorded</p>
+                      <p>• This acknowledgment is recorded against your contract</p>
                     </div>
                   </div>
                 ) : (

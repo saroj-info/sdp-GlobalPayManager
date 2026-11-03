@@ -269,6 +269,7 @@ export async function getDashboardSummary(user: AuthUser): Promise<SummaryResult
         businessName: c.businessName,
         signedAt: c.signedAt ? c.signedAt.toISOString() : null,
         hasSigningToken: c.signingToken != null,
+        signingMode: c.signingMode === 'acknowledgment' ? 'acknowledgment' : 'electronic',
       })),
       leave: leaveCounts
         ? { pending: statusCount(leaveCounts, "pending"), approved: statusCount(leaveCounts, "approved") }

@@ -17,7 +17,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useLocation } from "wouter";
 import { calculatePeriod } from '@shared/timesheetPeriodCalculator';
 import type { TimesheetPeriodConfig } from '@shared/timesheetPeriodCalculator';
-import { calculateFirstTimesheetStartDate } from '@shared/contractHelpers';
+import { calculateFirstTimesheetStartDate, getSigningVocabulary } from '@shared/contractHelpers';
 import { CountryIntelPanel } from '@/components/contract-wizard/country-intel-panel';
 import { HelpCircle, InfoIcon, Building2, DollarSign, CheckCircle, FileText, Clock, Plus, Trash2, Search, LayoutGrid, List as ListIcon, UserCheck, UserX, MapPin, ExternalLink, ChevronDown, ChevronUp, AlertTriangle, AlertCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -149,6 +149,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         customRoleTitle: existingContract.customRoleTitle || '',
         roleDescription: existingContract.jobDescription || '',
         templateId: existingContract.templateId || '',
+        signingMode: existingContract.signingMode === 'acknowledgment' ? 'acknowledgment' : 'electronic',
         contractorCompliance: existingContract.contractorCompliance || false,
         startDate: existingContract.startDate ? existingContract.startDate.split('T')[0] : '',
         endDate: existingContract.endDate ? existingContract.endDate.split('T')[0] : '',
@@ -211,6 +212,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       customRoleTitle: '',
       roleDescription: '',
       templateId: '',
+      signingMode: 'electronic', // 'acknowledgment' = signed outside the platform, no template
       contractorCompliance: false,
       startDate: '',
       endDate: '',
@@ -599,7 +601,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       }
       console.log('Contract data from frontend:', data);
       // Generate contract document from template and save it to the contract
-      if (contractId && (data.templateId || formData.templateId) && (data.workerId || formData.workerId)) {
+      const savedSigningMode = data.signingMode || formData.signingMode;
+      if (contractId && savedSigningMode !== 'acknowledgment' && (data.templateId || formData.templateId) && (data.workerId || formData.workerId)) {
         try {
           const wId = data.workerId || formData.workerId;
           const tId = data.templateId || formData.templateId;
@@ -742,8 +745,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     if (!formData.roleDescription || formData.roleDescription.trim() === '') {
       return "Please provide a role description.";
     }
-    if (!formData.templateId) {
-      return "Please select a contract template.";
+    if (formData.signingMode !== 'acknowledgment' && !formData.templateId) {
+      return "Please select a contract template, or choose 'Signed outside the platform'.";
     }
     if (!formData.startDate) {
       return "Please select a start date.";
@@ -906,7 +909,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       endDate: formData.endDate || undefined,
       firstTimesheetStartDate: firstTimesheetStartDate, // Use calculated value
       jobDescription: formData.roleDescription, // Map roleDescription to jobDescription for backend
-      templateId: formData.templateId, // Include template ID for contract generation
+      // Signed outside the platform: no template, the worker acknowledges an emailed summary.
+      signingMode: formData.signingMode,
+      templateId: formData.signingMode === 'acknowledgment' ? null : formData.templateId, // Include template ID for contract generation
       // Handle custom role titles properly
       roleTitleId: formData.roleTitleId === 'custom' ? null : formData.roleTitleId,
       status: contractStatus, // Set the appropriate workflow status
@@ -2301,7 +2306,39 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   />
                 </div>
 
-                {/* Contract Template Selection */}
+                {/* How the worker accepts the contract: generated + e-signed, or signed outside
+                    the platform and acknowledged from an emailed summary (no template). */}
+                <div>
+                  <Label className="text-sm font-medium text-secondary-700 mb-2 block">How will the worker accept this contract?</Label>
+                  <RadioGroup
+                    value={formData.signingMode}
+                    onValueChange={(value) => setFormData({
+                      ...formData,
+                      signingMode: value,
+                      templateId: value === 'acknowledgment' ? '' : formData.templateId,
+                    })}
+                    className="grid grid-cols-1 md:grid-cols-2 gap-3"
+                    data-testid="radio-group-signing-mode"
+                  >
+                    <div className={`flex items-start space-x-3 p-3 border rounded-lg cursor-pointer ${formData.signingMode !== 'acknowledgment' ? 'border-primary-500 bg-primary-50' : 'border-secondary-300 bg-white'}`}>
+                      <RadioGroupItem value="electronic" id="signing-electronic" className="mt-0.5" data-testid="radio-signing-electronic" />
+                      <Label htmlFor="signing-electronic" className="cursor-pointer">
+                        <div className="font-medium text-secondary-900">Sign on the platform</div>
+                        <div className="text-xs text-secondary-500">Generate the contract from a template and email the worker a link to sign it electronically.</div>
+                      </Label>
+                    </div>
+                    <div className={`flex items-start space-x-3 p-3 border rounded-lg cursor-pointer ${formData.signingMode === 'acknowledgment' ? 'border-primary-500 bg-primary-50' : 'border-secondary-300 bg-white'}`}>
+                      <RadioGroupItem value="acknowledgment" id="signing-acknowledgment" className="mt-0.5" data-testid="radio-signing-acknowledgment" />
+                      <Label htmlFor="signing-acknowledgment" className="cursor-pointer">
+                        <div className="font-medium text-secondary-900">Signed outside the platform</div>
+                        <div className="text-xs text-secondary-500">The contract is already signed with the worker. Email them a summary of the key terms to acknowledge — no template needed.</div>
+                      </Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+
+                {/* Contract Template Selection — only for contracts signed on the platform */}
+                {formData.signingMode !== 'acknowledgment' ? (
                 <div>
                   <Label htmlFor="templateId" className="flex items-center gap-2">
                     Contract Template
@@ -2364,6 +2401,12 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                     </p>
                   )}
                 </div>
+
+                ) : (
+                  <p className="text-sm text-secondary-600 rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2" data-testid="text-signing-acknowledgment-note">
+                    No contract template is used. The worker will receive an email with a summary of these terms to acknowledge.
+                  </p>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -3230,7 +3273,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                     {createContractMutation.isPending ? 'Creating...' : 
                      (user as any)?.userType === 'sdp_internal' || 
                      (formData.employmentType === 'contractor' && !formData.contractorCompliance)
-                       ? 'Continue to Contract Generation' 
+                       ? (formData.signingMode === 'acknowledgment' ? 'Continue to Review' : 'Continue to Contract Generation')
                        : 'Submit Contract Request'}
                   </Button>
                 </div>
@@ -3262,10 +3305,14 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                         Ready to Issue Contract
                       </h4>
                       <p className="text-sm text-green-700">
-                        {(user as any)?.userType === 'sdp_internal' 
-                          ? `This ${formData.employmentType.replace(/_/g, ' ')} contract is ready for generation and can be issued directly.`
-                          : `Your ${formData.employmentType === 'contractor' ? 'independent contractor' : 'third party company'} engagement can be issued directly.`}
-                        {' '}Review the contract details below and send for e-signature.
+                        {formData.signingMode === 'acknowledgment'
+                          ? 'This contract was signed outside the platform. Review the summary below and send it to the worker for acknowledgment.'
+                          : <>
+                              {(user as any)?.userType === 'sdp_internal'
+                                ? `This ${formData.employmentType.replace(/_/g, ' ')} contract is ready for generation and can be issued directly.`
+                                : `Your ${formData.employmentType === 'contractor' ? 'independent contractor' : 'third party company'} engagement can be issued directly.`}
+                              {' '}Review the contract details below and send for e-signature.
+                            </>}
                       </p>
                     </CardContent>
                   </Card>
@@ -3297,7 +3344,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                       <div>
                         <span className="font-medium">Period:</span> {formData.startDate} to {formData.endDate || 'Ongoing'}
                       </div>
+                      <div className="col-span-2" data-testid="text-summary-signing-mode">
+                        <span className="font-medium">Signing:</span> {getSigningVocabulary(formData.signingMode).modeLabel}
+                      </div>
                     </div>
+                    {formData.signingMode === 'acknowledgment' && (
+                      <p className="mt-3 text-xs text-secondary-600">
+                        This summary, with the timesheet, payment and workplace terms, is what the worker will be asked to acknowledge.
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
 
@@ -3305,7 +3360,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
 
                 {/* Preview and Action Buttons */}
                 <div className="flex flex-col sm:flex-row gap-3">
+                  {formData.signingMode !== 'acknowledgment' && (
                   <Button
+                    data-testid="button-preview-contract"
                     type="button"
                     variant="outline"
                     className="flex-1"
@@ -3431,6 +3488,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                     )}
                     {previewContractMutation.isPending ? 'Generating Preview...' : 'Preview Contract'}
                   </Button>
+                  )}
                   
                   <Button
                     type="submit"

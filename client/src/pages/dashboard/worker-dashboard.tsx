@@ -12,6 +12,7 @@ import {
   FileText, ClipboardList, Send, CheckCircle2, CalendarDays, Receipt, UserRound, BarChart3, Wallet,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { getSigningVocabulary } from "@shared/contractHelpers";
 import { usePageHeader } from "@/contexts/AuthenticatedLayoutContext";
 import { PageLoader } from "@/components/ui/loader";
 import { Button } from "@/components/ui/button";
@@ -252,10 +253,10 @@ export function WorkerDashboard() {
                     <div className="flex shrink-0 items-center gap-2">
                       {!c.signedAt && c.hasSigningToken && (
                         <span className="rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                          Awaiting signature
+                          {getSigningVocabulary(c.signingMode).awaitingShort}
                         </span>
                       )}
-                      <Badge variant={getContractStatusVariant(c.status)}>{getContractStatusLabel(c.status)}</Badge>
+                      <Badge variant={getContractStatusVariant(c.status)}>{getContractStatusLabel(c.status, c.signingMode)}</Badge>
                     </div>
                   </li>
                 ))}

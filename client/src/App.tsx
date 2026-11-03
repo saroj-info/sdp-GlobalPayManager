@@ -110,6 +110,8 @@ function Router() {
       <Route path="/reset-password/:token" component={ResetPassword} />
       <Route path="/reset-password" component={ResetPassword} />
       <Route path="/sign/:token" component={SignContract} />
+      {/* Same page: a contract signed outside the platform is acknowledged from a summary. */}
+      <Route path="/acknowledge/:token" component={SignContract} />
       <Route path="/invite/business/:token" component={AcceptBusinessInvitation} />
       <Route path="/invite/:token" component={AcceptSdpInvite} />
       <Route path="/invoice/view/:token" component={InvoiceView} />

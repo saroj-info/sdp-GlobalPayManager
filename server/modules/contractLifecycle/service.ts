@@ -103,6 +103,7 @@ const COPIED_COLUMNS = [
   "thirdPartyBusinessId", "sdpEntityId",
   "billingMode", "invoiceCustomer", "customerBusinessId", "customerBillingRateType", "customerCurrency",
   "invoicingFrequency", "paymentTerms", "clientBillingType", "fixedBillingFrequency",
+  "signingMode",
 ] as const satisfies readonly (keyof Contract)[];
 
 /** Drop the row identity and timestamps before re-inserting a line under a new contract. */
@@ -287,7 +288,11 @@ export function createContractLifecycleService(deps: ContractLifecycleDeps) {
 
     const warnings: string[] = [];
     let templateId = source.templateId ?? null;
-    if (templateId && !(await deps.getContractTemplateById(templateId))) {
+    if (source.signingMode === 'acknowledgment') {
+      // Signed outside the platform: the renewal is acknowledged from a summary too,
+      // so it never has a template or a document (regenerateDocument then no-ops).
+      templateId = null;
+    } else if (templateId && !(await deps.getContractTemplateById(templateId))) {
       templateId = null;
       warnings.push('TEMPLATE_MISSING');
     }
