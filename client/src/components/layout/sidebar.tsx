@@ -142,11 +142,15 @@ export function Sidebar() {
     }
     
     // For SDP internal users, rename "Invoices" to "Contractor Invoices" since that
-    // page shows worker→business contractor invoices (not their own invoices)
+    // page shows worker→business contractor invoices (not their own invoices), and
+    // drop "Team Members": it is the business's own team page; SDP staff are
+    // managed on User Management.
     const baseNav = userType === 'sdp_internal'
-      ? businessNavigation.map(item =>
-          item.href === '/invoices' ? { ...item, name: 'Contractor Invoices' } : item
-        )
+      ? businessNavigation
+          .filter(item => item.href !== '/team-members')
+          .map(item =>
+            item.href === '/invoices' ? { ...item, name: 'Contractor Invoices' } : item
+          )
       : businessNavigation;
 
     // Businesses (browse-by-business drill-down) sits right after Contracts

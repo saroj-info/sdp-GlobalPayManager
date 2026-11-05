@@ -1152,6 +1152,109 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     );
   };
 
+  // Customer Invoicing question, rendered on the final step above the billing
+  // terms card for Customer Work. Invoice Separately is the default; picking an
+  // SDP option makes `termsRequired` true, which shows renderBillingTermsCard().
+  // The option titles are mirrored by the AI contract chat; keep them verbatim.
+  const renderCustomerInvoicingCard = () => {
+    if (!formData.isForClient || !isFinalStep) return null;
+    // Only the two SDP options are offered. Nothing selected means the default,
+    // Invoice Separately; clicking the selected option again goes back to it.
+    const applyBillingMode = (mode: string) => {
+      setFormData({ ...formData, billingMode: mode, invoiceCustomer: mode === 'invoice_through_platform' });
+      // An acceptance (or a skip) is tied to the mode it was given for.
+      setBillingTermsAcceptance(null);
+      setBillingTermsVersion(null);
+      setBillingTermsSkipped(false);
+    };
+    const sdpInvoicingOptions = [
+      {
+        value: 'invoice_through_platform',
+        testId: 'option-billing-platform',
+        title: 'SDP Global Pay as Billing Agent',
+        description: 'SDP Global Pay acts as the billing entity and invoices your host client directly on timesheet approval.',
+      },
+      {
+        value: 'auto_invoice',
+        testId: 'option-billing-auto',
+        title: 'Auto Invoice upon Approval',
+        description: 'On timesheet approval, SDP invoices your business (to fund worker payment) and also auto-generates a Business → Host Client invoice for you to collect from your client.',
+      },
+    ];
+    const selectedSdpOption = sdpInvoicingOptions.find((o) => o.value === formData.billingMode);
+    return (
+      <Card className="border-secondary-200" data-testid="card-customer-invoicing">
+        <CardContent className="p-5 space-y-3">
+          <div className="flex items-start gap-3">
+            <DollarSign className="h-5 w-5 text-accent-600 mt-0.5" />
+            <div className="flex-1 space-y-1">
+              <h3 className="font-semibold text-secondary-900 flex items-center gap-2">
+                Customer Invoicing
+                <Popover>
+                  <PopoverTrigger asChild>
+                    {/* type="button": a bare <button> inside the form would submit it on the final step */}
+                    <Button type="button" variant="ghost" size="sm" className="p-1 h-auto" aria-label="About customer invoicing">
+                      <HelpCircle className="h-4 w-4 text-secondary-500" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80" align="start">
+                    <div className="space-y-3">
+                      <h4 className="font-semibold text-secondary-900">Customer Invoicing</h4>
+                      <div className="space-y-2 text-sm">
+                        <div><strong>Invoice Separately:</strong> Your business handles customer invoicing outside the platform. You manage the customer relationship and billing directly.</div>
+                        <div><strong>SDP Global Pay as Billing Agent / Auto Invoice upon Approval:</strong> SDP Global Pay acts as the billing entity to your customer. We handle invoicing, payment collection, worker payments, and transfer your margin when the customer pays.</div>
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </h3>
+              <p className="text-sm text-secondary-600" data-testid="text-customer-invoicing-question">
+                Would you like SDP Global Pay to invoice your host client for you?
+              </p>
+            </div>
+          </div>
+          <div
+            role="radiogroup"
+            aria-label="Customer invoicing"
+            className="grid grid-cols-1 gap-3"
+            data-testid="radio-group-customer-invoicing"
+          >
+            {sdpInvoicingOptions.map((option) => {
+              const selected = formData.billingMode === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  data-testid={option.testId}
+                  onClick={() => applyBillingMode(selected ? 'invoice_separately' : option.value)}
+                  className={`flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors ${selected ? 'border-primary-500 bg-primary-50' : 'border-secondary-300 bg-white'}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${selected ? 'border-primary-500' : 'border-secondary-300'}`}
+                  >
+                    {selected && <span className="h-2 w-2 rounded-full bg-primary-500" />}
+                  </span>
+                  <span className="flex-1">
+                    <span className="block font-medium text-secondary-900">{option.title}</span>
+                    <span className="block text-sm text-secondary-600">{option.description}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-secondary-500" data-testid="text-customer-invoicing-status">
+            {selectedSdpOption
+              ? <>Selected: <span className="font-medium text-secondary-700">{selectedSdpOption.title}</span>. Click it again to go back to Invoice Separately. SDP's billing terms are asked for below.</>
+              : 'No option selected: Invoice Separately applies, so your business invoices the host client itself.'}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -1984,64 +2087,23 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
               {/* Customer Invoicing Question - only show if customer work is selected */}
               {formData.isForClient ? (
                 <>
-                  <div>
-                    <Label className="flex items-center gap-2 text-sm font-medium text-secondary-700 mb-3">
-                      Customer Invoicing
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button variant="ghost" size="sm" className="p-1 h-auto">
-                            <HelpCircle className="h-4 w-4 text-secondary-500" />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-80" align="start">
-                          <div className="space-y-3">
-                            <h4 className="font-semibold text-secondary-900">Customer Invoicing</h4>
-                            <div className="space-y-2 text-sm">
-                              <div><strong>Invoice through Platform:</strong> SDP Global Pay acts as the billing entity to your customer. We handle invoicing, payment collection, worker payments, and transfer your margin when customer pays.</div>
-                              <div><strong>Invoice Separately:</strong> Your business handles customer invoicing outside the platform. You manage the customer relationship and billing directly.</div>
-                            </div>
-                          </div>
-                        </PopoverContent>
-                      </Popover>
-                    </Label>
-                    <RadioGroup
-                      value={formData.billingMode || 'invoice_separately'}
-                      onValueChange={(value) => {
-                        const isThruPlatform = value === 'invoice_through_platform';
-                        setFormData({ ...formData, billingMode: value, invoiceCustomer: isThruPlatform });
-                        // An acceptance (or a skip) is tied to the mode it was given for.
-                        setBillingTermsAcceptance(null);
-                        setBillingTermsVersion(null);
-                        setBillingTermsSkipped(false);
-                      }}
-                      className="grid grid-cols-1 gap-3"
-                    >
-                      <div className={`flex items-start space-x-3 p-4 border rounded-lg cursor-pointer ${formData.billingMode === 'invoice_separately' ? 'border-primary-500 bg-primary-50' : 'border-secondary-300'}`}>
-                        <RadioGroupItem value="invoice_separately" id="billing-separate" className="mt-0.5" />
-                        <Label htmlFor="billing-separate" className="cursor-pointer flex-1">
-                          <div className="font-medium text-secondary-900">Invoice Separately</div>
-                          <div className="text-sm text-secondary-600">Your business invoices the host client. Platform auto-generates the invoice for you on timesheet approval.</div>
-                        </Label>
-                      </div>
-                      <div className={`flex items-start space-x-3 p-4 border rounded-lg cursor-pointer ${formData.billingMode === 'invoice_through_platform' ? 'border-primary-500 bg-primary-50' : 'border-secondary-300'}`}>
-                        <RadioGroupItem value="invoice_through_platform" id="billing-platform" className="mt-0.5" />
-                        <Label htmlFor="billing-platform" className="cursor-pointer flex-1">
-                          <div className="font-medium text-secondary-900">SDP Global Pay as Billing Agent</div>
-                          <div className="text-sm text-secondary-600">SDP Global Pay acts as the billing entity and invoices your host client directly on timesheet approval.</div>
-                        </Label>
-                      </div>
-                      <div className={`flex items-start space-x-3 p-4 border rounded-lg cursor-pointer ${formData.billingMode === 'auto_invoice' ? 'border-primary-500 bg-primary-50' : 'border-secondary-300'}`}>
-                        <RadioGroupItem value="auto_invoice" id="billing-auto" className="mt-0.5" />
-                        <Label htmlFor="billing-auto" className="cursor-pointer flex-1">
-                          <div className="font-medium text-secondary-900">Auto Invoice upon Approval</div>
-                          <div className="text-sm text-secondary-600">On timesheet approval, SDP invoices your business (to fund worker payment) and also auto-generates a Business → Host Client invoice for you to collect from your client.</div>
-                        </Label>
-                      </div>
-                    </RadioGroup>
+                  {/* Customer invoicing: Invoice Separately applies by default. The
+                      Billing Agent / Auto Invoice choice is asked on the final step
+                      (renderCustomerInvoicingCard), above the SDP billing terms card. */}
+                  <div
+                    className="flex items-start gap-2 rounded-lg border border-secondary-200 bg-secondary-50 p-4 text-sm text-secondary-700"
+                    data-testid="text-customer-invoicing-default"
+                  >
+                    <InfoIcon className="h-4 w-4 mt-0.5 shrink-0 text-secondary-500" />
+                    <span>
+                      <span className="font-medium text-secondary-900">Customer invoicing:</span>{' '}
+                      Invoice Separately applies by default: your business invoices the host client.
+                      On the last step you can ask SDP Global Pay to invoice the host client for you instead.
+                    </span>
                   </div>
 
                   {/* Customer Billing Details - show for all billing modes when isForClient */}
-                  {formData.billingMode && formData.billingMode !== 'direct' && (
+                  {formData.billingMode !== 'direct' && (
                     <Card className="border-accent-200 bg-accent-50">
                       <CardContent className="p-6 space-y-4">
                         <h3 className="text-lg font-semibold text-secondary-900 flex items-center gap-2">
@@ -2200,7 +2262,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   type="button"
                   data-testid="button-continue-step3"
                   onClick={() => setStep(4)}
-                  disabled={!!(formData.isForClient && formData.billingMode && formData.billingMode !== 'direct' && formData.clientBillingType === 'fixed_price' && !formData.fixedBillingAmount)}
+                  disabled={!!(formData.isForClient && formData.billingMode !== 'direct' && formData.clientBillingType === 'fixed_price' && !formData.fixedBillingAmount)}
                 >
                   Continue to Contract Details
                 </Button>
@@ -3227,6 +3289,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                 </Card>
               )}
 
+              {renderCustomerInvoicingCard()}
+
               {renderBillingTermsCard()}
 
               {/* Actions */}
@@ -3355,6 +3419,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                     )}
                   </CardContent>
                 </Card>
+
+                {renderCustomerInvoicingCard()}
 
                 {renderBillingTermsCard()}
 
