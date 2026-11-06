@@ -296,6 +296,10 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   // "Skip for now": the contract saves without an acceptance and shows a pending
   // reminder until it is accepted later (edit wizard or contract details).
   const [billingTermsSkipped, setBillingTermsSkipped] = useState(false);
+  // Customer Invoicing gate on the final step: the user answered "Yes" to "Should
+  // SDP Global Pay act as billing agent?" but may not have picked a flow yet.
+  // Kept outside formData so it never rides the payload.
+  const [sdpBillingAgentOptIn, setSdpBillingAgentOptIn] = useState(false);
   const termsRequired = requiresBillingTerms(formData.billingMode, formData.isForClient);
   // Who accepts is decided by the caller's role (edit mode sets onBehalf for every contract).
   const termsMode: 'in_app' | 'sdp_offline' = isSDPInternal ? 'sdp_offline' : 'in_app';
@@ -314,6 +318,16 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   // (create, a move into a triggering mode, or an earlier skip).
   const termsNeededNow = termsRequired && !existingTermsAcceptance;
   const termsSatisfied = !termsNeededNow || !!billingTermsAcceptance || billingTermsSkipped;
+  // "Yes" when the user opted in, or when one of the two SDP flows is already the
+  // contract's mode (termsRequired), so an edit shows the saved choice. "Yes"
+  // needs a flow before the contract can be submitted.
+  const sdpBillingAgentYes = formData.isForClient && (sdpBillingAgentOptIn || termsRequired);
+  const invoicingChoiceComplete = !sdpBillingAgentYes || termsRequired;
+  const finalStepBlockedReason = !invoicingChoiceComplete
+    ? 'Choose a billing agent flow, or select No'
+    : !termsSatisfied
+      ? 'Accept or skip the SDP billing terms first'
+      : undefined;
   // SDP, non-compliant contractors and third-party workers get Step 5 (contract
   // generation); everyone else submits from Step 4. The terms card sits on the
   // step that holds the submit button.
@@ -341,6 +355,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     setBillingTermsAcceptance(null);
     setBillingTermsVersion(null);
     setBillingTermsSkipped(false);
+    setSdpBillingAgentOptIn(false);
   }, [editMode, existingContract]);
 
   // Sync preselectedWorkerId into form whenever it is provided (the modal may already be mounted
@@ -667,6 +682,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       setBillingTermsAcceptance(null);
       setBillingTermsVersion(null);
       setBillingTermsSkipped(false);
+      setSdpBillingAgentOptIn(false);
       toast({
         title: "Success",
         description: editMode ? "Contract updated successfully." : "Contract created successfully.",
@@ -836,6 +852,16 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     // Check if should go to Step 5 (contract generation) or submit directly
     if (shouldGoToStep5 && step === 4) {
       setStep(5); // Go to contract generation step
+      return;
+    }
+
+    // Final step: "Yes" on the billing agent question needs one of the two flows.
+    if (!invoicingChoiceComplete) {
+      toast({
+        title: "Customer invoicing",
+        description: "Choose a billing agent flow, or select No to invoice separately.",
+        variant: "destructive",
+      });
       return;
     }
 
@@ -1152,14 +1178,17 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     );
   };
 
-  // Customer Invoicing question, rendered on the final step above the billing
-  // terms card for Customer Work. Invoice Separately is the default; picking an
-  // SDP option makes `termsRequired` true, which shows renderBillingTermsCard().
-  // The option titles are mirrored by the AI contract chat; keep them verbatim.
+  // Customer Invoicing, rendered on the final step above the billing terms card
+  // for Customer Work. Explicit and conditional:
+  //   1. Gate: "Should SDP Global Pay act as billing agent?" No (default) keeps
+  //      Invoice Separately.
+  //   2. Only after Yes: the two flows (Billing Agent / Auto Invoice).
+  //   3. Only for the picked flow: its steps, then renderBillingTermsCard()
+  //      (picking a flow makes `termsRequired` true).
+  // The steps describe server/modules/timesheet-approval (runAutoInvoiceForApproval).
+  // The flow titles are mirrored by the AI contract chat; keep them verbatim.
   const renderCustomerInvoicingCard = () => {
     if (!formData.isForClient || !isFinalStep) return null;
-    // Only the two SDP options are offered. Nothing selected means the default,
-    // Invoice Separately; clicking the selected option again goes back to it.
     const applyBillingMode = (mode: string) => {
       setFormData({ ...formData, billingMode: mode, invoiceCustomer: mode === 'invoice_through_platform' });
       // An acceptance (or a skip) is tied to the mode it was given for.
@@ -1167,24 +1196,48 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       setBillingTermsVersion(null);
       setBillingTermsSkipped(false);
     };
-    const sdpInvoicingOptions = [
+    // An SDP user creating on behalf reads about the business by name; a business
+    // user reads "your business".
+    const party = isSDPInternal ? (termsBusinessName || 'the business') : 'your business';
+    const partyAtStart = isSDPInternal ? (termsBusinessName || 'The business') : 'Your business';
+    const partyPossessive = isSDPInternal ? `${termsBusinessName || 'the business'}'s` : 'your';
+    const isSalary = formData.rateType === 'annual';
+    const billingAgentFlows = [
       {
         value: 'invoice_through_platform',
+        id: 'billing-platform',
         testId: 'option-billing-platform',
         title: 'SDP Global Pay as Billing Agent',
-        description: 'SDP Global Pay acts as the billing entity and invoices your host client directly on timesheet approval.',
+        description: 'SDP Global Pay is the billing entity: it invoices the host client and collects the payment.',
+        steps: [
+          'SDP Global Pay issues the invoice to the host client as the billing entity.',
+          'The host client pays SDP Global Pay.',
+          `SDP Global Pay pays the worker and transfers ${partyPossessive} margin once the host client has paid.`,
+          `SDP fees, where they apply, are invoiced to ${party} separately.`,
+        ],
       },
       {
         value: 'auto_invoice',
+        id: 'billing-auto',
         testId: 'option-billing-auto',
         title: 'Auto Invoice upon Approval',
-        description: 'On timesheet approval, SDP invoices your business (to fund worker payment) and also auto-generates a Business → Host Client invoice for you to collect from your client.',
+        description: `SDP Global Pay invoices ${party}, and ${partyPossessive} invoice to the host client is generated automatically.`,
+        steps: [
+          // The SDP invoice carries the worker cost only on non-salary contracts.
+          isSalary
+            ? `SDP Global Pay invoices ${party} for SDP fees (the salary is paid through payroll).`
+            : `SDP Global Pay invoices ${party} for the worker cost plus SDP fees, to fund the worker's payment.`,
+          `An invoice from ${party} to the host client is generated automatically.`,
+          `${partyAtStart} collects payment from the host client directly.`,
+        ],
       },
     ];
-    const selectedSdpOption = sdpInvoicingOptions.find((o) => o.value === formData.billingMode);
+    const selectedFlow = termsRequired
+      ? billingAgentFlows.find((flow) => flow.value === formData.billingMode)
+      : undefined;
     return (
       <Card className="border-secondary-200" data-testid="card-customer-invoicing">
-        <CardContent className="p-5 space-y-3">
+        <CardContent className="p-5 space-y-4">
           <div className="flex items-start gap-3">
             <DollarSign className="h-5 w-5 text-accent-600 mt-0.5" />
             <div className="flex-1 space-y-1">
@@ -1201,55 +1254,100 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                     <div className="space-y-3">
                       <h4 className="font-semibold text-secondary-900">Customer Invoicing</h4>
                       <div className="space-y-2 text-sm">
-                        <div><strong>Invoice Separately:</strong> Your business handles customer invoicing outside the platform. You manage the customer relationship and billing directly.</div>
-                        <div><strong>SDP Global Pay as Billing Agent / Auto Invoice upon Approval:</strong> SDP Global Pay acts as the billing entity to your customer. We handle invoicing, payment collection, worker payments, and transfer your margin when the customer pays.</div>
+                        <div><strong>Invoice Separately:</strong> The business invoices the host client itself and manages the customer relationship and billing directly.</div>
+                        <div><strong>SDP Global Pay as Billing Agent:</strong> SDP Global Pay is the billing entity to the host client. It handles invoicing, payment collection and worker payments, and transfers the margin when the host client pays.</div>
+                        <div><strong>Auto Invoice upon Approval:</strong> SDP Global Pay invoices the business on each approved timesheet, and the business's invoice to the host client is generated automatically.</div>
                       </div>
                     </div>
                   </PopoverContent>
                 </Popover>
               </h3>
               <p className="text-sm text-secondary-600" data-testid="text-customer-invoicing-question">
-                Would you like SDP Global Pay to invoice your host client for you?
+                Should SDP Global Pay act as billing agent for this contract?
               </p>
             </div>
           </div>
-          <div
-            role="radiogroup"
-            aria-label="Customer invoicing"
-            className="grid grid-cols-1 gap-3"
-            data-testid="radio-group-customer-invoicing"
+
+          {/* 1. The gate. No is the default and means Invoice Separately. */}
+          <RadioGroup
+            value={sdpBillingAgentYes ? 'yes' : 'no'}
+            onValueChange={(value) => {
+              if (value === 'yes') {
+                setSdpBillingAgentOptIn(true);
+                return;
+              }
+              setSdpBillingAgentOptIn(false);
+              // Leaving the SDP flows puts the contract back on the default.
+              if (termsRequired) applyBillingMode('invoice_separately');
+            }}
+            className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+            data-testid="radio-group-sdp-billing-agent"
           >
-            {sdpInvoicingOptions.map((option) => {
-              const selected = formData.billingMode === option.value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  data-testid={option.testId}
-                  onClick={() => applyBillingMode(selected ? 'invoice_separately' : option.value)}
-                  className={`flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors ${selected ? 'border-primary-500 bg-primary-50' : 'border-secondary-300 bg-white'}`}
-                >
-                  <span
-                    aria-hidden="true"
-                    className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${selected ? 'border-primary-500' : 'border-secondary-300'}`}
+            <div className={`flex items-start space-x-3 p-4 border rounded-lg ${!sdpBillingAgentYes ? 'border-primary-500 bg-primary-50' : 'border-secondary-300'}`}>
+              <RadioGroupItem value="no" id="sdp-billing-agent-no" className="mt-0.5" data-testid="radio-sdp-billing-agent-no" />
+              <Label htmlFor="sdp-billing-agent-no" className="cursor-pointer flex-1">
+                <div className="font-medium text-secondary-900">No</div>
+                <div className="text-sm text-secondary-600">Invoice Separately: {party} invoices the host client.</div>
+              </Label>
+            </div>
+            <div className={`flex items-start space-x-3 p-4 border rounded-lg ${sdpBillingAgentYes ? 'border-primary-500 bg-primary-50' : 'border-secondary-300'}`}>
+              <RadioGroupItem value="yes" id="sdp-billing-agent-yes" className="mt-0.5" data-testid="radio-sdp-billing-agent-yes" />
+              <Label htmlFor="sdp-billing-agent-yes" className="cursor-pointer flex-1">
+                <div className="font-medium text-secondary-900">Yes</div>
+                <div className="text-sm text-secondary-600">SDP Global Pay handles the invoicing. Choose a flow below.</div>
+              </Label>
+            </div>
+          </RadioGroup>
+
+          {/* 2. The two flows, only after Yes. */}
+          {sdpBillingAgentYes && (
+            <div className="space-y-3" data-testid="section-billing-agent-flows">
+              <p className="text-sm font-medium text-secondary-900">Choose the billing agent flow</p>
+              <RadioGroup
+                value={selectedFlow?.value ?? ''}
+                onValueChange={(value) => applyBillingMode(value)}
+                className="grid grid-cols-1 gap-3"
+                data-testid="radio-group-customer-invoicing"
+              >
+                {billingAgentFlows.map((flow) => (
+                  <div
+                    key={flow.value}
+                    data-testid={flow.testId}
+                    className={`flex items-start space-x-3 p-4 border rounded-lg ${selectedFlow?.value === flow.value ? 'border-primary-500 bg-primary-50' : 'border-secondary-300'}`}
                   >
-                    {selected && <span className="h-2 w-2 rounded-full bg-primary-500" />}
-                  </span>
-                  <span className="flex-1">
-                    <span className="block font-medium text-secondary-900">{option.title}</span>
-                    <span className="block text-sm text-secondary-600">{option.description}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-xs text-secondary-500" data-testid="text-customer-invoicing-status">
-            {selectedSdpOption
-              ? <>Selected: <span className="font-medium text-secondary-700">{selectedSdpOption.title}</span>. Click it again to go back to Invoice Separately. SDP's billing terms are asked for below.</>
-              : 'No option selected: Invoice Separately applies, so your business invoices the host client itself.'}
-          </p>
+                    <RadioGroupItem value={flow.value} id={flow.id} className="mt-0.5" />
+                    <Label htmlFor={flow.id} className="cursor-pointer flex-1">
+                      <div className="font-medium text-secondary-900">{flow.title}</div>
+                      <div className="text-sm text-secondary-600">{flow.description}</div>
+                    </Label>
+                  </div>
+                ))}
+              </RadioGroup>
+              {!selectedFlow && (
+                <p
+                  className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+                  data-testid="text-customer-invoicing-pending"
+                >
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  Choose one of the two flows to continue, or select No.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* 3. The steps of the picked flow only. */}
+          {selectedFlow && (
+            <div className="rounded-lg border border-accent-200 bg-accent-50/40 p-4 space-y-2" data-testid="panel-billing-flow">
+              <p className="text-sm font-semibold text-secondary-900">How this flow works: {selectedFlow.title}</p>
+              <p className="text-xs text-secondary-500">On each approved timesheet:</p>
+              <ol className="list-decimal space-y-1 pl-5 text-sm text-secondary-600">
+                {selectedFlow.steps.map((stepText) => (
+                  <li key={stepText}>{stepText}</li>
+                ))}
+              </ol>
+              <p className="text-xs text-secondary-500">SDP's billing terms are requested below.</p>
+            </div>
+          )}
         </CardContent>
       </Card>
     );
@@ -3317,8 +3415,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                         ? 'button' 
                         : 'submit'
                     }
-                    disabled={createContractMutation.isPending || (!shouldGoToStep5 && !termsSatisfied)}
-                    title={!shouldGoToStep5 && !termsSatisfied ? 'Accept or skip the SDP billing terms first' : undefined}
+                    disabled={createContractMutation.isPending || (!shouldGoToStep5 && (!invoicingChoiceComplete || !termsSatisfied))}
+                    title={shouldGoToStep5 ? undefined : finalStepBlockedReason}
                     onClick={
                       (user as any)?.userType === 'sdp_internal' ||
                       (formData.employmentType === 'contractor' && !formData.contractorCompliance)
@@ -3559,8 +3657,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                   <Button
                     type="submit"
                     className={`flex-1 ${formData.rateType === 'annual' ? 'bg-amber-600 hover:bg-amber-700' : ''}`}
-                    disabled={createContractMutation.isPending || !termsSatisfied}
-                    title={!termsSatisfied ? 'Accept or skip the SDP billing terms first' : undefined}
+                    disabled={createContractMutation.isPending || !invoicingChoiceComplete || !termsSatisfied}
+                    title={finalStepBlockedReason}
                   >
                     {createContractMutation.isPending ? (
                       <>

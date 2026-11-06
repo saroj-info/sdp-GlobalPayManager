@@ -205,7 +205,10 @@ export function downloadQuotePdf({ draft, result, countryName }: QuotePdfInput):
       '',
       ...pair(t.local.annual.fees, t.comparison?.annual.fees, t.local.monthly.fees, t.comparison?.monthly.fees),
     ]],
-    columnStyles: cmp ? { 0: { cellWidth: 44 }, 1: { cellWidth: 40 }, 2: { cellWidth: 20 } } : { 0: { cellWidth: 60 }, 1: { cellWidth: 56 }, 2: { cellWidth: 22 } },
+    // Fixed widths add up to the first table's (94 mm with a comparison, 122 mm
+    // without), so the money columns of both tables line up and their headers
+    // stay on one line.
+    columnStyles: cmp ? { 0: { cellWidth: 40 }, 1: { cellWidth: 34 }, 2: { cellWidth: 20 } } : { 0: { cellWidth: 56 }, 1: { cellWidth: 44 }, 2: { cellWidth: 22 } },
     didParseCell: rightAlignMoney(3),
   });
   y = (doc as any).lastAutoTable.finalY + 10;
@@ -227,16 +230,44 @@ export function downloadQuotePdf({ draft, result, countryName }: QuotePdfInput):
       false,
     ]);
   }
+  // Three columns (label, local amount, comparison amount) laid out right-to-left
+  // from the measured text, so a long label or a large amount can never run into
+  // its neighbour. Fixed x offsets overlapped as soon as a quote had a comparison
+  // currency: the label and the local amount then shared 59 mm.
   const rightX = PAGE_W - 14;
-  totalsLines.forEach(([label, local, comparison, bold]) => {
+  const TOTALS_GAP = 8;
+  const useMainStyle = (bold: boolean) => {
     doc.setFont('helvetica', bold ? 'bold' : 'normal');
     doc.setFontSize(bold ? 11 : 9);
-    doc.setTextColor(bold ? BLUE : DARK);
-    doc.text(label, rightX - 95, y);
-    doc.text(local, cmp ? rightX - 36 : rightX, y, { align: 'right' });
+  };
+  const useComparisonStyle = (bold: boolean) => {
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    doc.setFontSize(bold ? 9 : 8);
+  };
+  let labelW = 0;
+  let localW = 0;
+  let comparisonW = 0;
+  totalsLines.forEach(([label, local, comparison, bold]) => {
+    useMainStyle(bold);
+    labelW = Math.max(labelW, doc.getTextWidth(label));
+    localW = Math.max(localW, doc.getTextWidth(local));
     if (comparison) {
+      useComparisonStyle(bold);
+      comparisonW = Math.max(comparisonW, doc.getTextWidth(comparison));
+    }
+  });
+  const localRightX = comparisonW > 0 ? rightX - comparisonW - TOTALS_GAP : rightX;
+  // Never further right than the old position (a quote with room to spare looks
+  // as it did), never left of the page margin.
+  const labelX = Math.max(14, Math.min(rightX - 95, localRightX - localW - TOTALS_GAP - labelW));
+  totalsLines.forEach(([label, local, comparison, bold]) => {
+    useMainStyle(bold);
+    doc.setTextColor(bold ? BLUE : DARK);
+    doc.text(label, labelX, y);
+    doc.text(local, localRightX, y, { align: 'right' });
+    if (comparison) {
+      useComparisonStyle(bold);
       doc.setTextColor(GRAY);
-      doc.setFontSize(bold ? 9 : 8);
       doc.text(comparison, rightX, y, { align: 'right' });
     }
     y += bold ? 7 : 6;
