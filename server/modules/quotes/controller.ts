@@ -7,13 +7,43 @@
  *   PUT    /api/quotes/:id            full replace, totals recomputed
  *   DELETE /api/quotes/:id
  *   POST   /api/quotes/:id/duplicate
+ *   POST   /api/quotes/:id/send?to&message   raw application/pdf body (the PDF built by the client)
  *   GET    /api/admin/quote-fee-defaults
  *   PUT    /api/admin/quote-fee-defaults
+ * Public (no auth, rate limited, never cached) — the email's Accept / Reject links:
+ *   GET    /api/quote-response/:token            what the link points at (never changes state)
+ *   POST   /api/quote-response/:token            { action: 'accept' | 'reject', note? }
+ *   POST   /api/quote-response/:token/feedback   { feedback } once, after an acceptance
  */
-import type { Express, RequestHandler } from "express";
-import { QUOTE_STATUSES, type QuoteStatus } from "@shared/quotes";
+import express, { type Express, type RequestHandler } from "express";
+import { QUOTE_STATUSES, sendQuoteSchema, type QuoteStatus } from "@shared/quotes";
+import { apiRateLimiter } from "../../rateLimitMiddleware";
 import { quotesService as defaultService, type QuotesService } from "./service";
 import type { QuoteListQuery, QuoteSortBy, Result } from "./types";
+
+const QUOTE_PDF_MAX_BYTES = 5 * 1024 * 1024;
+const linkRateLimiter = apiRateLimiter(30, 60_000);
+
+/**
+ * Buffers the `application/pdf` body of the send route. `express.json()` never
+ * sees these requests (its 100 KB limit does not apply). Parser errors are
+ * answered here because the global handler rethrows.
+ */
+const rawPdfBody: RequestHandler = (req, res, next) => {
+  const parser = express.raw({ type: "application/pdf", limit: QUOTE_PDF_MAX_BYTES });
+  parser(req, res, (err?: any) => {
+    if (!err) return next();
+    if (err.type === "entity.too.large") {
+      return res.status(413).json({ message: "The quote PDF must be 5 MB or smaller", code: "QUOTE_PDF_TOO_LARGE" });
+    }
+    console.error("[quotes] pdf body:", err?.message ?? String(err));
+    return res.status(400).json({ message: "Could not read the quote PDF", code: "QUOTE_PDF_INVALID" });
+  });
+};
+
+function requestBaseUrl(req: any): string {
+  return process.env.FRONTEND_URL || `${req.protocol}://${req.get("host")}`;
+}
 
 function sendError(res: any, r: Extract<Result<unknown>, { ok: false }>) {
   return res.status(r.status).json({ message: r.message, ...(r.code ? { code: r.code } : {}), ...(r.extra ?? {}) });
@@ -133,6 +163,65 @@ export function registerQuotesRoutes(
     } catch (error: any) {
       console.error("[quotes] duplicate failed:", error?.message ?? String(error));
       return res.status(500).json({ message: "Failed to duplicate the quote" });
+    }
+  });
+
+  app.post("/api/quotes/:id/send", authMiddleware, requireSdp, rawPdfBody, async (req: any, res) => {
+    try {
+      const parsed = sendQuoteSchema.safeParse({ to: req.query.to, message: req.query.message ?? "" });
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Enter a valid email address", code: "QUOTE_INVALID" });
+      }
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ message: "The quote PDF is missing from the request", code: "QUOTE_PDF_REQUIRED" });
+      }
+      const result = await service.send(authUser(req), String(req.params.id), { ...parsed.data, pdf: req.body, baseUrl: requestBaseUrl(req) });
+      if (!result.ok) return sendError(res, result);
+      return res.json({ quote: result.data });
+    } catch (error: any) {
+      console.error("[quotes] send failed:", error?.message ?? String(error));
+      return res.status(500).json({ message: "Failed to send the quote" });
+    }
+  });
+
+  // ── Email link: look up (public, read-only) ──────────────────────────────
+  app.get("/api/quote-response/:token", linkRateLimiter, async (req: any, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const result = await service.getResponsePage(String(req.params.token || ""));
+      if (!result.ok) return sendError(res, result);
+      return res.json(result.data);
+    } catch (error: any) {
+      console.error("[quotes] response link lookup failed:", error?.message ?? String(error));
+      return res.status(500).json({ message: "Could not load this quote link" });
+    }
+  });
+
+  // ── Email link: the client's answer (public, the confirm click) ──────────
+  app.post("/api/quote-response/:token", linkRateLimiter, async (req: any, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const result = await service.respond(String(req.params.token || ""), req.body, requestBaseUrl(req));
+      if (!result.ok) return sendError(res, result);
+      return res.json({
+        message: result.data.action === "accepted" ? "Quote accepted." : "Quote declined.",
+        ...result.data,
+      });
+    } catch (error: any) {
+      console.error("[quotes] response link decision failed:", error?.message ?? String(error));
+      return res.status(500).json({ message: "Could not record your answer. Please try again." });
+    }
+  });
+
+  app.post("/api/quote-response/:token/feedback", linkRateLimiter, async (req: any, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const result = await service.addFeedback(String(req.params.token || ""), req.body, requestBaseUrl(req));
+      if (!result.ok) return sendError(res, result);
+      return res.json({ message: "Thank you for your feedback.", ...result.data });
+    } catch (error: any) {
+      console.error("[quotes] response feedback failed:", error?.message ?? String(error));
+      return res.status(500).json({ message: "Could not save your feedback. Please try again." });
     }
   });
 

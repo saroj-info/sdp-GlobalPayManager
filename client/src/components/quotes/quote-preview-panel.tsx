@@ -37,6 +37,8 @@ interface QuotePreviewPanelProps {
   onDownloadPdf: () => void;
   pdfDisabled?: boolean;
   className?: string;
+  /** Card title; "Quote preview" in the editor, the quote number on the public response page. */
+  title?: string;
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -70,7 +72,7 @@ function SectionRow({ title }: { title: string }) {
   );
 }
 
-export function QuotePreviewPanel({ draft, result, countryName, onDownloadPdf, pdfDisabled, className }: QuotePreviewPanelProps) {
+export function QuotePreviewPanel({ draft, result, countryName, onDownloadPdf, pdfDisabled, className, title = "Quote preview" }: QuotePreviewPanelProps) {
   const currency = draft.currency || "USD";
   const cmp = result.comparisonCurrency;
   const fx = draftFx(draft);
@@ -110,7 +112,7 @@ export function QuotePreviewPanel({ draft, result, countryName, onDownloadPdf, p
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-2 text-base">
-              <FileText className="h-4 w-4 text-primary-600" /> Quote preview
+              <FileText className="h-4 w-4 text-primary-600" /> {title}
             </CardTitle>
             <p className="mt-1 text-xs text-secondary-500">
               {draft.quoteNumber ?? "New quote"} · {QUOTE_STATUS_LABELS[draft.status]}

@@ -3,7 +3,7 @@
  * modules; countries are read through `storage` and cost items through
  * modules/countryCosts (service).
  */
-import { and, asc, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   quotes,
@@ -26,6 +26,16 @@ export interface QuotesRepository {
   insert(row: NewQuoteRow, year: number): Promise<Quote>;
   update(id: string, row: QuoteUpdateRow): Promise<Quote | undefined>;
   delete(id: string): Promise<boolean>;
+  getByResponseTokenHash(hash: string): Promise<Quote | undefined>;
+  /**
+   * Records the client's answer in one conditional UPDATE: only while the link
+   * is the current one, no answer exists yet and the quote was not edited after
+   * it was sent (`updated_at <= sent_at`). `undefined` = someone or something
+   * got there first.
+   */
+  respond(id: string, tokenHash: string, patch: QuoteUpdateRow): Promise<Quote | undefined>;
+  /** Stores the feedback once, after an acceptance. */
+  addFeedback(id: string, tokenHash: string, patch: QuoteUpdateRow): Promise<Quote | undefined>;
   listFeeDefaults(): Promise<QuoteFeeDefault[]>;
   replaceFeeDefaults(rows: NewFeeDefaultRow[]): Promise<QuoteFeeDefault[]>;
 }
@@ -93,6 +103,40 @@ export const repository: QuotesRepository = {
   async delete(id) {
     const deleted = await db.delete(quotes).where(eq(quotes.id, id)).returning({ id: quotes.id });
     return deleted.length > 0;
+  },
+
+  async getByResponseTokenHash(hash) {
+    const [row] = await db.select().from(quotes).where(eq(quotes.responseTokenHash, hash)).limit(1);
+    return row;
+  },
+
+  async respond(id, tokenHash, patch) {
+    const [row] = await db
+      .update(quotes)
+      .set(patch)
+      .where(and(
+        eq(quotes.id, id),
+        eq(quotes.responseTokenHash, tokenHash),
+        isNull(quotes.respondedAt),
+        isNull(quotes.convertedContractId),
+        lte(quotes.updatedAt, quotes.sentAt),
+      ))
+      .returning();
+    return row;
+  },
+
+  async addFeedback(id, tokenHash, patch) {
+    const [row] = await db
+      .update(quotes)
+      .set(patch)
+      .where(and(
+        eq(quotes.id, id),
+        eq(quotes.responseTokenHash, tokenHash),
+        eq(quotes.responseAction, "accepted"),
+        isNull(quotes.responseFeedbackAt),
+      ))
+      .returning();
+    return row;
   },
 
   async listFeeDefaults() {

@@ -51,6 +51,7 @@ import InviteBusiness from "@/pages/invite-business";
 import NewClientInvoice from "@/pages/new-client-invoice";
 import InvoiceView from "@/pages/invoice-view";
 import TimesheetApproval from "@/pages/timesheet-approval";
+import QuoteResponse from "@/pages/quote-response";
 import PurchaseOrders from "@/pages/purchase-orders";
 import NotFound from "@/pages/not-found";
 import TermsOfService from "@/pages/terms-of-service";
@@ -116,6 +117,8 @@ function Router() {
       <Route path="/invite/:token" component={AcceptSdpInvite} />
       <Route path="/invoice/view/:token" component={InvoiceView} />
       <Route path="/timesheet-approval/:token" component={TimesheetApproval} />
+      {/* The Accept / Reject links in a quote email (public; not under /quotes/, which is protected). */}
+      <Route path="/quote-response/:token" component={QuoteResponse} />
       <Route path="/terms-of-service" component={TermsOfService} />
       <Route path="/privacy-policy" component={PrivacyPolicy} />
       

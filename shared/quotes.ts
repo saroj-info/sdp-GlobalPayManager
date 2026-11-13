@@ -34,6 +34,7 @@ import {
   EMPLOYEE_ENGAGEMENT_TYPE_VALUES,
   QUOTE_EMPLOYMENT_TYPE_VALUES,
 } from "./engagementTypes";
+import type { Quote } from "./schema";
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
 
@@ -895,4 +896,79 @@ export interface QuoteListResult<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+// ─── Sending a quote, the client's answer, conversion ────────────────────────
+//
+// `POST /api/quotes/:id/send` emails the PDF with Accept / Reject links to the
+// public page `/quote-response/<token>`; the answer and any feedback land on the
+// quote row (modules/quotes/service.ts). One round at a time: sending again
+// replaces the link and clears the earlier answer.
+
+/** Prefilled in the Send dialog; the server falls back to it when the message is blank. */
+export const QUOTE_SEND_DEFAULT_MESSAGE = "Thank you for your enquiry, please find the quote attached.";
+
+/** A response link lives until the end of the quote's "Valid until" day, or this long when none is set. */
+export const QUOTE_RESPONSE_TTL_DAYS = 30;
+
+export const sendQuoteSchema = z.object({
+  to: z.string().trim().email("Enter a valid email address").max(254),
+  message: z.string().trim().max(2000).optional().default(""),
+});
+export type SendQuoteInput = z.infer<typeof sendQuoteSchema>;
+
+export const quoteResponseSchema = z.object({
+  action: z.enum(["accept", "reject"]),
+  note: z.string().trim().max(2000).optional(),
+});
+export type QuoteResponseInput = z.infer<typeof quoteResponseSchema>;
+
+export const quoteFeedbackSchema = z.object({
+  feedback: z.string().trim().min(1, "Write a few words first").max(4000),
+});
+export type QuoteFeedbackInput = z.infer<typeof quoteFeedbackSchema>;
+
+export const QUOTE_RESPONSE_ACTIONS = ["accepted", "declined"] as const;
+export type QuoteResponseAction = (typeof QUOTE_RESPONSE_ACTIONS)[number];
+
+/**
+ * What the public response page can find behind a link.
+ * - pending: the client can answer.
+ * - responded: already answered (the page shows the answer; feedback once after an acceptance).
+ * - expired: past the link's expiry.
+ * - superseded: the quote was edited after it was sent, or converted to a contract; the PDF the client holds is stale.
+ * - invalid: unknown or replaced link.
+ */
+export const QUOTE_RESPONSE_STATES = ["pending", "responded", "expired", "superseded", "invalid"] as const;
+export type QuoteResponseState = (typeof QUOTE_RESPONSE_STATES)[number];
+
+/** Columns a quote row never carries outside the SDP app (the public page gets the rest). */
+export const QUOTE_INTERNAL_KEYS = [
+  "createdByUserId",
+  "updatedByUserId",
+  "businessId",
+  "convertedContractId",
+  "sentTo",
+  "sentAt",
+  "sentByUserId",
+  "responseTokenHash",
+  "responseTokenExpiresAt",
+  "respondedAt",
+  "responseAction",
+  "responseNote",
+  "responseFeedback",
+  "responseFeedbackAt",
+] as const;
+export type QuoteInternalKey = (typeof QUOTE_INTERNAL_KEYS)[number];
+export type PublicQuote = Omit<Quote, QuoteInternalKey>;
+
+/** `GET /api/quote-response/:token`. */
+export interface QuoteResponsePageData {
+  state: QuoteResponseState;
+  code?: string;
+  message?: string;
+  quote?: PublicQuote;
+  countryName?: string;
+  response?: { action: QuoteResponseAction; respondedAt: string; feedbackGiven: boolean };
+  expiresAt?: string | null;
 }

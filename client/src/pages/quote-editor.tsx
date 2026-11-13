@@ -7,7 +7,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useParams } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Copy, Loader2, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, Copy, FileSignature, Loader2, Mail, MessageSquare, Save, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -38,6 +39,10 @@ import { EngagementCard } from "@/components/quotes/engagement-card";
 import { PayCard } from "@/components/quotes/pay-card";
 import { FeesNotesCard } from "@/components/quotes/fees-notes-card";
 import { QuotePreviewPanel } from "@/components/quotes/quote-preview-panel";
+import { SendQuoteDialog } from "@/components/quotes/send-quote-dialog";
+import { quoteToWizardPrefill } from "@/components/quotes/quote-convert";
+import { QUOTE_CONVERT_ENABLED } from "@/pages/quotes";
+import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
 import {
   defaultComparisonFor, draftFx, draftProblem, draftToInput, draftToPayload, emptyDraft, fxFieldsFor, quoteRowToDraft, type QuoteDraft,
 } from "@/components/quotes/quote-draft";
@@ -48,6 +53,12 @@ function invalidateQuotes(queryClient: ReturnType<typeof useQueryClient>) {
   return queryClient.invalidateQueries({
     predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith(QUOTES_PREFIX),
   });
+}
+
+function fmtDateTime(value: unknown): string {
+  if (!value) return "";
+  const d = new Date(value as string);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 export default function QuoteEditor() {
@@ -73,13 +84,22 @@ export default function QuoteEditor() {
   const [fxTouched, setFxTouched] = useState(false);
   const [jurisdictionTouched, setJurisdictionTouched] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // What was last saved (the payload that was sent), so "Send quote" waits for a save.
+  const [savedPayload, setSavedPayload] = useState<string | null>(null);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [convertConfirmOpen, setConvertConfirmOpen] = useState(false);
+  const [convertOpen, setConvertOpen] = useState(false);
+  // The contract wizard (convert to contract) needs the worker list only while it is open.
+  const { data: workers = [] } = useQuery<any[]>({ queryKey: ["/api/workers"], enabled: isSdp && convertOpen });
 
   // First draft: the saved row (edit) or an empty quote for the first country (new).
   useEffect(() => {
     if (draft) return;
     if (quoteId) {
       if (quoteData?.quote) {
-        setDraft(quoteRowToDraft(quoteData.quote));
+        const loaded = quoteRowToDraft(quoteData.quote);
+        setDraft(loaded);
+        setSavedPayload(JSON.stringify(draftToPayload(loaded)));
         setCostLinesTouched(true);
         setFeeLinesTouched(true);
         setFxTouched(true);
@@ -133,6 +153,9 @@ export default function QuoteEditor() {
   }, [defaults]);
 
   const result = useMemo(() => (draft ? computeQuote(draftToInput(draft), draftFx(draft)) : null), [draft]);
+  // The saved row (send round, answer, conversion) and the wizard prefill built from it; hooks stay above the early returns.
+  const meta = quoteData?.quote ?? null;
+  const convertPrefill = useMemo(() => (meta && convertOpen ? quoteToWizardPrefill(meta) : null), [meta, convertOpen]);
 
   const update = (patch: Partial<QuoteDraft>) => {
     if ("fxLocalPerComparison" in patch || "fxLocalPerUsd" in patch) setFxTouched(true);
@@ -186,13 +209,16 @@ export default function QuoteEditor() {
       const res = d.id ? await apiRequest("PUT", `${QUOTES_PREFIX}/${d.id}`, payload) : await apiRequest("POST", QUOTES_PREFIX, payload);
       return (await res.json()) as { quote: Quote };
     },
-    onSuccess: async ({ quote }) => {
+    onSuccess: async ({ quote }, saved) => {
       toast({ title: "Quote saved", description: `${quote.quoteNumber} · ${quote.title}` });
+      // The payload that was sent, not the returned row: its normalised lines differ in benign ways.
+      setSavedPayload(JSON.stringify(draftToPayload({ ...saved, status: quote.status })));
       await invalidateQuotes(queryClient);
       if (!draft?.id) {
         setLocation(`/quotes/${quote.id}`, { replace: true });
       } else {
-        setDraft((d) => (d ? { ...d, quoteNumber: quote.quoteNumber } : d));
+        // The server may keep a sent / answered status over the one the form held.
+        setDraft((d) => (d ? { ...d, quoteNumber: quote.quoteNumber, status: quote.status } : d));
       }
     },
     onError: (err: any) => {
@@ -262,6 +288,15 @@ export default function QuoteEditor() {
 
   const handlePdf = () => downloadQuotePdf({ draft, result, countryName });
 
+  const dirty = savedPayload != null && JSON.stringify(draftToPayload(draft)) !== savedPayload;
+  const converted = !!meta?.convertedContractId;
+  const sendBlockedReason = converted ? "Already converted to a contract" : dirty ? "Save the quote first" : undefined;
+  const onSent = (sent: Quote) => {
+    setDraft((d) => (d ? { ...d, status: sent.status } : d));
+    setSavedPayload((prev) => (prev && draft ? JSON.stringify(draftToPayload({ ...draft, status: sent.status })) : prev));
+    void invalidateQuotes(queryClient);
+  };
+
   return (
     <div className="p-6 space-y-6" data-testid="quote-editor">
       <div className="flex flex-wrap items-center gap-3">
@@ -271,8 +306,22 @@ export default function QuoteEditor() {
         <span className="font-mono text-sm text-secondary-600" data-testid="quote-number">{draft.quoteNumber ?? "New quote"}</span>
         {defaultsLoading && <Loader2 className="h-4 w-4 animate-spin text-secondary-400" aria-label="Loading defaults" />}
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          {draft.id && converted && (
+            <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700" data-testid="badge-quote-converted">
+              <FileSignature className="mr-1 h-3 w-3" /> Converted to a contract ·{" "}
+              <a href="/contracts" className="underline" onClick={(e) => { e.preventDefault(); setLocation("/contracts"); }}>open Contracts</a>
+            </Badge>
+          )}
           {draft.id && (
             <>
+              <Button type="button" variant="outline" size="sm" onClick={() => setSendOpen(true)} disabled={!!sendBlockedReason} title={sendBlockedReason} data-testid="button-send-quote">
+                <Mail className="mr-1 h-4 w-4" /> Send quote
+              </Button>
+              {QUOTE_CONVERT_ENABLED && (
+                <Button type="button" variant="outline" size="sm" onClick={() => setConvertConfirmOpen(true)} disabled={converted || dirty} title={converted ? "Already converted to a contract" : dirty ? "Save the quote first" : undefined} data-testid="button-convert-quote">
+                  <FileSignature className="mr-1 h-4 w-4" /> Convert to contract
+                </Button>
+              )}
               <Button type="button" variant="outline" size="sm" onClick={() => duplicateMutation.mutate(draft.id!)} disabled={duplicateMutation.isPending} data-testid="button-duplicate-quote">
                 <Copy className="mr-1 h-4 w-4" /> Duplicate
               </Button>
@@ -323,6 +372,37 @@ export default function QuoteEditor() {
             </CardContent>
           </Card>
 
+          {meta?.sentAt && (
+            <Card data-testid="card-quote-response">
+              <CardContent className="space-y-2 pt-6 text-sm">
+                <div className="flex items-center gap-2 font-medium text-secondary-900">
+                  <Mail className="h-4 w-4 text-primary-600" /> Sent to {meta.sentTo} on {fmtDateTime(meta.sentAt)}
+                  {!meta.respondedAt && <span className="text-xs font-normal text-secondary-500">· awaiting the client's answer{meta.responseTokenExpiresAt ? ` (link expires ${fmtDateTime(meta.responseTokenExpiresAt)})` : ""}</span>}
+                </div>
+                {meta.respondedAt && (
+                  <div className={meta.responseAction === "declined" ? "text-red-700" : "text-green-700"} data-testid="text-quote-response">
+                    {meta.responseAction === "declined" ? "Declined" : "Accepted"} on {fmtDateTime(meta.respondedAt)}
+                  </div>
+                )}
+                {meta.responseNote && (
+                  <div className="rounded-md border border-red-100 bg-red-50/60 p-3">
+                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-red-700">Client's reason</div>
+                    <div className="whitespace-pre-wrap text-secondary-900" data-testid="text-quote-response-note">{meta.responseNote}</div>
+                  </div>
+                )}
+                {meta.responseFeedback && (
+                  <div className="rounded-md border border-blue-100 bg-blue-50/60 p-3">
+                    <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700"><MessageSquare className="h-3 w-3" /> Client's feedback{meta.responseFeedbackAt ? ` · ${fmtDateTime(meta.responseFeedbackAt)}` : ""}</div>
+                    <div className="whitespace-pre-wrap text-secondary-900" data-testid="text-quote-response-feedback">{meta.responseFeedback}</div>
+                  </div>
+                )}
+                {!meta.respondedAt && (
+                  <p className="text-xs text-secondary-500">Saving a change to the quote makes the sent link stale (the client's PDF would differ); send it again afterwards.</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <EngagementCard draft={draft} countries={countries} jurisdictions={defaults?.jurisdictions ?? []} onChange={update} />
           <PayCard
             draft={draft}
@@ -355,6 +435,47 @@ export default function QuoteEditor() {
           <QuotePreviewPanel draft={draft} result={result} countryName={countryName} onDownloadPdf={handlePdf} />
         </div>
       </div>
+
+      <SendQuoteDialog
+        quote={sendOpen ? meta : null}
+        countryName={countryName}
+        onOpenChange={(open) => !open && setSendOpen(false)}
+        onSent={onSent}
+      />
+
+      <AlertDialog open={convertConfirmOpen} onOpenChange={setConvertConfirmOpen}>
+        <AlertDialogContent data-testid="dialog-convert-quote">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Create a contract from {draft.quoteNumber}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The contract wizard opens with the country, engagement type, pay basis, rate and currency from the quote filled in.
+              Pick the worker on step 1 (the quote's engagement type applies when the worker is of the same kind) and, when the quote
+              is not linked to a business, the business. The quote is marked as converted once the contract is created.
+              {meta && meta.status !== "accepted" && <> This quote has not been accepted{meta.status === "declined" ? " (it was declined)" : ""}.</>}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Not now</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setConvertConfirmOpen(false); setConvertOpen(true); }} data-testid="button-confirm-convert-quote">
+              Open the contract wizard
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {convertOpen && convertPrefill && (
+        <ContractWizardModal
+          open
+          onOpenChange={(open) => { if (!open) setConvertOpen(false); }}
+          workers={workers}
+          countries={countries}
+          prefill={convertPrefill}
+          onCreated={() => {
+            toast({ title: "Contract created", description: `${draft.quoteNumber} is now marked as converted.` });
+            void invalidateQuotes(queryClient);
+          }}
+        />
+      )}
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>

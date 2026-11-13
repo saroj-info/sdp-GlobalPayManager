@@ -9,6 +9,7 @@ import {
   crossRate,
   normaliseStoredQuote,
   type FxRatesResponse,
+  type PublicQuote,
   type QuoteCostLine,
   type QuoteEngagementCategory,
   type QuoteFeeLine,
@@ -146,7 +147,10 @@ export function toDateInput(value: string | Date | null | undefined): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function quoteRowToDraft(row: Quote): QuoteDraft {
+/** A saved row, or the public page's copy of one (the internal columns stripped; `businessId` optional). */
+export type QuoteDraftSource = PublicQuote & Partial<Pick<Quote, "businessId">>;
+
+export function quoteRowToDraft(row: QuoteDraftSource): QuoteDraft {
   const q = normaliseStoredQuote(row);
   return {
     id: q.id,

@@ -26,6 +26,16 @@ import { requiresBillingTerms, type BillingTermsAcceptanceInput, type BillingTer
 import { BillingTermsDialog, BILLING_TERMS_CURRENT_KEY } from "@/components/modals/billing-terms-dialog";
 import { getEngagementTypes } from "@shared/engagementTypes";
 
+/**
+ * "Convert quote to contract" (pages/quotes.tsx, pages/quote-editor.tsx): the
+ * quote's values land in the create-mode form and `sourceQuoteId` rides the
+ * POST so the server links the quote to the new contract.
+ */
+export interface ContractWizardPrefill {
+  sourceQuoteId: string;
+  formData: Record<string, string | number | boolean>;
+}
+
 interface ContractWizardModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -34,9 +44,13 @@ interface ContractWizardModalProps {
   editMode?: boolean;
   existingContract?: any;
   preselectedWorkerId?: string;
+  /** Create mode only. Mount the modal when the prefill is ready; the reset effect keys on `sourceQuoteId`. */
+  prefill?: ContractWizardPrefill | null;
+  /** Create mode only: the new contract's id, after the usual invalidation and close. */
+  onCreated?: (contractId: string) => void;
 }
 
-export function ContractWizardModal({ open, onOpenChange, workers, countries, editMode = false, existingContract = null, preselectedWorkerId }: ContractWizardModalProps) {
+export function ContractWizardModal({ open, onOpenChange, workers, countries, editMode = false, existingContract = null, preselectedWorkerId, prefill = null, onCreated }: ContractWizardModalProps) {
   const [step, setStep] = useState(1);
   const [workerSearch, setWorkerSearch] = useState('');
   const [workerViewMode, setWorkerViewMode] = useState<'list' | 'card'>('list');
@@ -203,7 +217,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         sdpEntityId: existingContract.sdpEntityId || '',
       };
     }
-    return {
+    const base = {
       workerId: preselectedWorkerId || '',
       contractName: '',
       countryId: '',
@@ -260,6 +274,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       // SDP Entity
       sdpEntityId: '',
     };
+    // Convert quote to contract: the quote's values over the defaults.
+    return prefill && !editMode ? { ...base, ...(prefill.formData as Partial<typeof base>) } : base;
   };
   
   const [formData, setFormData] = useState(getInitialFormData);
@@ -356,7 +372,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
     setBillingTermsVersion(null);
     setBillingTermsSkipped(false);
     setSdpBillingAgentOptIn(false);
-  }, [editMode, existingContract]);
+    // Keyed on the quote id, never the prefill object: a parent re-render must not wipe the user's edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editMode, existingContract, prefill?.sourceQuoteId]);
 
   // Sync preselectedWorkerId into form whenever it is provided (the modal may already be mounted
   // when the parent sets preselectedWorkerId, so useState's lazy initializer won't capture it)
@@ -654,8 +672,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
           // Don't fail contract creation if document generation fails
         }
       }
+      return contractId;
     },
-    onSuccess: () => {
+    onSuccess: (contractId) => {
       // Predicate-based invalidation so every variant of the contracts queryKey
       // refetches — `/api/contracts`, `/api/contracts/list`, `/api/contracts/:id/change-log`, etc.
       // A plain `queryKey: ['/api/contracts']` would miss `/api/contracts/list` since
@@ -687,6 +706,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         title: "Success",
         description: editMode ? "Contract updated successfully." : "Contract created successfully.",
       });
+      if (!editMode && contractId) onCreated?.(contractId);
     },
     onError: (error) => {
       let errorMessage = editMode ? "Failed to update contract. Please try again." : "Failed to create contract. Please try again.";
@@ -931,6 +951,8 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       // Include on-behalf fields for SDP internal users
       onBehalf: isSDPInternal ? formData.onBehalf : false,
       selectedBusinessId: isSDPInternal && formData.onBehalf ? formData.selectedBusinessId : undefined,
+      // Convert quote to contract: the server links the quote after the contract exists.
+      ...(prefill && !editMode ? { sourceQuoteId: prefill.sourceQuoteId } : {}),
       startDate: formData.startDate,
       endDate: formData.endDate || undefined,
       firstTimesheetStartDate: firstTimesheetStartDate, // Use calculated value

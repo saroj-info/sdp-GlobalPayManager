@@ -37,7 +37,7 @@ import { registerBusinessProfileRoutes, checkBusinessProfileForContract, busines
 import { registerBillingTermsRoutes, checkBillingTermsForCreate, checkBillingTermsForUpdate, recordBillingTermsAcceptance, hardDeleteContract } from "./modules/billingTerms";
 import { registerContractLifecycleRoutes } from "./modules/contractLifecycle";
 import { followRateOnRemunerationLines } from "@shared/contractLifecycle";
-import { registerQuotesRoutes } from "./modules/quotes";
+import { registerQuotesRoutes, quotesService } from "./modules/quotes";
 import { registerFxRoutes } from "./modules/fx";
 import { registerCountryCostsRoutes } from "./modules/countryCosts";
 
@@ -5628,6 +5628,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // SDP billing terms acceptance rides the body but is not a contract column.
       const billingTermsAcceptanceRaw = req.body.billingTermsAcceptance;
       delete contractData.billingTermsAcceptance;
+      // "Convert quote to contract": the wizard names the quote it was prefilled
+      // from; checked before any write, linked after the contract exists.
+      const sourceQuoteId: string | null =
+        typeof req.body.sourceQuoteId === 'string' && req.body.sourceQuoteId.trim() ? req.body.sourceQuoteId.trim() : null;
+      delete contractData.sourceQuoteId;
       
       let business;
       let targetBusinessId;
@@ -5837,6 +5842,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(termsCheck.status).json({ message: termsCheck.message, code: termsCheck.code, ...(termsCheck.extra ?? {}) });
       }
       const validatedBillingTerms = termsCheck.data;
+
+      // Last point with no writes (the role-title upsert below inserts a row):
+      // a quote that cannot be converted refuses the whole request here.
+      if (sourceQuoteId) {
+        if (userType !== 'sdp_internal') {
+          return res.status(403).json({ message: "Only SDP users can convert a quote to a contract", code: "QUOTE_CONVERT_FORBIDDEN" });
+        }
+        const convertible = await quotesService.assertConvertible(sourceQuoteId);
+        if (!convertible.ok) {
+          return res.status(convertible.status).json({ message: convertible.message, code: convertible.code });
+        }
+      }
       
       // If a custom role title is provided, create it as a reusable role title.
       // Description sources, in order: finalContractData.jobDescription (wizard's
@@ -5908,6 +5925,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error("[billing-terms] acceptance insert failed, removing contract:", termsErr?.message ?? String(termsErr));
           await hardDeleteContract(contract.id).catch(() => {});
           return res.status(500).json({ message: "Could not record the billing terms acceptance; the contract was not created.", code: "BILLING_TERMS_RECORD_FAILED" });
+        }
+      }
+
+      // Link the quote the contract was converted from (after the billing-terms
+      // path above, so a rolled-back contract never marks the quote). Best
+      // effort: the contract exists either way.
+      if (sourceQuoteId) {
+        try {
+          const marked = await quotesService.markConverted(sourceQuoteId, contract.id);
+          if (!marked) console.error(`[quotes] quote ${sourceQuoteId} not found when linking contract ${contract.id}`);
+        } catch (quoteErr: any) {
+          console.error(`[quotes] could not link quote ${sourceQuoteId} to contract ${contract.id}:`, quoteErr?.message ?? String(quoteErr));
         }
       }
 

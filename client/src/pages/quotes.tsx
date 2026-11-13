@@ -1,11 +1,12 @@
 /**
  * /quotes — the list of saved cost quotes (SDP internal users only), with
- * search, status and country filters, and open / duplicate / PDF / delete.
+ * search, status and country filters, and open / duplicate / PDF / send /
+ * convert to contract / delete.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Download, FileText, Loader2, MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
+import { Copy, Download, FileSignature, FileText, Loader2, Mail, MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,9 +38,14 @@ import {
 } from "@shared/quotes";
 import { MoneyPair } from "@/components/quotes/money";
 import { draftFx, draftToInput, quoteRowToDraft } from "@/components/quotes/quote-draft";
+import { SendQuoteDialog } from "@/components/quotes/send-quote-dialog";
+import { quoteToWizardPrefill } from "@/components/quotes/quote-convert";
+import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
 
 const QUOTES_PREFIX = "/api/quotes";
 const PAGE_SIZE = 20;
+/** "Convert to contract" is hidden for now (2026-11-13); set to true to show it again. Everything behind it (confirm dialog, wizard prefill, server link) stays in place. */
+export const QUOTE_CONVERT_ENABLED = false;
 
 type DisplayStatus = QuoteStatus | "expired";
 
@@ -65,6 +71,13 @@ function fmtDate(value: unknown): string {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/** The send / answer line under the status badge. */
+function responseLine(q: Quote): string | null {
+  if (q.respondedAt) return `${q.responseAction === "declined" ? "Declined" : "Accepted"} ${fmtDate(q.respondedAt)}${q.sentTo ? ` by ${q.sentTo}` : ""}`;
+  if (q.sentAt) return `Sent to ${q.sentTo ?? "—"} · ${fmtDate(q.sentAt)}`;
+  return null;
+}
+
 export default function Quotes() {
   const [, setLocation] = useLocation();
   const { user } = useAuth();
@@ -80,6 +93,9 @@ export default function Quotes() {
   const [status, setStatus] = useState<string>("all");
   const [countryId, setCountryId] = useState<string>("all");
   const [pendingDelete, setPendingDelete] = useState<Quote | null>(null);
+  const [sendQuote, setSendQuote] = useState<Quote | null>(null);
+  const [convertCandidate, setConvertCandidate] = useState<Quote | null>(null);
+  const [convertQuote, setConvertQuote] = useState<Quote | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -91,6 +107,9 @@ export default function Quotes() {
 
   const { data: countries = [] } = useQuery<Country[]>({ queryKey: ["/api/countries"], enabled: isSdp });
   const countryName = (id: string) => countries.find((c) => c.id === id)?.name ?? id;
+  // The contract wizard (convert to contract) needs the worker list only while it is open.
+  const { data: workers = [] } = useQuery<any[]>({ queryKey: ["/api/workers"], enabled: isSdp && !!convertQuote });
+  const convertPrefill = useMemo(() => (convertQuote ? quoteToWizardPrefill(convertQuote) : null), [convertQuote]);
 
   const params = { page, pageSize: PAGE_SIZE, search, status: status === "all" ? "" : status, countryId: countryId === "all" ? "" : countryId };
   const { data, isLoading, isFetching } = useQuery<QuoteListResult<Quote>>({
@@ -230,6 +249,18 @@ export default function Quotes() {
                         <Badge variant="outline" className={cn("border-transparent", STATUS_CLASS[st])} data-testid={`quote-status-${q.quoteNumber}`}>
                           {st === "expired" ? "Expired" : QUOTE_STATUS_LABELS[st]}
                         </Badge>
+                        {responseLine(q) && <div className="mt-1 max-w-[14rem] truncate text-xs text-secondary-500" title={responseLine(q) ?? undefined} data-testid={`quote-response-line-${q.quoteNumber}`}>{responseLine(q)}</div>}
+                        {q.convertedContractId && (
+                          <a
+                            href="/contracts"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setLocation("/contracts"); }}
+                            className="mt-1 inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700 hover:bg-green-100"
+                            title="A contract was created from this quote. Open Contracts."
+                            data-testid={`pill-quote-converted-${q.quoteNumber}`}
+                          >
+                            <FileSignature className="h-3 w-3" /> Converted
+                          </a>
+                        )}
                       </TableCell>
                       <TableCell className="text-sm text-secondary-600">{fmtDate(q.updatedAt)}</TableCell>
                       <TableCell onClick={(e) => e.stopPropagation()}>
@@ -243,6 +274,24 @@ export default function Quotes() {
                             <DropdownMenuItem onClick={() => setLocation(`/quotes/${q.id}`)}><FileText className="mr-2 h-4 w-4" /> Open</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => duplicateMutation.mutate(q.id)}><Copy className="mr-2 h-4 w-4" /> Duplicate</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => handlePdf(q)}><Download className="mr-2 h-4 w-4" /> Download PDF</DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!!q.convertedContractId}
+                              title={q.convertedContractId ? "Already converted to a contract" : undefined}
+                              onClick={() => setSendQuote(q)}
+                              data-testid={`menu-send-quote-${q.quoteNumber}`}
+                            >
+                              <Mail className="mr-2 h-4 w-4" /> Send quote
+                            </DropdownMenuItem>
+                            {QUOTE_CONVERT_ENABLED && (
+                              <DropdownMenuItem
+                                disabled={!!q.convertedContractId}
+                                title={q.convertedContractId ? "Already converted to a contract" : undefined}
+                                onClick={() => setConvertCandidate(q)}
+                                data-testid={`menu-convert-quote-${q.quoteNumber}`}
+                              >
+                                <FileSignature className="mr-2 h-4 w-4" /> Convert to contract
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setPendingDelete(q)}><Trash2 className="mr-2 h-4 w-4" /> Delete</DropdownMenuItem>
                           </DropdownMenuContent>
@@ -258,6 +307,49 @@ export default function Quotes() {
       </Card>
 
       <DataPagination page={page} totalPages={totalPages} totalItems={total} pageSize={PAGE_SIZE} onPageChange={setPage} label="quotes" hideWhenSinglePage />
+
+      <SendQuoteDialog
+        quote={sendQuote}
+        countryName={sendQuote ? countryName(sendQuote.countryId) : ""}
+        onOpenChange={(open) => !open && setSendQuote(null)}
+        onSent={() => { void invalidate(); }}
+      />
+
+      <AlertDialog open={!!convertCandidate} onOpenChange={(open) => !open && setConvertCandidate(null)}>
+        <AlertDialogContent data-testid="dialog-convert-quote">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Create a contract from {convertCandidate?.quoteNumber}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The contract wizard opens with the country, engagement type, pay basis, rate and currency from the quote filled in.
+              Pick the worker on step 1 (the quote's engagement type applies when the worker is of the same kind) and, when the quote
+              is not linked to a business, the business. The quote is marked as converted once the contract is created.
+              {convertCandidate && convertCandidate.status !== "accepted" && (
+                <> This quote has not been accepted{convertCandidate.status === "declined" ? " (it was declined)" : ""}.</>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Not now</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (convertCandidate) setConvertQuote(convertCandidate); setConvertCandidate(null); }} data-testid="button-confirm-convert-quote">
+              Open the contract wizard
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {convertQuote && convertPrefill && (
+        <ContractWizardModal
+          open
+          onOpenChange={(open) => { if (!open) setConvertQuote(null); }}
+          workers={workers}
+          countries={countries}
+          prefill={convertPrefill}
+          onCreated={() => {
+            toast({ title: "Contract created", description: `${convertQuote.quoteNumber} is now marked as converted.` });
+            void invalidate();
+          }}
+        />
+      )}
 
       <AlertDialog open={!!pendingDelete} onOpenChange={(open) => !open && setPendingDelete(null)}>
         <AlertDialogContent>

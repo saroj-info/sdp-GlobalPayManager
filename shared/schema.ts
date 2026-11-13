@@ -964,13 +964,27 @@ export const quotes = pgTable("quotes", {
   clientName: varchar("client_name", { length: 200 }), // "Prepared for"
   businessId: varchar("business_id").references(() => businesses.id),
   validUntil: timestamp("valid_until"),
-  convertedContractId: varchar("converted_contract_id").references(() => contracts.id), // reserved for a later convert action
+  convertedContractId: varchar("converted_contract_id").references(() => contracts.id), // set by POST /api/contracts when a contract is created from the quote
+  // One "send" round at a time (modules/quotes/service.ts `send`): the email's
+  // Accept / Reject links carry a raw token whose sha256 is stored here; a new
+  // send replaces the link and clears the earlier answer.
+  sentTo: varchar("sent_to", { length: 254 }),
+  sentAt: timestamp("sent_at"),
+  sentByUserId: varchar("sent_by_user_id").references(() => users.id),
+  responseTokenHash: varchar("response_token_hash", { length: 64 }),
+  responseTokenExpiresAt: timestamp("response_token_expires_at"),
+  respondedAt: timestamp("responded_at"),
+  responseAction: varchar("response_action", { length: 10 }), // 'accepted' | 'declined'
+  responseNote: text("response_note"), // the reason given with a rejection
+  responseFeedback: text("response_feedback"), // optional feedback after an acceptance
+  responseFeedbackAt: timestamp("response_feedback_at"),
   createdByUserId: varchar("created_by_user_id").references(() => users.id).notNull(),
   updatedByUserId: varchar("updated_by_user_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("uniq_quotes_year_seq").on(table.quoteYear, table.quoteSeq),
+  uniqueIndex("uniq_quotes_response_token_hash").on(table.responseTokenHash),
   index("idx_quotes_country").on(table.countryId),
   index("idx_quotes_status").on(table.status),
   index("idx_quotes_updated").on(table.updatedAt),

@@ -2,6 +2,16 @@ import { Resend } from 'resend';
 import { storage } from './storage';
 import type { ApproverDayRow } from './modules/timesheet-approval/types';
 import { groupContractSummary, type ContractSummaryRow } from '@shared/contractSummary';
+import { getEngagementTypeLabel } from '@shared/engagementTypes';
+import {
+  QUOTE_ENGAGEMENT_CATEGORY_LABELS,
+  QUOTE_RATE_TYPE_LABELS,
+  QUOTE_RATE_UNIT_LABELS,
+  fmtQuoteMoney,
+  type QuoteEngagementCategory,
+  type QuoteRateType,
+} from '@shared/quotes';
+import type { QuoteEmailArgs, QuoteResponseEmailArgs } from './modules/quotes/types';
 
 // Initialize Resend with API key from environment variables (only if available)
 let resend: Resend | null = null;
@@ -961,6 +971,163 @@ class EmailService {
       html,
       text,
     });
+  }
+
+  // ── Quotes ────────────────────────────────────────────────────────────────
+
+  /**
+   * "Send quote": the PDF (built by the client) attached, a short message, the
+   * key figures, and Accept / Reject buttons that open the public page
+   * /quote-response/<token> (modules/quotes). Same shell as the timesheet
+   * approval email; the GET behind the links never changes state.
+   */
+  async sendQuoteEmail(opts: QuoteEmailArgs): Promise<boolean> {
+    const esc = (v: unknown) => String(v ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const fmtDate = (d: Date | string) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    const q = opts.quote;
+    const currency = q.currency;
+    const totals = q.totals;
+    const cmp = q.comparisonCurrency && totals?.comparison ? q.comparisonCurrency : null;
+    const money = (local: number, comparison: number | null | undefined) =>
+      `${esc(fmtQuoteMoney(local, currency))}${cmp && comparison != null ? ` <span style="color: #6b7280; font-size: 12px; font-weight: 400;">≈ ${esc(fmtQuoteMoney(comparison, cmp))}</span>` : ''}`;
+    const rateType = q.rateType as QuoteRateType;
+    const payBasis = `${QUOTE_RATE_TYPE_LABELS[rateType] ?? q.rateType} · ${fmtQuoteMoney(Number(q.rate), currency)} ${QUOTE_RATE_UNIT_LABELS[rateType] ?? ''}${q.rateIncludesOnCosts ? ' (all-inclusive)' : ''}`;
+    const engagement = `${QUOTE_ENGAGEMENT_CATEGORY_LABELS[q.engagementCategory as QuoteEngagementCategory] ?? q.engagementCategory} · ${getEngagementTypeLabel(q.employmentType)}`;
+    const expiry = fmtDate(opts.expiresAt);
+    const messageHtml = esc(opts.message).replace(/\r?\n/g, '<br/>');
+
+    const rows: Array<[string, string]> = [
+      ['Quote', esc(q.quoteNumber)],
+      ['Title', esc(q.title)],
+      ...(q.clientName ? ([['Prepared for', esc(q.clientName)]] as Array<[string, string]>) : []),
+      ['Country', esc(`${opts.countryName}${q.jurisdiction ? ` · ${q.jurisdiction}` : ''}`)],
+      ['Engagement', esc(engagement)],
+      ['Pay basis', esc(payBasis)],
+      ['Gross pay per year', money(totals.local.annual.pay, totals.comparison?.annual.pay)],
+      ['Total employer cost per year', money(totals.local.annual.employerCost, totals.comparison?.annual.employerCost)],
+      ['SDP fees per year', money(totals.local.annual.fees, totals.comparison?.annual.fees)],
+      ['Total quote per year', money(totals.local.annual.total, totals.comparison?.annual.total)],
+      ...(q.validUntil ? ([['Valid until', esc(fmtDate(q.validUntil as unknown as string))]] as Array<[string, string]>) : []),
+    ];
+    const rowsHtml = rows.map(([k, v], i) => {
+      const bold = k === 'Total quote per year';
+      return `<tr>
+          <td style="padding: 6px 0; color: #6b7280; font-size: 13px; vertical-align: top; width: 42%;">${k}</td>
+          <td style="padding: 6px 0; color: #111827; font-size: 13px; font-weight: ${bold ? 700 : 600}; ${i === rows.length - 1 ? '' : ''}">${v}</td>
+        </tr>`;
+    }).join('');
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Your quote from SDP Global Pay</title></head>
+<body style="font-family: Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 20px;">
+  <div style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <div style="background-color: #1e3a5f; padding: 32px 40px; text-align: center;">
+      <h1 style="color: #ffffff; margin: 0; font-size: 22px;">SDP Global Pay</h1>
+      <p style="color: #93c5fd; margin: 8px 0 0 0; font-size: 14px;">Quote ${esc(q.quoteNumber)}</p>
+    </div>
+    <div style="padding: 32px 40px;">
+      <p style="color: #374151; font-size: 15px; line-height: 1.6; margin: 0 0 20px 0;">${messageHtml}</p>
+      <table style="width: 100%; margin: 0 0 8px 0; border-collapse: collapse;">
+        ${rowsHtml}
+      </table>
+      <p style="color: #6b7280; font-size: 12px; line-height: 1.5; margin: 4px 0 0 0;">
+        The full breakdown — pay, statutory and employer costs, SDP fees — is in the attached PDF${cmp ? `, with every figure also shown in ${esc(cmp)}` : ''}.
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 24px auto 8px auto;">
+        <tr>
+          <td style="padding: 0 8px;">
+            <a href="${opts.acceptUrl}" style="display: inline-block; background-color: #059669; color: #ffffff; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-size: 16px; font-weight: 600;">Accept quote</a>
+          </td>
+          <td style="padding: 0 8px;">
+            <a href="${opts.rejectUrl}" style="display: inline-block; background-color: #dc2626; color: #ffffff; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-size: 16px; font-weight: 600;">Reject quote</a>
+          </td>
+        </tr>
+      </table>
+      <p style="color: #6b7280; font-size: 12px; text-align: center; margin: 0 0 24px 0;">
+        Each button opens a page where you confirm your decision. No sign-in is needed. The link can be used once and expires on ${esc(expiry)}.
+      </p>
+      <p style="color: #6b7280; font-size: 13px; line-height: 1.5; text-align: center;">
+        Want to look first? <a href="${opts.reviewUrl}" style="color: #2563eb;">Review the quote online</a>, where you can also download the PDF.
+      </p>
+      <p style="color: #6b7280; font-size: 12px; line-height: 1.5; margin: 16px 0 0 0;">
+        If the buttons don't work, copy and paste this link into your browser:<br/>
+        <span style="color: #2563eb; word-break: break-all;">${opts.reviewUrl}</span>
+      </p>
+    </div>
+    <div style="background-color: #f3f4f6; padding: 16px 40px; text-align: center;">
+      <p style="margin: 0; color: #9ca3af; font-size: 12px;">SDP Global Pay — Global Workforce Management</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const textRows = rows.map(([k, v]) => `${k}: ${v.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')}`).join('\n');
+    const text = `${opts.message}\n\n${textRows}\n\nThe full breakdown is in the attached PDF.\n\nAccept: ${opts.acceptUrl}\nReject: ${opts.rejectUrl}\n(Each link opens a page to confirm, can be used once and expires on ${expiry}.)\n\nReview online: ${opts.reviewUrl}\n\nSDP Global Pay`;
+
+    const safeNumber = String(q.quoteNumber).replace(/[^A-Za-z0-9-]/g, '-');
+    return this.sendEmail({
+      to: opts.to,
+      subject: `Quote ${q.quoteNumber} from SDP Global Pay`,
+      html,
+      text,
+      attachments: [{ filename: `Quote-${safeNumber}.pdf`, content: opts.pdf, contentType: 'application/pdf' }],
+    });
+  }
+
+  /** Tells the SDP user who sent a quote that the client accepted / declined it, or added feedback. */
+  async sendQuoteResponseEmail(opts: QuoteResponseEmailArgs): Promise<boolean> {
+    const esc = (v: unknown) => String(v ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const when = new Date(opts.at).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const q = opts.quote;
+    const verb = opts.action === 'accepted' ? 'accepted' : 'declined';
+    const isFeedback = opts.kind === 'feedback';
+    const subject = isFeedback
+      ? `Feedback on quote ${q.quoteNumber}`
+      : `Quote ${q.quoteNumber} ${verb} by ${opts.respondedBy}`;
+    const headline = isFeedback
+      ? `${esc(opts.respondedBy)} added feedback on quote <strong>${esc(q.quoteNumber)}</strong> (${esc(q.title)}).`
+      : `${esc(opts.respondedBy)} <strong>${verb}</strong> quote <strong>${esc(q.quoteNumber)}</strong> (${esc(q.title)}) on ${esc(when)}.`;
+    const quoted = isFeedback ? opts.feedback : opts.note;
+    const quotedLabel = isFeedback ? 'Their feedback' : 'Their reason';
+    const quotedBlock = quoted?.trim()
+      ? `<div style="margin: 16px 0; padding: 12px 16px; background-color: #f9fafb; border-left: 3px solid ${isFeedback ? '#2563eb' : '#dc2626'}; border-radius: 4px;">
+          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">${quotedLabel}</div>
+          <div style="font-size: 14px; color: #111827; white-space: pre-wrap;">${esc(quoted)}</div>
+        </div>`
+      : '';
+    const color = isFeedback ? '#1e3a5f' : opts.action === 'accepted' ? '#059669' : '#dc2626';
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>${esc(subject)}</title></head>
+<body style="font-family: Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 20px;">
+  <div style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <div style="background-color: #1e3a5f; padding: 32px 40px; text-align: center;">
+      <h1 style="color: #ffffff; margin: 0; font-size: 22px;">SDP Global Pay</h1>
+      <p style="color: #93c5fd; margin: 8px 0 0 0; font-size: 14px;">${isFeedback ? 'Quote feedback' : `Quote ${verb}`}</p>
+    </div>
+    <div style="padding: 32px 40px;">
+      <p style="color: #374151; font-size: 15px; line-height: 1.6; margin: 0 0 8px 0;">${headline}</p>
+      ${quotedBlock}
+      <div style="text-align: center; margin: 24px 0 8px 0;">
+        <a href="${opts.quoteUrl}" style="display: inline-block; background-color: ${color}; color: #ffffff; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-size: 16px; font-weight: 600;">Open the quote</a>
+      </div>
+      ${!isFeedback && opts.action === 'accepted' ? `<p style="color: #6b7280; font-size: 13px; text-align: center; margin: 0;">From the quote you can convert it to a contract.</p>` : ''}
+    </div>
+    <div style="background-color: #f3f4f6; padding: 16px 40px; text-align: center;">
+      <p style="margin: 0; color: #9ca3af; font-size: 12px;">SDP Global Pay — Global Workforce Management</p>
+    </div>
+  </div>
+</body>
+</html>`;
+    const text = `${isFeedback ? `${opts.respondedBy} added feedback on quote ${q.quoteNumber} (${q.title}).` : `${opts.respondedBy} ${verb} quote ${q.quoteNumber} (${q.title}) on ${when}.`}${quoted?.trim() ? `\n\n${quotedLabel}:\n${quoted}` : ''}\n\nOpen the quote: ${opts.quoteUrl}\n\nSDP Global Pay`;
+
+    return this.sendEmail({ to: opts.to, subject, html, text });
   }
 
   async testConnection(): Promise<boolean> {

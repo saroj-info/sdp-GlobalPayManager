@@ -50,7 +50,8 @@ function fmtDate(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-export function downloadQuotePdf({ draft, result, countryName }: QuotePdfInput): void {
+/** Builds the document. `downloadQuotePdf` saves it; `quotePdfBlob` hands the bytes to the send request. */
+export function buildQuotePdf({ draft, result, countryName }: QuotePdfInput): { doc: jsPDF; filename: string } {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const PAGE_W = doc.internal.pageSize.getWidth();
   const PAGE_H = doc.internal.pageSize.getHeight();
@@ -310,5 +311,15 @@ export function downloadQuotePdf({ draft, result, countryName }: QuotePdfInput):
   }
 
   const safe = (draft.quoteNumber ?? 'draft').replace(/[^A-Za-z0-9-]/g, '-');
-  doc.save(`Quote-${safe}.pdf`);
+  return { doc, filename: `Quote-${safe}.pdf` };
+}
+
+export function downloadQuotePdf(input: QuotePdfInput): void {
+  const { doc, filename } = buildQuotePdf(input);
+  doc.save(filename);
+}
+
+/** The PDF bytes as an `application/pdf` Blob: the raw body of `POST /api/quotes/:id/send`. */
+export function quotePdfBlob(input: QuotePdfInput): Blob {
+  return buildQuotePdf(input).doc.output('blob');
 }
