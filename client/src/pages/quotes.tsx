@@ -44,8 +44,6 @@ import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
 
 const QUOTES_PREFIX = "/api/quotes";
 const PAGE_SIZE = 20;
-/** "Convert to contract" is hidden for now (2026-11-13); set to true to show it again. Everything behind it (confirm dialog, wizard prefill, server link) stays in place. */
-export const QUOTE_CONVERT_ENABLED = false;
 
 type DisplayStatus = QuoteStatus | "expired";
 
@@ -282,16 +280,14 @@ export default function Quotes() {
                             >
                               <Mail className="mr-2 h-4 w-4" /> Send quote
                             </DropdownMenuItem>
-                            {QUOTE_CONVERT_ENABLED && (
-                              <DropdownMenuItem
-                                disabled={!!q.convertedContractId}
-                                title={q.convertedContractId ? "Already converted to a contract" : undefined}
-                                onClick={() => setConvertCandidate(q)}
-                                data-testid={`menu-convert-quote-${q.quoteNumber}`}
-                              >
-                                <FileSignature className="mr-2 h-4 w-4" /> Convert to contract
-                              </DropdownMenuItem>
-                            )}
+                            <DropdownMenuItem
+                              disabled={!!q.convertedContractId}
+                              title={q.convertedContractId ? "Already converted to a contract" : undefined}
+                              onClick={() => setConvertCandidate(q)}
+                              data-testid={`menu-convert-quote-${q.quoteNumber}`}
+                            >
+                              <FileSignature className="mr-2 h-4 w-4" /> Convert to contract
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setPendingDelete(q)}><Trash2 className="mr-2 h-4 w-4" /> Delete</DropdownMenuItem>
                           </DropdownMenuContent>

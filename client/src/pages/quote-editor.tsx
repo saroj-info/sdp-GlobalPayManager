@@ -41,7 +41,6 @@ import { FeesNotesCard } from "@/components/quotes/fees-notes-card";
 import { QuotePreviewPanel } from "@/components/quotes/quote-preview-panel";
 import { SendQuoteDialog } from "@/components/quotes/send-quote-dialog";
 import { quoteToWizardPrefill } from "@/components/quotes/quote-convert";
-import { QUOTE_CONVERT_ENABLED } from "@/pages/quotes";
 import { ContractWizardModal } from "@/components/modals/contract-wizard-modal";
 import {
   defaultComparisonFor, draftFx, draftProblem, draftToInput, draftToPayload, emptyDraft, fxFieldsFor, quoteRowToDraft, type QuoteDraft,
@@ -317,11 +316,9 @@ export default function QuoteEditor() {
               <Button type="button" variant="outline" size="sm" onClick={() => setSendOpen(true)} disabled={!!sendBlockedReason} title={sendBlockedReason} data-testid="button-send-quote">
                 <Mail className="mr-1 h-4 w-4" /> Send quote
               </Button>
-              {QUOTE_CONVERT_ENABLED && (
-                <Button type="button" variant="outline" size="sm" onClick={() => setConvertConfirmOpen(true)} disabled={converted || dirty} title={converted ? "Already converted to a contract" : dirty ? "Save the quote first" : undefined} data-testid="button-convert-quote">
-                  <FileSignature className="mr-1 h-4 w-4" /> Convert to contract
-                </Button>
-              )}
+              <Button type="button" variant="outline" size="sm" onClick={() => setConvertConfirmOpen(true)} disabled={converted || dirty} title={converted ? "Already converted to a contract" : dirty ? "Save the quote first" : undefined} data-testid="button-convert-quote">
+                <FileSignature className="mr-1 h-4 w-4" /> Convert to contract
+              </Button>
               <Button type="button" variant="outline" size="sm" onClick={() => duplicateMutation.mutate(draft.id!)} disabled={duplicateMutation.isPending} data-testid="button-duplicate-quote">
                 <Copy className="mr-1 h-4 w-4" /> Duplicate
               </Button>
