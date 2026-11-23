@@ -5,3 +5,4 @@ export type { QuoteEmailArgs, QuoteResponseEmailArgs } from "./types";
 export type { QuotesRepository } from "./repository";
 export { formatQuoteNumber } from "./numbering";
 export type { AuthUser, Result, QuoteListQuery, QuoteSortBy } from "./types";
+export { ensureQuoteWorker, provisionQuoteWorkerLogin } from "./quoteWorker";

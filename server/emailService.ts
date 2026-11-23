@@ -8,6 +8,7 @@ import {
   QUOTE_RATE_TYPE_LABELS,
   QUOTE_RATE_UNIT_LABELS,
   fmtQuoteMoney,
+  quoteCandidateName,
   type QuoteEngagementCategory,
   type QuoteRateType,
 } from '@shared/quotes';
@@ -509,6 +510,38 @@ class EmailService {
     });
   }
 
+  /**
+   * Login details for a worker created from a converted quote
+   * (modules/quotes/quoteWorker.ts). The contract itself arrives separately
+   * when SDP sends it for signing.
+   */
+  async sendWorkerCredentialsEmail(opts: { to: string; firstName: string; businessName: string; tempPassword: string }): Promise<boolean> {
+    const esc = (v: unknown) => String(v ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const loginLink = `${getEmailBaseUrl()}/login`;
+    const name = opts.firstName?.trim() || 'there';
+    return this.sendEmail({
+      to: opts.to,
+      subject: `Your SDP Global Pay login for ${opts.businessName}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Welcome, ${esc(name)}!</h2>
+          <p>An SDP Global Pay account has been created for you for your engagement with <strong>${esc(opts.businessName)}</strong>. You will use it to review and sign your contract, submit timesheets and view your payslips.</p>
+          <p>You can sign in with these temporary details:</p>
+          <div style="background:#f3f4f6;padding:12px 16px;border-radius:6px;margin:12px 0;font-family:monospace;">
+            <div><strong>Email:</strong> ${esc(opts.to)}</div>
+            <div><strong>Temporary password:</strong> ${esc(opts.tempPassword)}</div>
+          </div>
+          <p>Please log in and change your password from <em>Settings → Change Password</em> as soon as possible.</p>
+          <a href="${loginLink}" style="display:inline-block;background:#2563eb;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">Log in to SDP Global Pay</a>
+          <p style="margin-top:16px;color:#374151;font-size:14px;">Your contract will be sent to you in a separate email when it is ready for signing.</p>
+          <p style="margin-top:16px;color:#6b7280;font-size:14px;">If you did not expect this, you can safely ignore this email.</p>
+        </div>
+      `,
+      text: `Welcome ${name}!\n\nAn SDP Global Pay account has been created for you for your engagement with ${opts.businessName}.\n\nEmail: ${opts.to}\nTemporary password: ${opts.tempPassword}\n\nLog in: ${loginLink}\n\nPlease change your password after first login from Settings > Change Password.\nYour contract will be sent to you in a separate email when it is ready for signing.`,
+    });
+  }
+
   async sendWorkerInvitationEmail(to: string, firstName: string, inviteToken: string, businessName: string): Promise<boolean> {
     const signupLink = `${getEmailBaseUrl()}/signup?token=${inviteToken}&accountType=contractor`;
     return this.sendEmail({
@@ -1001,6 +1034,7 @@ class EmailService {
       ['Quote', esc(q.quoteNumber)],
       ['Title', esc(q.title)],
       ...(q.clientName ? ([['Prepared for', esc(q.clientName)]] as Array<[string, string]>) : []),
+      ...(quoteCandidateName(q) ? ([['Candidate', esc(quoteCandidateName(q))]] as Array<[string, string]>) : []),
       ['Country', esc(`${opts.countryName}${q.jurisdiction ? ` · ${q.jurisdiction}` : ''}`)],
       ['Engagement', esc(engagement)],
       ['Pay basis', esc(payBasis)],

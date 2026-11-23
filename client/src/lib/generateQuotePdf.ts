@@ -25,6 +25,7 @@ import {
   resolveQuoteBillingMode,
   type QuoteMoney,
   type QuoteResult,
+  quoteCandidateName,
 } from '@shared/quotes';
 import { draftFx, type QuoteDraft } from '@/components/quotes/quote-draft';
 
@@ -101,6 +102,7 @@ export function buildQuotePdf({ draft, result, countryName }: QuotePdfInput): { 
       : 'none';
   const meta: Array<[string, string]> = [
     ['Prepared for', draft.clientName || '—'],
+    ...(quoteCandidateName(draft) ? ([['Candidate', quoteCandidateName(draft) as string]] as Array<[string, string]>) : []),
     ['Valid until', fmtDate(draft.validUntil || null)],
     ['Country', `${countryName}${draft.jurisdiction ? ` · ${draft.jurisdiction}` : ''}`],
     ['Currency', `${currency} · comparison ${comparisonText}`],

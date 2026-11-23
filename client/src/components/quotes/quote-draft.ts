@@ -27,6 +27,10 @@ export interface QuoteDraft {
   status: QuoteStatus;
   clientName: string;
   businessId: string | null;
+  /** Optional employee the quote is for; the email is internal (never on the client's copy). */
+  workerFirstName: string;
+  workerLastName: string;
+  workerEmail: string;
   notes: string;
   validUntil: string; // yyyy-MM-dd or ''
   countryId: string;
@@ -72,6 +76,9 @@ export function emptyDraft(args: { countryId: string; currency: string }): Quote
     status: "draft",
     clientName: "",
     businessId: null,
+    workerFirstName: "",
+    workerLastName: "",
+    workerEmail: "",
     notes: "",
     validUntil: "",
     countryId: args.countryId,
@@ -148,7 +155,7 @@ export function toDateInput(value: string | Date | null | undefined): string {
 }
 
 /** A saved row, or the public page's copy of one (the internal columns stripped; `businessId` optional). */
-export type QuoteDraftSource = PublicQuote & Partial<Pick<Quote, "businessId">>;
+export type QuoteDraftSource = PublicQuote & Partial<Pick<Quote, "businessId" | "workerEmail" | "workerId">>;
 
 export function quoteRowToDraft(row: QuoteDraftSource): QuoteDraft {
   const q = normaliseStoredQuote(row);
@@ -159,6 +166,9 @@ export function quoteRowToDraft(row: QuoteDraftSource): QuoteDraft {
     status: q.status,
     clientName: q.clientName ?? "",
     businessId: q.businessId ?? null,
+    workerFirstName: q.workerFirstName ?? "",
+    workerLastName: q.workerLastName ?? "",
+    workerEmail: q.workerEmail ?? "",
     notes: q.notes ?? "",
     validUntil: toDateInput(q.validUntil as unknown as string | Date | null),
     countryId: q.countryId,
@@ -194,6 +204,9 @@ export function draftToPayload(draft: QuoteDraft) {
     status: draft.status,
     clientName: draft.clientName.trim() || null,
     businessId: draft.businessId || null,
+    workerFirstName: draft.workerFirstName.trim() || null,
+    workerLastName: draft.workerLastName.trim() || null,
+    workerEmail: draft.workerEmail.trim().toLowerCase() || null,
     notes: draft.notes.trim() || null,
     validUntil: draft.validUntil || null,
     comparisonCurrency: fx.comparisonCurrency,

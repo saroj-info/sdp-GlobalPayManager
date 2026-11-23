@@ -30,6 +30,7 @@ import {
   QUOTE_STATUS_LABELS,
   comparisonCurrencyOptions,
   computeQuote,
+  quoteCandidateName,
   type QuoteCostLine,
   type QuoteDefaultsResponse,
   type QuoteFeeLine,
@@ -369,6 +370,30 @@ export default function QuoteEditor() {
             </CardContent>
           </Card>
 
+          <Card data-testid="quote-employee-card">
+            <CardContent className="grid grid-cols-12 gap-3 pt-6">
+              <div className="col-span-12">
+                <div className="text-sm font-medium text-secondary-800">Employee (optional)</div>
+                <p className="text-xs text-secondary-500">
+                  The name is shown to the client as the candidate; the email stays internal. With an email, the worker is created and
+                  emailed their login details when this quote is converted to a contract.
+                </p>
+              </div>
+              <div className="col-span-12 md:col-span-4">
+                <Label htmlFor="quote-worker-first" className="mb-1 block text-xs font-medium text-secondary-600">First name</Label>
+                <Input id="quote-worker-first" className="h-9" value={draft.workerFirstName} onChange={(e) => update({ workerFirstName: e.target.value })} disabled={converted} data-testid="input-quote-worker-first-name" />
+              </div>
+              <div className="col-span-12 md:col-span-4">
+                <Label htmlFor="quote-worker-last" className="mb-1 block text-xs font-medium text-secondary-600">Last name</Label>
+                <Input id="quote-worker-last" className="h-9" value={draft.workerLastName} onChange={(e) => update({ workerLastName: e.target.value })} disabled={converted} data-testid="input-quote-worker-last-name" />
+              </div>
+              <div className="col-span-12 md:col-span-4">
+                <Label htmlFor="quote-worker-email" className="mb-1 block text-xs font-medium text-secondary-600">Email</Label>
+                <Input id="quote-worker-email" type="email" className="h-9" value={draft.workerEmail} onChange={(e) => update({ workerEmail: e.target.value })} disabled={converted} placeholder="name@example.com" data-testid="input-quote-worker-email" />
+              </div>
+            </CardContent>
+          </Card>
+
           {meta?.sentAt && (
             <Card data-testid="card-quote-response">
               <CardContent className="space-y-2 pt-6 text-sm">
@@ -446,8 +471,13 @@ export default function QuoteEditor() {
             <AlertDialogTitle>Create a contract from {draft.quoteNumber}?</AlertDialogTitle>
             <AlertDialogDescription>
               The contract wizard opens with the country, engagement type, pay basis, rate and currency from the quote filled in.
-              Pick the worker on step 1 (the quote's engagement type applies when the worker is of the same kind) and, when the quote
-              is not linked to a business, the business. The quote is marked as converted once the contract is created.
+              {meta?.workerEmail ? (
+                <> The quote's employee ({quoteCandidateName(meta)}) is preselected on step 1; if they are not a worker yet they are created
+                  when the contract is saved and emailed their login details.</>
+              ) : (
+                <> Pick the worker on step 1 (the quote's engagement type applies when the worker is of the same kind).</>
+              )}{" "}
+              When the quote is not linked to a business, pick the business too. The quote is marked as converted once the contract is created.
               {meta && meta.status !== "accepted" && <> This quote has not been accepted{meta.status === "declined" ? " (it was declined)" : ""}.</>}
             </AlertDialogDescription>
           </AlertDialogHeader>

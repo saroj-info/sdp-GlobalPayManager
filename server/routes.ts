@@ -37,7 +37,7 @@ import { registerBusinessProfileRoutes, checkBusinessProfileForContract, busines
 import { registerBillingTermsRoutes, checkBillingTermsForCreate, checkBillingTermsForUpdate, recordBillingTermsAcceptance, hardDeleteContract } from "./modules/billingTerms";
 import { registerContractLifecycleRoutes } from "./modules/contractLifecycle";
 import { followRateOnRemunerationLines } from "@shared/contractLifecycle";
-import { registerQuotesRoutes, quotesService } from "./modules/quotes";
+import { registerQuotesRoutes, quotesService, provisionQuoteWorkerLogin } from "./modules/quotes";
 import { registerFxRoutes } from "./modules/fx";
 import { registerCountryCostsRoutes } from "./modules/countryCosts";
 
@@ -5931,6 +5931,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Link the quote the contract was converted from (after the billing-terms
       // path above, so a rolled-back contract never marks the quote). Best
       // effort: the contract exists either way.
+      let workerLoginEmailSent: boolean | null = null;
       if (sourceQuoteId) {
         try {
           const marked = await quotesService.markConverted(sourceQuoteId, contract.id);
@@ -5938,6 +5939,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } catch (quoteErr: any) {
           console.error(`[quotes] could not link quote ${sourceQuoteId} to contract ${contract.id}:`, quoteErr?.message ?? String(quoteErr));
         }
+        // The quote's employee (created by POST /api/quotes/:id/worker) gets a
+        // login and a temporary-password email. Best effort, never throws.
+        workerLoginEmailSent = (await provisionQuoteWorkerLogin(sourceQuoteId, contract)).loginEmailSent;
       }
 
       // If the contract's business differs from the worker's home business,
@@ -6047,7 +6051,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      res.json(contract);
+      res.json(workerLoginEmailSent === null ? contract : { ...contract, workerLoginEmailSent });
     } catch (error: any) {
       console.error("Error creating contract:", error);
       console.error("Error details:", { message: error?.message, code: error?.code, detail: error?.detail, stack: error?.stack });

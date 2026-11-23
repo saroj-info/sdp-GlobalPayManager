@@ -1,17 +1,25 @@
 /**
  * "Convert quote to contract": the contract wizard's prefill built from a saved
  * quote. The mapping is the documented one (`deriveContractFields` in
- * shared/quotes.ts); the wizard still asks for the worker (a quote has none)
- * and, when the quote is not linked to a business, for the business.
+ * shared/quotes.ts). When the quote names an employee with an email, step 1
+ * preselects them (`quoteWorker`; the wizard swaps the placeholder for the
+ * existing worker with that email, else creates the worker on submit and the
+ * server emails their login). Otherwise the wizard asks for the worker, and for
+ * the business when the quote is not linked to one.
  */
 import type { Quote } from "@shared/schema";
 import { deriveContractFields } from "@shared/quotes";
-import type { ContractWizardPrefill } from "@/components/modals/contract-wizard-modal";
+import { QUOTE_WORKER_ID, type ContractWizardPrefill } from "@/components/modals/contract-wizard-modal";
 import { draftToInput, quoteRowToDraft } from "./quote-draft";
 
 export function quoteToWizardPrefill(q: Quote): ContractWizardPrefill {
   const f = deriveContractFields(draftToInput(quoteRowToDraft(q)), q.comparisonCurrency);
   const annual = f.rateType === "annual";
+  const email = q.workerEmail?.trim().toLowerCase() || "";
+  const quoteWorker =
+    email && q.workerFirstName?.trim() && q.workerLastName?.trim()
+      ? { firstName: q.workerFirstName.trim(), lastName: q.workerLastName.trim(), email, workerType: f.workerType, workerId: q.workerId ?? null }
+      : null;
   return {
     sourceQuoteId: q.id,
     formData: {
@@ -31,6 +39,8 @@ export function quoteToWizardPrefill(q: Quote): ContractWizardPrefill {
       ...(annual && f.totalPackageValue != null ? { totalPackageValue: String(f.totalPackageValue) } : {}),
       customerCurrency: f.customerCurrency,
       ...(q.businessId ? { onBehalf: true, selectedBusinessId: q.businessId } : {}),
+      ...(quoteWorker ? { workerId: QUOTE_WORKER_ID } : {}),
     },
+    quoteWorker,
   };
 }

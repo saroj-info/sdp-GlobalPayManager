@@ -676,6 +676,12 @@ export function deriveContractFields(input: QuoteInput, comparisonCurrency?: str
   };
 }
 
+/** The employee's name as the client sees it on the quote ("Candidate"), or null. */
+export function quoteCandidateName(q: { workerFirstName?: string | null; workerLastName?: string | null }): string | null {
+  const name = [q.workerFirstName, q.workerLastName].map((s) => (s || "").trim()).filter(Boolean).join(" ");
+  return name || null;
+}
+
 /** Reverse map for a later contract → quote link. */
 export function categoryForEngagementType(employmentType: string, contractorCompliance: boolean | null | undefined): QuoteEngagementCategory {
   if ((EMPLOYEE_ENGAGEMENT_TYPE_VALUES as readonly string[]).includes(employmentType)) return "employment";
@@ -810,6 +816,12 @@ export const saveQuoteSchema = quoteInputBaseSchema
     title: z.string().trim().min(1).max(160),
     clientName: z.string().trim().max(200).nullable().optional(),
     businessId: z.string().trim().min(1).max(64).nullable().optional(),
+    workerFirstName: z.string().trim().max(100).nullable().optional(),
+    workerLastName: z.string().trim().max(100).nullable().optional(),
+    workerEmail: z
+      .union([z.literal(""), z.string().trim().toLowerCase().email("Enter a valid employee email").max(255)])
+      .nullable()
+      .optional(),
     notes: z.string().max(4000).nullable().optional(),
     validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").nullable().optional(),
     status: z.enum(QUOTE_STATUSES).default("draft"),
@@ -821,6 +833,14 @@ export const saveQuoteSchema = quoteInputBaseSchema
   })
   .superRefine((v, ctx) => {
     refineQuoteInput(v, ctx);
+    if (v.workerEmail && v.workerEmail.trim()) {
+      if (!v.workerFirstName?.trim()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workerFirstName"], message: "Enter the employee's first name (needed with an email)." });
+      }
+      if (!v.workerLastName?.trim()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workerLastName"], message: "Enter the employee's last name (needed with an email)." });
+      }
+    }
     const cmp = v.comparisonCurrency ?? null;
     if (cmp && cmp === v.currency.toUpperCase()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["comparisonCurrency"], message: "The comparison currency must differ from the quote's currency." });
@@ -947,6 +967,8 @@ export const QUOTE_INTERNAL_KEYS = [
   "createdByUserId",
   "updatedByUserId",
   "businessId",
+  "workerEmail",
+  "workerId",
   "convertedContractId",
   "sentTo",
   "sentAt",

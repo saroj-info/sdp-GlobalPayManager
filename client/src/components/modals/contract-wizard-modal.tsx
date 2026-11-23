@@ -34,7 +34,23 @@ import { getEngagementTypes } from "@shared/engagementTypes";
 export interface ContractWizardPrefill {
   sourceQuoteId: string;
   formData: Record<string, string | number | boolean>;
+  /**
+   * The employee named on the quote. Step 1 preselects the existing worker with
+   * that id / email, else a "From quote" placeholder (`QUOTE_WORKER_ID`) that is
+   * turned into a real worker by `POST /api/quotes/:id/worker` just before the
+   * contract POST; the server then emails the worker their login.
+   */
+  quoteWorker?: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    workerType: 'employee' | 'contractor';
+    workerId?: string | null;
+  } | null;
 }
+
+/** Step 1's placeholder for a quote's employee who is not a worker yet. */
+export const QUOTE_WORKER_ID = '__quote__';
 
 interface ContractWizardModalProps {
   open: boolean;
@@ -50,7 +66,7 @@ interface ContractWizardModalProps {
   onCreated?: (contractId: string) => void;
 }
 
-export function ContractWizardModal({ open, onOpenChange, workers, countries, editMode = false, existingContract = null, preselectedWorkerId, prefill = null, onCreated }: ContractWizardModalProps) {
+export function ContractWizardModal({ open, onOpenChange, workers: workersProp, countries, editMode = false, existingContract = null, preselectedWorkerId, prefill = null, onCreated }: ContractWizardModalProps) {
   const [step, setStep] = useState(1);
   const [workerSearch, setWorkerSearch] = useState('');
   const [workerViewMode, setWorkerViewMode] = useState<'list' | 'card'>('list');
@@ -280,6 +296,42 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
   
   const [formData, setFormData] = useState(getInitialFormData);
 
+  // Convert quote to contract with the quote's employee: the existing worker
+  // they already are (same id or email, among the workers this business may
+  // use), else a placeholder row that becomes a worker on submit.
+  const quoteWorker = !editMode ? prefill?.quoteWorker ?? null : null;
+  const quoteWorkerMatch = useMemo(() => {
+    if (!quoteWorker) return null;
+    const email = quoteWorker.email.trim().toLowerCase();
+    const scoped = isSDPInternal && formData.onBehalf && formData.selectedBusinessId;
+    return workersProp.find((w: any) =>
+      (!scoped || w.businessId === formData.selectedBusinessId || w.business?.isSdpOwned === true)
+      && ((quoteWorker.workerId && w.id === quoteWorker.workerId) || (w.email || '').toLowerCase() === email),
+    ) ?? null;
+  }, [quoteWorker, workersProp, isSDPInternal, formData.onBehalf, formData.selectedBusinessId]);
+  const workers = useMemo(() => {
+    if (!quoteWorker || quoteWorkerMatch) return workersProp;
+    const placeholder = {
+      id: QUOTE_WORKER_ID,
+      isQuoteWorker: true,
+      firstName: quoteWorker.firstName,
+      lastName: quoteWorker.lastName,
+      email: quoteWorker.email,
+      workerType: quoteWorker.workerType,
+      businessId: isSDPInternal && formData.onBehalf ? formData.selectedBusinessId || undefined : undefined,
+      country: countries.find((c: any) => c.id === prefill?.formData?.countryId),
+    };
+    return [placeholder, ...workersProp];
+  }, [quoteWorker, quoteWorkerMatch, workersProp, isSDPInternal, formData.onBehalf, formData.selectedBusinessId, countries, prefill]);
+  // The placeholder is preselected; swap it for the real worker once the list shows one.
+  useEffect(() => {
+    if (quoteWorkerMatch && formData.workerId === QUOTE_WORKER_ID) {
+      setFormData(prev => ({ ...prev, workerId: quoteWorkerMatch.id }));
+    }
+  }, [quoteWorkerMatch, formData.workerId]);
+  // Login email outcome for the success toast (TOAST_LIMIT is 1).
+  const workerLoginEmailSentRef = useRef<boolean | null>(null);
+
   // Billing-rate inputs show for rate-based customer work, and for internal work
   // that SDP sets up on behalf of a business (the rate SDP charges that business).
   // The internal-work rate is saved for reference only: invoices are not generated
@@ -482,6 +534,7 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       filtered = filtered.filter((worker: any) =>
         worker.businessId === formData.selectedBusinessId
         || worker.business?.isSdpOwned === true
+        || worker.isQuoteWorker === true
       );
     }
     
@@ -614,9 +667,22 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
         const resp = await apiRequest('PUT', `/api/contracts/${existingContract.id}`, data);
         contractId = existingContract.id;
       } else {
+        workerLoginEmailSentRef.current = null;
+        if (data.workerId === QUOTE_WORKER_ID && prefill) {
+          // The quote's employee becomes a worker now (reused on a retry), then the contract is created for them.
+          const wResp = await apiRequest('POST', `/api/quotes/${prefill.sourceQuoteId}/worker`, {
+            businessId: data.onBehalf ? data.selectedBusinessId || null : null,
+          });
+          const { worker: quoteWorkerRow } = await wResp.json();
+          data = { ...data, workerId: quoteWorkerRow.id };
+          if (!data.businessId && quoteWorkerRow.businessId) data.businessId = quoteWorkerRow.businessId;
+          setFormData(prev => ({ ...prev, workerId: quoteWorkerRow.id }));
+          queryClient.invalidateQueries({ predicate: (q) => typeof q.queryKey[0] === 'string' && q.queryKey[0].startsWith('/api/workers') });
+        }
         const resp = await apiRequest('POST', '/api/contracts', data);
         const created = await resp.json();
         contractId = created?.id;
+        if (typeof created?.workerLoginEmailSent === 'boolean') workerLoginEmailSentRef.current = created.workerLoginEmailSent;
       }
       // Save project rate lines if any (multiple rate structure)
       if (contractId && formData.rateStructure === 'multiple' && projectRateLines.length > 0) {
@@ -689,6 +755,9 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
       // Invalidate role titles to show newly created custom role titles immediately
       queryClient.invalidateQueries({ queryKey: ['/api/role-titles'] });
+      queryClient.invalidateQueries({ predicate: (q) => typeof q.queryKey[0] === 'string' && q.queryKey[0].startsWith('/api/workers') });
+      const loginEmailSent = workerLoginEmailSentRef.current;
+      workerLoginEmailSentRef.current = null;
       onOpenChange(false);
       setStep(1);
       setFormData(getInitialFormData());
@@ -703,8 +772,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
       setBillingTermsSkipped(false);
       setSdpBillingAgentOptIn(false);
       toast({
-        title: "Success",
-        description: editMode ? "Contract updated successfully." : "Contract created successfully.",
+        title: loginEmailSent === false ? "Contract created, login email not sent" : "Success",
+        description: editMode
+          ? "Contract updated successfully."
+          : loginEmailSent === true
+            ? "Contract created. The worker was emailed their login details."
+            : loginEmailSent === false
+              ? "The worker's login was created but the email could not be sent. Check the email settings, then reset their password from the login page."
+              : "Contract created successfully.",
+        ...(loginEmailSent === false ? { variant: "destructive" as const } : {}),
       });
       if (!editMode && contractId) onCreated?.(contractId);
     },
@@ -1628,6 +1704,15 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                           <Label htmlFor={worker.id} className="font-medium text-secondary-900 cursor-pointer block">
                             <span className="inline-flex items-center gap-2">
                               {worker.firstName} {worker.lastName}
+                              {worker.isQuoteWorker && (
+                                <span
+                                  className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded border border-blue-300 text-blue-700"
+                                  title="From the quote: created as a worker when this contract is saved, and emailed their login details."
+                                  data-testid="badge-quote-worker"
+                                >
+                                  From quote · new
+                                </span>
+                              )}
                               {worker.business?.isSdpOwned && (
                                 <span
                                   className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded border border-primary-300 text-primary-700"
@@ -1664,6 +1749,11 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                             <div className="flex-1 min-w-0">
                               <div className="font-medium text-secondary-900 truncate inline-flex items-center gap-2">
                                 {worker.firstName} {worker.lastName}
+                                {worker.isQuoteWorker && (
+                                  <span className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded border border-blue-300 text-blue-700">
+                                    From quote · new
+                                  </span>
+                                )}
                                 {worker.business?.isSdpOwned && (
                                   <span
                                     className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded border border-primary-300 text-primary-700"
@@ -3559,6 +3649,13 @@ export function ContractWizardModal({ open, onOpenChange, workers, countries, ed
                           title: "Missing Information",
                           description: "Please select a template and worker before previewing.",
                           variant: "destructive",
+                        });
+                        return;
+                      }
+                      if (formData.workerId === QUOTE_WORKER_ID) {
+                        toast({
+                          title: "Preview after creating",
+                          description: "The quote's employee becomes a worker when the contract is saved, so the document can be previewed from the contract afterwards.",
                         });
                         return;
                       }

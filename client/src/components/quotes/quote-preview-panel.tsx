@@ -26,6 +26,7 @@ import {
   resolveQuoteBillingMode,
   type QuoteMoney,
   type QuoteResult,
+  quoteCandidateName,
 } from "@shared/quotes";
 import { MoneyPair } from "./money";
 import { draftFx, needsSeparateUsdRate, num, type QuoteDraft } from "./quote-draft";
@@ -92,6 +93,7 @@ export function QuotePreviewPanel({ draft, result, countryName, onDownloadPdf, p
 
   const meta: Array<[string, string]> = [
     ["Prepared for", draft.clientName || "—"],
+    ...(quoteCandidateName(draft) ? ([["Candidate", quoteCandidateName(draft) as string]] as Array<[string, string]>) : []),
     ["Country", `${countryName || draft.countryId}${draft.jurisdiction ? ` · ${draft.jurisdiction}` : ""}`],
     ["Engagement", `${QUOTE_ENGAGEMENT_CATEGORY_LABELS[draft.engagementCategory]} · ${getEngagementTypeLabel(draft.employmentType)}`],
     ["Work", QUOTE_WORK_LOCATION_LABELS[draft.isForClient ? "host_client" : "internal"]],

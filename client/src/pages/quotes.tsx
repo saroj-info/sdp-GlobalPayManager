@@ -32,6 +32,7 @@ import {
   QUOTE_STATUSES,
   QUOTE_STATUS_LABELS,
   computeQuote,
+  quoteCandidateName,
   type QuoteEngagementCategory,
   type QuoteListResult,
   type QuoteStatus,
@@ -317,8 +318,13 @@ export default function Quotes() {
             <AlertDialogTitle>Create a contract from {convertCandidate?.quoteNumber}?</AlertDialogTitle>
             <AlertDialogDescription>
               The contract wizard opens with the country, engagement type, pay basis, rate and currency from the quote filled in.
-              Pick the worker on step 1 (the quote's engagement type applies when the worker is of the same kind) and, when the quote
-              is not linked to a business, the business. The quote is marked as converted once the contract is created.
+              {convertCandidate?.workerEmail ? (
+                <> The quote's employee ({quoteCandidateName(convertCandidate)}) is preselected on step 1; if they are not a worker yet they
+                  are created when the contract is saved and emailed their login details.</>
+              ) : (
+                <> Pick the worker on step 1 (the quote's engagement type applies when the worker is of the same kind).</>
+              )}{" "}
+              When the quote is not linked to a business, pick the business too. The quote is marked as converted once the contract is created.
               {convertCandidate && convertCandidate.status !== "accepted" && (
                 <> This quote has not been accepted{convertCandidate.status === "declined" ? " (it was declined)" : ""}.</>
               )}

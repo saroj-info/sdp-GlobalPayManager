@@ -184,6 +184,9 @@ export function createQuotesService(deps: QuotesDeps) {
       notes: input.notes?.trim() ? input.notes : null,
       clientName: input.clientName?.trim() ? input.clientName.trim() : null,
       businessId: input.businessId || null,
+      workerFirstName: input.workerFirstName?.trim() || null,
+      workerLastName: input.workerLastName?.trim() || null,
+      workerEmail: input.workerEmail?.trim().toLowerCase() || null,
       validUntil: parseDate(input.validUntil),
       createdByUserId: userId,
       updatedByUserId: userId,
@@ -330,6 +333,8 @@ export function createQuotesService(deps: QuotesDeps) {
       const { createdByUserId, ...rest } = buildRow(valid.data, country, user.id);
       void createdByUserId;
       const patch: QuoteUpdateRow = { ...rest, updatedAt: deps.now() };
+      // A different employee email means a different person: forget the worker matched on an earlier convert attempt.
+      if ((rest.workerEmail ?? null) !== (existing.workerEmail ?? null)) patch.workerId = null;
       // A save never undoes what the send / answer flow recorded: an editor
       // still showing "Draft" or "Sent" must not overwrite the client's answer,
       // and "Draft" must not take a sent quote back. An explicit Accepted /
@@ -367,6 +372,7 @@ export function createQuotesService(deps: QuotesDeps) {
         title: `${source.title} (copy)`.slice(0, 160),
         status: "draft",
         convertedContractId: null,
+        workerId: null, // the copy keeps the employee's details; the worker is matched again on its own convert
         createdByUserId: user.id,
         updatedByUserId: user.id,
       };

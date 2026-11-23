@@ -963,6 +963,14 @@ export const quotes = pgTable("quotes", {
   notes: text("notes"),
   clientName: varchar("client_name", { length: 200 }), // "Prepared for"
   businessId: varchar("business_id").references(() => businesses.id),
+  // Optional employee the quote is for. The name prints on the client's quote;
+  // the email stays internal. On convert, POST /api/quotes/:id/worker creates
+  // (or reuses) the worker and stores it in workerId so a retry never duplicates;
+  // POST /api/contracts then creates the login and emails a temporary password.
+  workerFirstName: varchar("worker_first_name", { length: 100 }),
+  workerLastName: varchar("worker_last_name", { length: 100 }),
+  workerEmail: varchar("worker_email", { length: 255 }),
+  workerId: varchar("worker_id").references(() => workers.id),
   validUntil: timestamp("valid_until"),
   convertedContractId: varchar("converted_contract_id").references(() => contracts.id), // set by POST /api/contracts when a contract is created from the quote
   // One "send" round at a time (modules/quotes/service.ts `send`): the email's

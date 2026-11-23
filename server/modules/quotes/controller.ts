@@ -19,6 +19,7 @@ import express, { type Express, type RequestHandler } from "express";
 import { QUOTE_STATUSES, sendQuoteSchema, type QuoteStatus } from "@shared/quotes";
 import { apiRateLimiter } from "../../rateLimitMiddleware";
 import { quotesService as defaultService, type QuotesService } from "./service";
+import { ensureQuoteWorker } from "./quoteWorker";
 import type { QuoteListQuery, QuoteSortBy, Result } from "./types";
 
 const QUOTE_PDF_MAX_BYTES = 5 * 1024 * 1024;
@@ -181,6 +182,22 @@ export function registerQuotesRoutes(
     } catch (error: any) {
       console.error("[quotes] send failed:", error?.message ?? String(error));
       return res.status(500).json({ message: "Failed to send the quote" });
+    }
+  });
+
+  // ── Convert: the quote's employee as a worker (called by the contract wizard) ──
+  app.post("/api/quotes/:id/worker", authMiddleware, requireSdp, async (req: any, res) => {
+    try {
+      const result = await ensureQuoteWorker(
+        { ...authUser(req), accessibleBusinessIds: req.user?.accessibleBusinessIds ?? [] },
+        String(req.params.id),
+        req.body,
+      );
+      if (!result.ok) return sendError(res, result);
+      return res.status(result.data.created ? 201 : 200).json(result.data);
+    } catch (error: any) {
+      console.error("[quotes] quote worker failed:", error?.message ?? String(error));
+      return res.status(500).json({ message: "Failed to create the worker from the quote" });
     }
   });
 
